@@ -1,0 +1,1582 @@
+🎨 Complete Login Screen Implementation for React Native 0.75
+Based on your folder structure and requirements, I'll create a comprehensive login system with proper authentication flow.
+📁 Improved Folder Structure
+Here's an optimized structure for better organization:
+markdown📁 HRMS-DEEPGRID-MOBILEAPP
+├── 📁 src
+│   ├── 📁 assets
+│   │   ├── 📁 images
+│   │   │   ├── bgimg.jpg
+│   │   │   ├── blacklogo.png
+│   │   │   ├── mainLogo.jpg
+│   │   │   └── dummy.jpg
+│   │   └── 📁 icons (for future use)
+│   │
+│   ├── 📁 config
+│   │   ├── api.config.js          # API base URLs and endpoints
+│   │   └── constants.js            # App-wide constants
+│   │
+│   ├── 📁 utils
+│   │   ├── storage.js              # AsyncStorage helper
+│   │   ├── helpers.js              # Utility functions
+│   │   └── validators.js           # Form validation
+│   │
+│   ├── 📁 services
+│   │   ├── api.service.js          # Base API service
+│   │   └── auth.service.js         # Authentication API calls
+│   │
+│   ├── 📁 context
+│   │   └── AuthContext.js          # Global auth state
+│   │
+│   ├── 📁 screens
+│   │   ├── 📁 auth
+│   │   │   ├── LoginScreen.js
+│   │   │   ├── ForgotPasswordScreen.js (optional)
+│   │   │   └── SplashScreen.js
+│   │   │
+│   │   ├── 📁 employee
+│   │   │   ├── HomeScreen.js
+│   │   │   ├── AttendanceScreen.js
+│   │   │   ├── TasksScreen.js
+│   │   │   ├── LeavesScreen.js
+│   │   │   └── ProfileScreen.js
+│   │   │
+│   │   └── 📁 admin
+│   │       ├── AdminDashboardScreen.js
+│   │       ├── EmployeeManagementScreen.js
+│   │       ├── AttendanceManagementScreen.js
+│   │       └── ReportsScreen.js
+│   │
+│   ├── 📁 components
+│   │   ├── 📁 common
+│   │   │   ├── Button.js
+│   │   │   ├── Input.js
+│   │   │   ├── Loading.js
+│   │   │   └── ErrorText.js
+│   │   │
+│   │   ├── 📁 employee
+│   │   │   └── (employee-specific components)
+│   │   │
+│   │   └── 📁 admin
+│   │       └── (admin-specific components)
+│   │
+│   ├── 📁 navigation
+│   │   ├── AppNavigator.js         # Main navigation
+│   │   ├── AuthNavigator.js        # Auth stack
+│   │   ├── EmployeeNavigator.js    # Employee stack
+│   │   └── AdminNavigator.js       # Admin stack
+│   │
+│   ├── 📁 theme
+│   │   ├── colors.js
+│   │   ├── fonts.js
+│   │   └── theme.js                # Combined theme
+│   │
+│   └── App.js
+│
+├── .env
+├── .env.example
+└── package.json
+
+🚀 Step-by-Step Implementation
+1. Install Required Dependencies
+bashnpm install @react-native-async-storage/async-storage axios react-native-safe-area-context react-native-screens
+Update package.json:
+json{
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "^1.23.1",
+    "@react-navigation/native": "^6.1.18",
+    "@react-navigation/stack": "^6.4.1",
+    "axios": "^1.7.7",
+    "react": "18.3.1",
+    "react-native": "0.75.5",
+    "react-native-gesture-handler": "^2.20.2",
+    "react-native-paper": "^5.14.5",
+    "react-native-reanimated": "^3.15.3",
+    "react-native-safe-area-context": "^4.14.0",
+    "react-native-screens": "^4.0.0",
+    "react-native-toast-message": "^2.3.0",
+    "react-native-vector-icons": "^10.2.0"
+  }
+}
+
+2. Configuration Files
+src/config/api.config.js
+javascript// API Configuration
+const API_CONFIG = {
+  // Replace with your actual Frappe server URL
+  BASE_URL: 'https://your-frappe-server.com',
+  
+  // API Endpoints
+  ENDPOINTS: {
+    // Auth
+    LOGIN: '/api/method/login',
+    LOGOUT: '/api/method/logout',
+    
+    // User Info
+    GET_CURRENT_USER: '/api/method/hrms.api.get_current_user_info',
+    GET_CURRENT_EMPLOYEE: '/api/method/hrms.api.get_current_employee_info',
+    GET_USER_WFH_INFO: '/api/method/hrms.api.get_user_wfh_info',
+    
+    // Attendance
+    GEO_ATTENDANCE: '/api/method/hrms.api.geo_attendance',
+    GET_OFFICE_LOCATION: '/api/method/hrms.api.get_office_location',
+    
+    // More endpoints will be added as needed
+  },
+  
+  // Request timeout (30 seconds)
+  TIMEOUT: 30000,
+  
+  // Headers
+  HEADERS: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  }
+};
+
+export default API_CONFIG;
+src/config/constants.js
+javascriptexport const APP_NAME = 'HRMS DeepGrid';
+
+export const STORAGE_KEYS = {
+  AUTH_TOKEN: '@auth_token',
+  USER_DATA: '@user_data',
+  EMPLOYEE_DATA: '@employee_data',
+  FCM_TOKEN: '@fcm_token',
+};
+
+export const USER_ROLES = {
+  ADMIN: ['System Manager', 'HR Manager', 'HR User'],
+  EMPLOYEE: ['Employee'],
+};
+
+export const ROUTES = {
+  // Auth
+  SPLASH: 'Splash',
+  LOGIN: 'Login',
+  FORGOT_PASSWORD: 'ForgotPassword',
+  
+  // Employee
+  EMPLOYEE_HOME: 'EmployeeHome',
+  EMPLOYEE_ATTENDANCE: 'EmployeeAttendance',
+  EMPLOYEE_TASKS: 'EmployeeTasks',
+  EMPLOYEE_LEAVES: 'EmployeeLeaves',
+  EMPLOYEE_PROFILE: 'EmployeeProfile',
+  
+  // Admin
+  ADMIN_DASHBOARD: 'AdminDashboard',
+  ADMIN_EMPLOYEES: 'AdminEmployees',
+  ADMIN_ATTENDANCE: 'AdminAttendance',
+  ADMIN_REPORTS: 'AdminReports',
+};
+
+3. Utility Files
+src/utils/storage.js
+javascriptimport AsyncStorage from '@react-native-async-storage/async-storage';
+
+class StorageService {
+  // Save data
+  async setItem(key, value) {
+    try {
+      const jsonValue = JSON.stringify(value);
+      await AsyncStorage.setItem(key, jsonValue);
+      return true;
+    } catch (error) {
+      console.error('Error saving data:', error);
+      return false;
+    }
+  }
+
+  // Get data
+  async getItem(key) {
+    try {
+      const jsonValue = await AsyncStorage.getItem(key);
+      return jsonValue != null ? JSON.parse(jsonValue) : null;
+    } catch (error) {
+      console.error('Error reading data:', error);
+      return null;
+    }
+  }
+
+  // Remove data
+  async removeItem(key) {
+    try {
+      await AsyncStorage.removeItem(key);
+      return true;
+    } catch (error) {
+      console.error('Error removing data:', error);
+      return false;
+    }
+  }
+
+  // Clear all data
+  async clear() {
+    try {
+      await AsyncStorage.clear();
+      return true;
+    } catch (error) {
+      console.error('Error clearing data:', error);
+      return false;
+    }
+  }
+
+  // Get multiple items
+  async multiGet(keys) {
+    try {
+      const values = await AsyncStorage.multiGet(keys);
+      return values.reduce((acc, [key, value]) => {
+        acc[key] = value ? JSON.parse(value) : null;
+        return acc;
+      }, {});
+    } catch (error) {
+      console.error('Error getting multiple items:', error);
+      return {};
+    }
+  }
+}
+
+export default new StorageService();
+src/utils/validators.js
+javascript// Email validation
+export const validateEmail = (email) => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+};
+
+// Password validation (minimum 6 characters)
+export const validatePassword = (password) => {
+  return password && password.length >= 6;
+};
+
+// Username validation (for Frappe, usually email or username)
+export const validateUsername = (username) => {
+  return username && username.trim().length >= 3;
+};
+
+// Form validation
+export const validateLoginForm = (username, password) => {
+  const errors = {};
+  
+  if (!username || username.trim().length === 0) {
+    errors.username = 'Username is required';
+  } else if (username.includes('@') && !validateEmail(username)) {
+    errors.username = 'Please enter a valid email';
+  }
+  
+  if (!password || password.length === 0) {
+    errors.password = 'Password is required';
+  } else if (password.length < 6) {
+    errors.password = 'Password must be at least 6 characters';
+  }
+  
+  return {
+    isValid: Object.keys(errors).length === 0,
+    errors
+  };
+};
+src/utils/helpers.js
+javascript// Check if user is admin
+export const isAdmin = (roles) => {
+  if (!roles || !Array.isArray(roles)) return false;
+  
+  const adminRoles = ['System Manager', 'HR Manager', 'HR User'];
+  return roles.some(role => adminRoles.includes(role));
+};
+
+// Format date
+export const formatDate = (date) => {
+  if (!date) return '';
+  const d = new Date(date);
+  return d.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  });
+};
+
+// Format time
+export const formatTime = (time) => {
+  if (!time) return '';
+  const d = new Date(time);
+  return d.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  });
+};
+
+// Delay function
+export const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+4. API Services
+src/services/api.service.js
+javascriptimport axios from 'axios';
+import API_CONFIG from '../config/api.config';
+import StorageService from '../utils/storage';
+import { STORAGE_KEYS } from '../config/constants';
+
+class ApiService {
+  constructor() {
+    this.api = axios.create({
+      baseURL: API_CONFIG.BASE_URL,
+      timeout: API_CONFIG.TIMEOUT,
+      headers: API_CONFIG.HEADERS,
+    });
+
+    // Request interceptor
+    this.api.interceptors.request.use(
+      async (config) => {
+        // Add auth token if available
+        const token = await StorageService.getItem(STORAGE_KEYS.AUTH_TOKEN);
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
+        
+        console.log('API Request:', config.method?.toUpperCase(), config.url);
+        return config;
+      },
+      (error) => {
+        console.error('Request error:', error);
+        return Promise.reject(error);
+      }
+    );
+
+    // Response interceptor
+    this.api.interceptors.response.use(
+      (response) => {
+        console.log('API Response:', response.config.url, response.status);
+        return response;
+      },
+      async (error) => {
+        console.error('Response error:', error.response?.status, error.message);
+        
+        // Handle 401 Unauthorized
+        if (error.response?.status === 401) {
+          // Clear stored auth data
+          await StorageService.removeItem(STORAGE_KEYS.AUTH_TOKEN);
+          await StorageService.removeItem(STORAGE_KEYS.USER_DATA);
+          // You might want to navigate to login screen here
+        }
+        
+        return Promise.reject(this.handleError(error));
+      }
+    );
+  }
+
+  handleError(error) {
+    if (error.response) {
+      // Server responded with error
+      const message = error.response.data?.message 
+        || error.response.data?.error 
+        || error.response.statusText 
+        || 'Server error occurred';
+      
+      return {
+        status: error.response.status,
+        message,
+        data: error.response.data
+      };
+    } else if (error.request) {
+      // Request made but no response
+      return {
+        status: 0,
+        message: 'No response from server. Please check your internet connection.',
+        data: null
+      };
+    } else {
+      // Error in request setup
+      return {
+        status: -1,
+        message: error.message || 'An unexpected error occurred',
+        data: null
+      };
+    }
+  }
+
+  // GET request
+  async get(endpoint, params = {}) {
+    try {
+      const response = await this.api.get(endpoint, { params });
+      return { success: true, data: response.data };
+    } catch (error) {
+      return { success: false, error };
+    }
+  }
+
+  // POST request
+  async post(endpoint, data = {}) {
+    try {
+      const response = await this.api.post(endpoint, data);
+      return { success: true, data: response.data };
+    } catch (error) {
+      return { success: false, error };
+    }
+  }
+
+  // PUT request
+  async put(endpoint, data = {}) {
+    try {
+      const response = await this.api.put(endpoint, data);
+      return { success: true, data: response.data };
+    } catch (error) {
+      return { success: false, error };
+    }
+  }
+
+  // DELETE request
+  async delete(endpoint) {
+    try {
+      const response = await this.api.delete(endpoint);
+      return { success: true, data: response.data };
+    } catch (error) {
+      return { success: false, error };
+    }
+  }
+}
+
+export default new ApiService();
+src/services/auth.service.js
+javascriptimport ApiService from './api.service';
+import API_CONFIG from '../config/api.config';
+import StorageService from '../utils/storage';
+import { STORAGE_KEYS } from '../config/constants';
+
+class AuthService {
+  // Login
+  async login(username, password) {
+    try {
+      // Frappe login endpoint
+      const response = await ApiService.post(API_CONFIG.ENDPOINTS.LOGIN, {
+        usr: username,
+        pwd: password,
+      });
+
+      if (response.success) {
+        // Save auth data
+        await StorageService.setItem(STORAGE_KEYS.AUTH_TOKEN, response.data.token || 'authenticated');
+        
+        // Fetch user info
+        const userInfo = await this.getCurrentUserInfo();
+        const employeeInfo = await this.getCurrentEmployeeInfo();
+        const wfhInfo = await this.getUserWFHInfo();
+
+        return {
+          success: true,
+          user: userInfo.data,
+          employee: employeeInfo.data,
+          wfhInfo: wfhInfo.data,
+        };
+      }
+
+      return { success: false, message: 'Login failed' };
+    } catch (error) {
+      console.error('Login error:', error);
+      return {
+        success: false,
+        message: error.message || 'Invalid credentials. Please try again.',
+      };
+    }
+  }
+
+  // Get current user info
+  async getCurrentUserInfo() {
+    try {
+      const response = await ApiService.get(API_CONFIG.ENDPOINTS.GET_CURRENT_USER);
+      
+      if (response.success) {
+        await StorageService.setItem(STORAGE_KEYS.USER_DATA, response.data.message);
+        return { success: true, data: response.data.message };
+      }
+      
+      return { success: false, data: null };
+    } catch (error) {
+      console.error('Get user info error:', error);
+      return { success: false, data: null };
+    }
+  }
+
+  // Get current employee info
+  async getCurrentEmployeeInfo() {
+    try {
+      const response = await ApiService.get(API_CONFIG.ENDPOINTS.GET_CURRENT_EMPLOYEE);
+      
+      if (response.success && response.data.message) {
+        await StorageService.setItem(STORAGE_KEYS.EMPLOYEE_DATA, response.data.message);
+        return { success: true, data: response.data.message };
+      }
+      
+      return { success: false, data: null };
+    } catch (error) {
+      console.error('Get employee info error:', error);
+      return { success: false, data: null };
+    }
+  }
+
+  // Get WFH info
+  async getUserWFHInfo() {
+    try {
+      const response = await ApiService.get(API_CONFIG.ENDPOINTS.GET_USER_WFH_INFO);
+      return response;
+    } catch (error) {
+      console.error('Get WFH info error:', error);
+      return { success: false, data: null };
+    }
+  }
+
+  // Logout
+  async logout() {
+    try {
+      await ApiService.post(API_CONFIG.ENDPOINTS.LOGOUT);
+      
+      // Clear all stored data
+      await StorageService.removeItem(STORAGE_KEYS.AUTH_TOKEN);
+      await StorageService.removeItem(STORAGE_KEYS.USER_DATA);
+      await StorageService.removeItem(STORAGE_KEYS.EMPLOYEE_DATA);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Logout error:', error);
+      
+      // Clear data anyway
+      await StorageService.clear();
+      return { success: true };
+    }
+  }
+
+  // Check if user is authenticated
+  async isAuthenticated() {
+    const token = await StorageService.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    return !!token;
+  }
+
+  // Get stored user data
+  async getStoredUserData() {
+    const userData = await StorageService.getItem(STORAGE_KEYS.USER_DATA);
+    const employeeData = await StorageService.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
+    
+    return {
+      user: userData,
+      employee: employeeData,
+    };
+  }
+}
+
+export default new AuthService();
+
+5. Auth Context
+src/context/AuthContext.js
+javascriptimport React, { createContext, useState, useEffect, useContext } from 'react';
+import AuthService from '../services/auth.service';
+import { isAdmin } from '../utils/helpers';
+import StorageService from '../utils/storage';
+import { STORAGE_KEYS } from '../config/constants';
+
+const AuthContext = createContext({});
+
+export const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const [employee, setEmployee] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  // Check authentication on mount
+  useEffect(() => {
+    checkAuth();
+  }, []);
+
+  const checkAuth = async () => {
+    try {
+      const authenticated = await AuthService.isAuthenticated();
+      
+      if (authenticated) {
+        const storedData = await AuthService.getStoredUserData();
+        
+        if (storedData.user) {
+          setUser(storedData.user);
+          setEmployee(storedData.employee);
+          setIsAuthenticated(true);
+        } else {
+          setIsAuthenticated(false);
+        }
+      } else {
+        setIsAuthenticated(false);
+      }
+    } catch (error) {
+      console.error('Check auth error:', error);
+      setIsAuthenticated(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const login = async (username, password) => {
+    try {
+      const result = await AuthService.login(username, password);
+      
+      if (result.success) {
+        setUser(result.user);
+        setEmployee(result.employee);
+        setIsAuthenticated(true);
+        return { success: true };
+      }
+      
+      return { success: false, message: result.message };
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await AuthService.logout();
+      setUser(null);
+      setEmployee(null);
+      setIsAuthenticated(false);
+      return { success: true };
+    } catch (error) {
+      console.error('Logout error:', error);
+      return { success: false };
+    }
+  };
+
+  const updateUser = (userData) => {
+    setUser(userData);
+  };
+
+  const updateEmployee = (employeeData) => {
+    setEmployee(employeeData);
+  };
+
+  const value = {
+    user,
+    employee,
+    loading,
+    isAuthenticated,
+    isAdmin: user ? isAdmin(user.roles) : false,
+    login,
+    logout,
+    updateUser,
+    updateEmployee,
+    checkAuth,
+  };
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within AuthProvider');
+  }
+  return context;
+};
+
+export default AuthContext;
+
+6. Theme Configuration
+src/theme/colors.js
+javascriptexport const colors = {
+  // Primary colors
+  primary: '#1976D2',
+  primaryDark: '#115293',
+  primaryLight: '#42A5F5',
+  
+  // Secondary colors
+  secondary: '#FF6B35',
+  secondaryDark: '#E65100',
+  secondaryLight: '#FF8A65',
+  
+  // Status colors
+  success: '#4CAF50',
+  warning: '#FFA726',
+  error: '#F44336',
+  info: '#29B6F6',
+  
+  // Neutral colors
+  white: '#FFFFFF',
+  black: '#000000',
+  gray: '#9E9E9E',
+  lightGray: '#F5F5F5',
+  darkGray: '#424242',
+  
+  // Text colors
+  textPrimary: '#212121',
+  textSecondary: '#757575',
+  textDisabled: '#BDBDBD',
+  
+  // Background colors
+  background: '#FAFAFA',
+  surface: '#FFFFFF',
+  
+  // Border colors
+  border: '#E0E0E0',
+  
+  // Overlay
+  overlay: 'rgba(0, 0, 0, 0.5)',
+};
+src/theme/theme.js
+javascriptimport { MD3LightTheme } from 'react-native-paper';
+import { colors } from './colors';
+
+export const theme = {
+  ...MD3LightTheme,
+  colors: {
+    ...MD3LightTheme.colors,
+    primary: colors.primary,
+    secondary: colors.secondary,
+    error: colors.error,
+    background: colors.background,
+    surface: colors.surface,
+    text: colors.textPrimary,
+    onSurface: colors.textPrimary,
+    disabled: colors.textDisabled,
+    placeholder: colors.textSecondary,
+    backdrop: colors.overlay,
+  },
+  roundness: 8,
+};
+
+7. Common Components
+src/components/common/Button.js
+javascriptimport React from 'react';
+import { StyleSheet } from 'react-native';
+import { Button as PaperButton } from 'react-native-paper';
+import { colors } from '../../theme/colors';
+
+const Button = ({
+  mode = 'contained',
+  loading = false,
+  disabled = false,
+  onPress,
+  children,
+  style,
+  ...props
+}) => {
+  return (
+    <PaperButton
+      mode={mode}
+      loading={loading}
+      disabled={disabled || loading}
+      onPress={onPress}
+      style={[styles.button, style]}
+      contentStyle={styles.content}
+      labelStyle={styles.label}
+      {...props}
+    >
+      {children}
+    </PaperButton>
+  );
+};
+
+const styles = StyleSheet.create({
+  button: {
+    borderRadius: 8,
+  },
+  content: {
+    paddingVertical: 8,
+  },
+  label: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+});
+
+export default Button;
+src/components/common/Input.js
+javascriptimport React, { useState } from 'react';
+import { StyleSheet, View } from 'react-native';
+import { TextInput, HelperText } from 'react-native-paper';
+import { colors } from '../../theme/colors';
+
+const Input = ({
+  label,
+  value,
+  onChangeText,
+  error,
+  helperText,
+  secureTextEntry = false,
+  ...props
+}) => {
+  const [showPassword, setShowPassword] = useState(false);
+
+  return (
+    <View style={styles.container}>
+      <TextInput
+        label={label}
+        value={value}
+        onChangeText={onChangeText}
+        error={!!error}
+        secureTextEntry={secureTextEntry && !showPassword}
+        mode="outlined"
+        style={styles.input}
+        right={
+          secureTextEntry ? (
+            <TextInput.Icon
+              icon={showPassword ? 'eye-off' : 'eye'}
+              onPress={() => setShowPassword(!showPassword)}
+            />
+          ) : null
+        }
+        {...props}
+      />
+      {(error || helperText) && (
+        <HelperText type={error ? 'error' : 'info'} visible={true}>
+          {error || helperText}
+        </HelperText>
+      )}
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    marginBottom: 16,
+  },
+  input: {
+    backgroundColor: colors.white,
+  },
+});
+
+export default Input;
+src/components/common/Loading.js
+javascriptimport React from 'react';
+import { View, StyleSheet, ActivityIndicator } from 'react-native';
+import { Text } from 'react-native-paper';
+import { colors } from '../../theme/colors';
+
+const Loading = ({ message = 'Loading...', size = 'large' }) => {
+  return (
+    <View style={styles.container}>
+      <ActivityIndicator size={size} color={colors.primary} />
+      {message && <Text style={styles.text}>{message}</Text>}
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+  },
+  text: {
+    marginTop: 16,
+    fontSize: 16,
+    color: colors.textSecondary,
+  },
+});
+
+export default Loading;
+
+8. Login Screen
+src/screens/auth/LoginScreen.js
+javascriptimport React, { useState } from 'react';
+import {
+  View,
+  StyleSheet,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  TouchableOpacity,
+} from 'react-native';
+import { Text, Checkbox } from 'react-native-paper';
+import Toast from 'react-native-toast-message';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import Input from '../../components/common/Input';
+import Button from '../../components/common/Button';
+import { useAuth } from '../../context/AuthContext';
+import { validateLoginForm } from '../../utils/validators';
+import { colors } from '../../theme/colors';
+
+const LoginScreen = ({ navigation }) => {
+  const { login } = useAuth();
+  
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState({});
+
+  const handleLogin = async () => {
+    // Validate form
+    const validation = validateLoginForm(username, password);
+    
+    if (!validation.isValid) {
+      setErrors(validation.errors);
+      Toast.show({
+        type: 'error',
+        text1: 'Validation Error',
+        text2: Object.values(validation.errors)[0],
+      });
+      return;
+    }
+
+    // Clear errors
+    setErrors({});
+    setLoading(true);
+
+    try {
+      const result = await login(username.trim(), password);
+
+      if (result.success) {
+        Toast.show({
+          type: 'success',
+          text1: 'Success',
+          text2: 'Login successful!',
+        });
+        
+        // Navigation will be handled by AppNavigator based on auth state
+      } else {
+        Toast.show({
+          type: 'error',
+          text1: 'Login Failed',
+          text2: result.message || 'Invalid credentials. Please try again.',
+        });
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      Toast.show({
+        type: 'error',
+        text1: 'Error',
+        text2: 'An unexpected error occurred. Please try again.',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.container}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Logo Section */}
+          <View style={styles.logoContainer}>
+            <Image
+              source={require('../../assets/images/mainLogo.jpg')}
+              style={styles.logo}
+              resizeMode="contain"
+            />
+            <Text style={styles.title}>HRMS DeepGrid</Text>
+            <Text style={styles.subtitle}>Employee Management System</Text>
+          </View>
+
+          {/* Form Section */}
+          <View style={styles.formContainer}>
+            <Text style={styles.welcomeText}>Welcome Back!</Text>
+             <Text style={styles.loginText}>Login to your account</Text>
+
+            <Input
+              label="Username or Email"
+              value={username}
+              onChangeText={(text) => {
+                setUsername(text);
+                if (errors.username) {
+                  setErrors({ ...errors, username: null });
+                }
+              }}
+              error={errors.username}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              disabled={loading}
+              left={<TextInput.Icon icon="account" />}
+            />
+
+            <Input
+              label="Password"
+              value={password}
+              onChangeText={(text) => {
+                setPassword(text);
+                if (errors.password) {
+                  setErrors({ ...errors, password: null });
+                }
+              }}
+              error={errors.password}
+              secureTextEntry
+              disabled={loading}
+              left={<TextInput.Icon icon="lock" />}
+            />
+
+            {/* Remember Me & Forgot Password */}
+            <View style={styles.optionsContainer}>
+              <TouchableOpacity
+                style={styles.rememberMeContainer}
+                onPress={() => setRememberMe(!rememberMe)}
+                disabled={loading}
+              >
+                <Checkbox
+                  status={rememberMe ? 'checked' : 'unchecked'}
+                  onPress={() => setRememberMe(!rememberMe)}
+                  disabled={loading}
+                />
+                <Text style={styles.rememberMeText}>Remember Me</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => {
+                  // Navigate to forgot password screen
+                  Toast.show({
+                    type: 'info',
+                    text1: 'Contact Administrator',
+                    text2: 'Please contact your HR admin to reset password',
+                  });
+                }}
+                disabled={loading}
+              >
+                <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Login Button */}
+            <Button
+              mode="contained"
+              onPress={handleLogin}
+              loading={loading}
+              disabled={loading}
+              style={styles.loginButton}
+            >
+              {loading ? 'Logging in...' : 'Login'}
+            </Button>
+
+            {/* Help Text */}
+            <View style={styles.helpContainer}>
+              <Text style={styles.helpText}>
+                Having trouble logging in?
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  Toast.show({
+                    type: 'info',
+                    text1: 'Contact Support',
+                    text2: 'Email: support@deepgrid.com',
+                  });
+                }}
+                disabled={loading}
+              >
+                <Text style={styles.contactText}>Contact Support</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Footer */}
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>
+              © 2025 DeepGrid. All rights reserved.
+            </Text>
+            <Text style={styles.versionText}>Version 1.0.0</Text>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+};
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.white,
+  },
+  container: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
+  },
+  logoContainer: {
+    alignItems: 'center',
+    marginTop: 40,
+    marginBottom: 32,
+  },
+  logo: {
+    width: 120,
+    height: 120,
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: colors.primary,
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  formContainer: {
+    flex: 1,
+  },
+  welcomeText: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: colors.textPrimary,
+    marginBottom: 8,
+  },
+  loginText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginBottom: 24,
+  },
+  optionsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  rememberMeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  rememberMeText: {
+    fontSize: 14,
+    color: colors.textPrimary,
+    marginLeft: -8,
+  },
+  forgotPasswordText: {
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: '600',
+  },
+  loginButton: {
+    marginBottom: 24,
+  },
+  helpContainer: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  helpText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginBottom: 8,
+  },
+  contactText: {
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: '600',
+  },
+  footer: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  footerText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginBottom: 4,
+  },
+  versionText: {
+    fontSize: 11,
+    color: colors.textDisabled,
+  },
+});
+
+export default LoginScreen;
+
+9. Splash Screen
+src/screens/auth/SplashScreen.js
+javascriptimport React, { useEffect } from 'react';
+import { View, StyleSheet, Image, Animated } from 'react-native';
+import { Text } from 'react-native-paper';
+import { colors } from '../../theme/colors';
+
+const SplashScreen = () => {
+  const fadeAnim = new Animated.Value(0);
+  const scaleAnim = new Animated.Value(0.3);
+
+  useEffect(() => {
+    // Fade in and scale animation
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 1000,
+        useNativeDriver: true,
+      }),
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        tension: 10,
+        friction: 2,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  return (
+    <View style={styles.container}>
+      <Animated.View
+        style={[
+          styles.logoContainer,
+          {
+            opacity: fadeAnim,
+            transform: [{ scale: scaleAnim }],
+          },
+        ]}
+      >
+        <Image
+          source={require('../../assets/images/mainLogo.jpg')}
+          style={styles.logo}
+          resizeMode="contain"
+        />
+        <Text style={styles.title}>HRMS DeepGrid</Text>
+        <Text style={styles.subtitle}>Employee Management System</Text>
+      </Animated.View>
+
+      <View style={styles.footer}>
+        <Text style={styles.footerText}>Powered by DeepGrid Technologies</Text>
+      </View>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  logoContainer: {
+    alignItems: 'center',
+  },
+  logo: {
+    width: 150,
+    height: 150,
+    marginBottom: 24,
+    tintColor: colors.white,
+  },
+  title: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    color: colors.white,
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: colors.white,
+    opacity: 0.9,
+  },
+  footer: {
+    position: 'absolute',
+    bottom: 40,
+  },
+  footerText: {
+    fontSize: 12,
+    color: colors.white,
+    opacity: 0.8,
+  },
+});
+
+export default SplashScreen;
+
+10. Navigation Setup
+src/navigation/AuthNavigator.js
+javascriptimport React from 'react';
+import { createStackNavigator } from '@react-navigation/stack';
+import LoginScreen from '../screens/auth/LoginScreen';
+import { ROUTES } from '../config/constants';
+
+const Stack = createStackNavigator();
+
+const AuthNavigator = () => {
+  return (
+    <Stack.Navigator
+      screenOptions={{
+        headerShown: false,
+      }}
+    >
+      <Stack.Screen name={ROUTES.LOGIN} component={LoginScreen} />
+    </Stack.Navigator>
+  );
+};
+
+export default AuthNavigator;
+src/navigation/AppNavigator.js
+javascriptimport React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createStackNavigator } from '@react-navigation/stack';
+import { useAuth } from '../context/AuthContext';
+import AuthNavigator from './AuthNavigator';
+import EmployeeNavigator from './EmployeeNavigator';
+import AdminNavigator from './AdminNavigator';
+import SplashScreen from '../screens/auth/SplashScreen';
+import { ROUTES } from '../config/constants';
+
+const Stack = createStackNavigator();
+
+const AppNavigator = () => {
+  const { isAuthenticated, loading, isAdmin } = useAuth();
+
+  if (loading) {
+    return <SplashScreen />;
+  }
+
+  return (
+    <NavigationContainer>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {!isAuthenticated ? (
+          <Stack.Screen name="Auth" component={AuthNavigator} />
+        ) : isAdmin ? (
+          <Stack.Screen name="Admin" component={AdminNavigator} />
+        ) : (
+          <Stack.Screen name="Employee" component={EmployeeNavigator} />
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+};
+
+export default AppNavigator;
+src/navigation/EmployeeNavigator.js (Placeholder)
+javascriptimport React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import Button from '../components/common/Button';
+import { useAuth } from '../context/AuthContext';
+import { colors } from '../theme/colors';
+
+const EmployeeNavigator = () => {
+  const { logout, employee } = useAuth();
+
+  const handleLogout = async () => {
+    await logout();
+  };
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Employee Dashboard</Text>
+      <Text style={styles.subtitle}>Welcome, {employee?.employee_name}!</Text>
+      <Text style={styles.text}>Employee ID: {employee?.name}</Text>
+      <Text style={styles.text}>Department: {employee?.department}</Text>
+      <Button onPress={handleLogout} style={styles.button}>
+        Logout
+      </Button>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+    padding: 24,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: colors.primary,
+    marginBottom: 16,
+  },
+  subtitle: {
+    fontSize: 18,
+    color: colors.textPrimary,
+    marginBottom: 8,
+  },
+  text: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginBottom: 8,
+  },
+  button: {
+    marginTop: 24,
+    minWidth: 200,
+  },
+});
+
+export default EmployeeNavigator;
+src/navigation/AdminNavigator.js (Placeholder)
+javascriptimport React from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import Button from '../components/common/Button';
+import { useAuth } from '../context/AuthContext';
+import { colors } from '../theme/colors';
+
+const AdminNavigator = () => {
+  const { logout, user, employee } = useAuth();
+
+  const handleLogout = async () => {
+    await logout();
+  };
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Admin Dashboard</Text>
+      <Text style={styles.subtitle}>Welcome, {user?.full_name}!</Text>
+      <Text style={styles.text}>Roles: {user?.roles?.join(', ')}</Text>
+      {employee && (
+        <Text style={styles.text}>Employee ID: {employee.name}</Text>
+      )}
+      <Button onPress={handleLogout} style={styles.button}>
+        Logout
+      </Button>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+    padding: 24,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: colors.primary,
+    marginBottom: 16,
+  },
+  subtitle: {
+    fontSize: 18,
+    color: colors.textPrimary,
+    marginBottom: 8,
+  },
+  text: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginBottom: 8,
+  },
+  button: {
+    marginTop: 24,
+    minWidth: 200,
+  },
+});
+
+export default AdminNavigator;
+
+11. Main App File
+src/App.js
+javascriptimport React from 'react';
+import { StatusBar } from 'react-native';
+import { Provider as PaperProvider } from 'react-native-paper';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import Toast from 'react-native-toast-message';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+
+import { AuthProvider } from './context/AuthContext';
+import AppNavigator from './navigation/AppNavigator';
+import { theme } from './theme/theme';
+import { colors } from './theme/colors';
+
+const App = () => {
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <PaperProvider theme={theme}>
+          <AuthProvider>
+            <StatusBar
+              barStyle="light-content"
+              backgroundColor={colors.primary}
+            />
+            <AppNavigator />
+            <Toast />
+          </AuthProvider>
+        </PaperProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
+  );
+};
+
+export default App;
+
+12. Environment Configuration
+.env.example
+env# API Configuration
+API_BASE_URL=https://your-frappe-server.com
+
+# App Configuration
+APP_NAME=HRMS DeepGrid
+APP_VERSION=1.0.0
+
+# Feature Flags
+ENABLE_BIOMETRIC_LOGIN=false
+ENABLE_OFFLINE_MODE=false
+.env
+envAPI_BASE_URL=https://your-actual-frappe-server.com
+APP_NAME=HRMS DeepGrid
+APP_VERSION=1.0.0
+ENABLE_BIOMETRIC_LOGIN=false
+ENABLE_OFFLINE_MODE=false
+
+13. Update Entry Point
+index.js
+javascriptimport { AppRegistry } from 'react-native';
+import App from './src/App';
+import { name as appName } from './app.json';
+
+AppRegistry.registerComponent(appName, () => App);
+
+14. Additional Configuration Files
+babel.config.js
+javascriptmodule.exports = {
+  presets: ['module:@react-native/babel-preset'],
+  plugins: [
+    'react-native-reanimated/plugin',
+    [
+      'module:react-native-dotenv',
+      {
+        moduleName: '@env',
+        path: '.env',
+        safe: false,
+        allowUndefined: true,
+      },
+    ],
+  ],
+};
+metro.config.js
+javascriptconst { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
+
+const config = {};
+
+module.exports = mergeConfig(getDefaultConfig(__dirname), config);
+
+15. Android Permissions
+android/app/src/main/AndroidManifest.xml
+Add these permissions:
+xml<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    
+    <!-- Internet Permission -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    
+    <!-- Location Permissions (for geofencing) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    
+    <!-- Camera Permission (for future features) -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    
+    <application
+      android:name=".MainApplication"
+      android:label="@string/app_name"
+      android:icon="@mipmap/ic_launcher"
+      android:roundIcon="@mipmap/ic_launcher_round"
+      android:allowBackup="false"
+      android:theme="@style/AppTheme"
+      android:usesCleartextTraffic="true">
+      
+      <!-- Add this for better security in production -->
+      <!-- android:usesCleartextTraffic="false" -->
+      
+      <activity
+        android:name=".MainActivity"
+        android:label="@string/app_name"
+        android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+        android:launchMode="singleTask"
+        android:windowSoftInputMode="adjustResize"
+        android:exported="true">
+        <intent-filter>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+      </activity>
+    </application>
+</manifest>

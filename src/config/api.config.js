@@ -1,0 +1,34 @@
+// API Configuration
+const API_CONFIG = {
+    // Replace with your actual Frappe server URL
+    BASE_URL: 'https://hr.deepgrid.in',
+
+    // API Endpoints
+    ENDPOINTS: {
+        // Auth
+        LOGIN: '/api/method/login',
+        LOGOUT: '/api/method/logout',
+
+        // User Info
+        GET_CURRENT_USER: '/api/method/hrms.api.get_current_user_info',
+        GET_CURRENT_EMPLOYEE: '/api/method/hrms.api.get_current_employee_info',
+        GET_USER_WFH_INFO: '/api/method/hrms.api.get_user_wfh_info',
+
+        // Attendance
+        GEO_ATTENDANCE: '/api/method/hrms.api.geo_attendance',
+        GET_OFFICE_LOCATION: '/api/method/hrms.api.get_office_location',
+
+        // More endpoints will be added as needed
+    },
+
+    // Request timeout (30 seconds)
+    TIMEOUT: 30000,
+
+    // Headers
+    HEADERS: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+    }
+};
+
+export default API_CONFIG;
