@@ -2,11 +2,11 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { colors } from '../../theme/colors';
 
-const ProfileScreen = ({ navigation }) => {
+const ProjectLogsScreen = ({ navigation }) => {
     return (
         <View style={styles.container}>
-            <Text style={styles.title}>My Profile</Text>
-            <Text style={styles.subtitle}>View assigned projects</Text>
+            <Text style={styles.title}>Project Logs</Text>
+            <Text style={styles.subtitle}>Progress and time entries</Text>
         </View>
     );
 };
@@ -31,4 +31,4 @@ const styles = StyleSheet.create({
     },
 });
 
-export default ProfileScreen;
+export default ProjectLogsScreen;

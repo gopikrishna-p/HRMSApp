@@ -2,10 +2,10 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { colors } from '../../theme/colors';
 
-const ProfileScreen = ({ navigation }) => {
+const MyProjectsScreen = ({ navigation }) => {
     return (
         <View style={styles.container}>
-            <Text style={styles.title}>My Profile</Text>
+            <Text style={styles.title}>My Projects</Text>
             <Text style={styles.subtitle}>View assigned projects</Text>
         </View>
     );
@@ -31,4 +31,4 @@ const styles = StyleSheet.create({
     },
 });
 
-export default ProfileScreen;
+export default MyProjectsScreen;

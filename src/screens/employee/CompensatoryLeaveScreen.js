@@ -2,11 +2,11 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { colors } from '../../theme/colors';
 
-const ProfileScreen = ({ navigation }) => {
+const CompensatoryLeaveScreen = ({ navigation }) => {
     return (
         <View style={styles.container}>
-            <Text style={styles.title}>My Profile</Text>
-            <Text style={styles.subtitle}>View assigned projects</Text>
+            <Text style={styles.title}>Compensatory Leave Request</Text>
+            <Text style={styles.subtitle}>Request comp-off for overtime work</Text>
         </View>
     );
 };
@@ -31,4 +31,4 @@ const styles = StyleSheet.create({
     },
 });
 
-export default ProfileScreen;
+export default CompensatoryLeaveScreen;

@@ -5,8 +5,8 @@ import { useAuth } from '../../context/AuthContext';
 import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 
-const AdminDashboard = ({ navigation }) => {
-    const { logout, user, employee } = useAuth();
+const EmployeeDashboard = ({ navigation }) => {
+    const { logout, employee } = useAuth();
 
     const handleLogout = async () => {
         await logout();
@@ -16,35 +16,19 @@ const AdminDashboard = ({ navigation }) => {
     const quickStats = [
         {
             id: 1,
-            icon: 'users',
+            icon: 'calendar-day',
             iconColor: '#6366F1',
-            value: '125',
-            label: 'Total Employees',
+            value: '22',
+            label: 'Days Present',
             bgColor: '#EEF2FF',
         },
         {
             id: 2,
-            icon: 'user-check',
+            icon: 'umbrella-beach',
             iconColor: '#10B981',
-            value: '98',
-            label: 'Present Today',
+            value: '5',
+            label: 'Days Leave',
             bgColor: '#D1FAE5',
-        },
-        {
-            id: 3,
-            icon: 'user-times',
-            iconColor: '#EF4444',
-            value: '12',
-            label: 'Absent',
-            bgColor: '#FEE2E2',
-        },
-        {
-            id: 4,
-            icon: 'home',
-            iconColor: '#F59E0B',
-            value: '15',
-            label: 'WFH',
-            bgColor: '#FEF3C7',
         },
     ];
 
@@ -52,157 +36,155 @@ const AdminDashboard = ({ navigation }) => {
     const sections = [
         {
             id: 'attendance',
-            title: 'Attendance Control',
-            icon: 'clipboard-check',
+            title: 'Attendance',
+            icon: 'calendar-check',
             iconColor: '#6366F1',
             items: [
                 {
                     id: 1,
-                    title: 'Admin Check In/Out',
-                    icon: 'user-clock',
-                    screen: 'AdminCheckInOut',
-                    description: 'Kiosk/Supervisor mode',
+                    title: 'Check In/Out',
+                    icon: 'clock',
+                    screen: 'CheckInOut',
+                    description: 'Mark your attendance',
                 },
                 {
                     id: 2,
-                    title: 'All Attendance List',
-                    icon: 'list-alt',
-                    screen: 'AllAttendanceList',
-                    description: 'View all employee records',
+                    title: 'Attendance History',
+                    icon: 'history',
+                    screen: 'AttendanceHistory',
+                    description: 'View attendance records',
                 },
                 {
                     id: 3,
-                    title: 'Manual Check In/Out',
-                    icon: 'edit',
-                    screen: 'ManualCheckInOut',
-                    description: 'Attendance regularization',
-                },
-                {
-                    id: 4,
-                    title: "Today's Attendance",
-                    icon: 'calendar-day',
-                    screen: 'TodayAttendance',
-                    description: 'Live attendance view',
+                    title: 'WFH Request',
+                    icon: 'home',
+                    screen: 'WFHRequest',
+                    description: 'Apply for work from home',
                 },
             ],
         },
         {
-            id: 'wfh',
-            title: 'WFH Policy & Settings',
-            icon: 'home',
+            id: 'leaves',
+            title: 'Leaves',
+            icon: 'umbrella-beach',
             iconColor: '#10B981',
             items: [
                 {
                     id: 1,
-                    title: 'Manage WFH Settings',
-                    icon: 'cog',
-                    screen: 'WFHSettings',
-                    description: 'Configure rules & eligibility',
+                    title: 'Holiday List',
+                    icon: 'calendar-alt',
+                    screen: 'HolidayList',
+                    description: 'View company holidays',
                 },
                 {
                     id: 2,
-                    title: 'WFH Approvals',
-                    icon: 'check-circle',
-                    screen: 'WFHApprovals',
-                    description: 'Approve/reject requests',
-                    badge: '5',
+                    title: 'Apply Leave',
+                    icon: 'file-alt',
+                    screen: 'LeaveApplication',
+                    description: 'Submit leave request',
+                },
+                {
+                    id: 3,
+                    title: 'My Leaves',
+                    icon: 'list-ul',
+                    screen: 'Leaves',
+                    description: 'View leave history',
+                },
+                {
+                    id: 4,
+                    title: 'Comp-Off Request',
+                    icon: 'exchange-alt',
+                    screen: 'CompensatoryLeave',
+                    description: 'Request compensatory leave',
                 },
             ],
         },
         {
-            id: 'analytics',
-            title: 'Analytics & Reports',
-            icon: 'chart-line',
+            id: 'expense',
+            title: 'Expense & Travel',
+            icon: 'money-bill-wave',
             iconColor: '#F59E0B',
             items: [
                 {
                     id: 1,
-                    title: 'Attendance Analytics',
-                    icon: 'chart-bar',
-                    screen: 'AttendanceAnalytics',
-                    description: 'Trends, late/early, absences',
+                    title: 'Expense Claim',
+                    icon: 'receipt',
+                    screen: 'ExpenseClaim',
+                    description: 'Submit expense claims',
                 },
                 {
                     id: 2,
-                    title: 'Today Employee Analytics',
-                    icon: 'chart-pie',
-                    screen: 'TodayEmployeeAnalytics',
-                    description: 'Real-time counts & heatmap',
-                },
-                {
-                    id: 3,
-                    title: 'Reports & Analytics',
-                    icon: 'file-chart-line',
-                    screen: 'Reports',
-                    description: 'Comprehensive reports',
-                },
-            ],
-        },
-        {
-            id: 'leave',
-            title: 'Leave Management',
-            icon: 'umbrella-beach',
-            iconColor: '#8B5CF6',
-            items: [
-                {
-                    id: 1,
-                    title: 'Leave Approvals',
-                    icon: 'clipboard-list',
-                    screen: 'LeaveApprovals',
-                    description: 'Approve/reject leave requests',
-                    badge: '8',
-                },
-            ],
-        },
-        {
-            id: 'employee',
-            title: 'Employee Management',
-            icon: 'users-cog',
-            iconColor: '#EC4899',
-            items: [
-                {
-                    id: 1,
-                    title: 'Employee Management',
-                    icon: 'users',
-                    screen: 'EmployeeManagement',
-                    description: 'Manage employee records',
+                    title: 'Travel Request',
+                    icon: 'plane',
+                    screen: 'TravelRequest',
+                    description: 'Request business travel',
                 },
             ],
         },
         {
             id: 'projects',
-            title: 'Projects Oversight',
-            icon: 'project-diagram',
-            iconColor: '#14B8A6',
+            title: 'Projects & Tasks',
+            icon: 'tasks',
+            iconColor: '#8B5CF6',
             items: [
                 {
                     id: 1,
-                    title: 'View Projects',
+                    title: 'My Projects',
                     icon: 'folder-open',
-                    screen: 'ProjectsOverview',
-                    description: 'Portfolio & status',
+                    screen: 'MyProjects',
+                    description: 'View assigned projects',
                 },
                 {
                     id: 2,
-                    title: 'View Project Logs',
-                    icon: 'history',
-                    screen: 'ProjectLogs',
-                    description: 'Progress & time entries',
+                    title: 'My Tasks',
+                    icon: 'check-square',
+                    screen: 'MyTasks',
+                    description: 'Manage work logs',
                 },
             ],
         },
         {
-            id: 'notifications',
-            title: 'Notifications & Announcements',
-            icon: 'bullhorn',
-            iconColor: '#F43F5E',
+            id: 'payroll',
+            title: 'Payroll',
+            icon: 'wallet',
+            iconColor: '#EF4444',
             items: [
                 {
                     id: 1,
-                    title: 'Create Notification',
-                    icon: 'plus-circle',
-                    screen: 'CreateNotification',
-                    description: 'Target by dept/location',
+                    title: 'Salary Structure',
+                    icon: 'chart-pie',
+                    screen: 'SalaryStructure',
+                    description: 'View salary breakdown',
+                },
+                {
+                    id: 2,
+                    title: 'Payslips',
+                    icon: 'file-invoice-dollar',
+                    screen: 'Payslip',
+                    description: 'Download payslips',
+                },
+            ],
+        },
+        {
+            id: 'other',
+            title: 'Other',
+            icon: 'ellipsis-h',
+            iconColor: '#6B7280',
+            items: [
+                {
+                    id: 1,
+                    title: 'Notifications',
+                    icon: 'bell',
+                    screen: 'Notifications',
+                    description: 'View notifications',
+                    badge: '3',
+                },
+                {
+                    id: 2,
+                    title: 'Profile',
+                    icon: 'user-circle',
+                    screen: 'Profile',
+                    description: 'Update your profile',
                 },
             ],
         },
@@ -260,23 +242,24 @@ const AdminDashboard = ({ navigation }) => {
                 {/* Welcome Section */}
                 <View style={styles.welcomeSection}>
                     <Text style={styles.welcomeTitle}>Welcome back!</Text>
-                    <Text style={styles.welcomeSubtitle}>{user?.full_name || 'Admin'}</Text>
-                    <View style={styles.roleContainer}>
-                        <Icon name="shield-alt" size={13} color={colors.primary} />
-                        <Text style={styles.roleText}>
-                            {user?.roles?.join(', ') || 'Administrator'}
-                        </Text>
+                    <Text style={styles.welcomeSubtitle}>{employee?.employee_name || 'Employee'}</Text>
+                    <View style={styles.infoRow}>
+                        <View style={styles.infoItem}>
+                            <Icon name="id-badge" size={13} color={colors.textSecondary} />
+                            <Text style={styles.infoText}>{employee?.name || 'EMP-001'}</Text>
+                        </View>
+                        <View style={styles.infoItem}>
+                            <Icon name="building" size={13} color={colors.textSecondary} />
+                            <Text style={styles.infoText}>{employee?.department || 'Department'}</Text>
+                        </View>
                     </View>
-                    {employee && (
-                        <Text style={styles.employeeId}>ID: {employee.name}</Text>
-                    )}
                 </View>
 
                 {/* Quick Stats */}
-                <View style={styles.statsRow}>
+                <View style={styles.statsContainer}>
                     {quickStats.map((stat) => (
                         <View key={stat.id} style={[styles.statCard, { backgroundColor: stat.bgColor }]}>
-                            <Icon name={stat.icon} size={20} color={stat.iconColor} />
+                            <Icon name={stat.icon} size={24} color={stat.iconColor} />
                             <Text style={styles.statValue}>{stat.value}</Text>
                             <Text style={styles.statLabel}>{stat.label}</Text>
                         </View>
@@ -324,37 +307,33 @@ const styles = StyleSheet.create({
         fontSize: 22,
         fontWeight: 'bold',
         color: colors.textPrimary,
-        marginBottom: 8,
+        marginBottom: 12,
     },
-    roleContainer: {
+    infoRow: {
         flexDirection: 'row',
-        alignItems: 'center',
+        justifyContent: 'space-between',
         marginTop: 8,
     },
-    roleText: {
-        fontSize: 13,
-        color: colors.primary,
-        marginLeft: 6,
-        fontWeight: '600',
-    },
-    employeeId: {
-        fontSize: 11,
-        color: colors.textSecondary,
-        marginTop: 4,
-    },
-    statsRow: {
+    infoItem: {
         flexDirection: 'row',
-        flexWrap: 'wrap',
-        marginHorizontal: -4,
+        alignItems: 'center',
+    },
+    infoText: {
+        fontSize: 12,
+        color: colors.textSecondary,
+        marginLeft: 6,
+    },
+    statsContainer: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
         marginBottom: 20,
     },
     statCard: {
-        width: '48%',
-        padding: 14,
+        flex: 1,
+        padding: 16,
         borderRadius: 12,
         alignItems: 'center',
-        marginHorizontal: '1%',
-        marginBottom: 8,
+        marginHorizontal: 4,
         elevation: 1,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 1 },
@@ -362,15 +341,15 @@ const styles = StyleSheet.create({
         shadowRadius: 2,
     },
     statValue: {
-        fontSize: 24,
+        fontSize: 26,
         fontWeight: 'bold',
         color: colors.textPrimary,
-        marginTop: 6,
+        marginTop: 8,
     },
     statLabel: {
-        fontSize: 10,
+        fontSize: 11,
         color: colors.textSecondary,
-        marginTop: 2,
+        marginTop: 4,
         textAlign: 'center',
     },
     section: {
@@ -461,4 +440,4 @@ const styles = StyleSheet.create({
     },
 });
 
-export default AdminDashboard;
+export default EmployeeDashboard;

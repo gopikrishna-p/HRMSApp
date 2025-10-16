@@ -8,6 +8,18 @@ import AdminDashboard from '../screens/admin/AdminDashboard';
 import EmployeeManagement from '../screens/admin/EmployeeManagement';
 import AttendanceManagementScreen from '../screens/admin/AttendanceManagementScreen';
 import ReportsScreen from '../screens/admin/ReportsScreen';
+import AdminCheckInOutScreen from '../screens/admin/AdminCheckInOutScreen';
+import AllAttendanceListScreen from '../screens/admin/AllAttendanceListScreen';
+import ManualCheckInOutScreen from '../screens/admin/ManualCheckInOutScreen';
+import TodayAttendanceScreen from '../screens/admin/TodayAttendanceScreen';
+import WFHSettingsScreen from '../screens/admin/WFHSettingsScreen';
+import WFHApprovalsScreen from '../screens/admin/WFHApprovalsScreen';
+import AttendanceAnalyticsScreen from '../screens/admin/AttendanceAnalyticsScreen';
+import TodayEmployeeAnalyticsScreen from '../screens/admin/TodayEmployeeAnalyticsScreen';
+import LeaveApprovalsScreen from '../screens/admin/LeaveApprovalsScreen';
+import CreateNotificationScreen from '../screens/admin/CreateNotificationScreen';
+import ProjectsOverviewScreen from '../screens/admin/ProjectsOverviewScreen';
+import ProjectLogsScreen from '../screens/admin/ProjectLogsScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -65,6 +77,7 @@ const AdminNavigator = () => {
                 ),
             })}
         >
+            {/* Main Dashboard */}
             <Stack.Screen
                 name="AdminDashboard"
                 component={AdminDashboard}
@@ -73,30 +86,95 @@ const AdminNavigator = () => {
                     headerLeft: () => null,
                 }}
             />
-            {/* <Stack.Screen
+
+            {/* Employee Management */}
+            <Stack.Screen
                 name="EmployeeManagement"
                 component={EmployeeManagement}
-                options={{
-                    title: 'Employee Management',
-                    headerTitleStyle: styles.screenTitle,
-                }}
+                options={{ title: 'Employee Management' }}
+            />
+
+            {/* Attendance Control */}
+            <Stack.Screen
+                name="AdminCheckInOut"
+                component={AdminCheckInOutScreen}
+                options={{ title: 'Admin Check In/Out' }}
+            />
+            <Stack.Screen
+                name="AllAttendanceList"
+                component={AllAttendanceListScreen}
+                options={{ title: 'All Attendance' }}
+            />
+            <Stack.Screen
+                name="ManualCheckInOut"
+                component={ManualCheckInOutScreen}
+                options={{ title: 'Manual Attendance' }}
+            />
+            <Stack.Screen
+                name="TodayAttendance"
+                component={TodayAttendanceScreen}
+                options={{ title: "Today's Attendance" }}
             />
             <Stack.Screen
                 name="AttendanceManagement"
                 component={AttendanceManagementScreen}
-                options={{
-                    title: 'Attendance Management',
-                    headerTitleStyle: styles.screenTitle,
-                }}
+                options={{ title: 'Attendance Management' }}
+            />
+
+            {/* WFH Management */}
+            <Stack.Screen
+                name="WFHSettings"
+                component={WFHSettingsScreen}
+                options={{ title: 'WFH Settings' }}
+            />
+            <Stack.Screen
+                name="WFHApprovals"
+                component={WFHApprovalsScreen}
+                options={{ title: 'WFH Approvals' }}
+            />
+
+            {/* Analytics & Reports */}
+            <Stack.Screen
+                name="AttendanceAnalytics"
+                component={AttendanceAnalyticsScreen}
+                options={{ title: 'Attendance Analytics' }}
+            />
+            <Stack.Screen
+                name="TodayEmployeeAnalytics"
+                component={TodayEmployeeAnalyticsScreen}
+                options={{ title: 'Today Analytics' }}
             />
             <Stack.Screen
                 name="Reports"
                 component={ReportsScreen}
-                options={{
-                    title: 'Reports & Analytics',
-                    headerTitleStyle: styles.screenTitle,
-                }}
-            /> */}
+                options={{ title: 'Reports & Analytics' }}
+            />
+
+            {/* Leave Management */}
+            <Stack.Screen
+                name="LeaveApprovals"
+                component={LeaveApprovalsScreen}
+                options={{ title: 'Leave Approvals' }}
+            />
+
+            {/* Notifications */}
+            <Stack.Screen
+                name="CreateNotification"
+                component={CreateNotificationScreen}
+                options={{ title: 'Create Notification' }}
+            />
+
+            {/* Projects */}
+            <Stack.Screen
+                name="ProjectsOverview"
+                component={ProjectsOverviewScreen}
+                options={{ title: 'Projects Overview' }}
+            />
+            <Stack.Screen
+                name="ProjectLogs"
+                component={ProjectLogsScreen}
+                options={{ title: 'Project Logs' }}
+            />
         </Stack.Navigator>
     );
 };

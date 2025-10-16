@@ -34,20 +34,45 @@
         ├── EmployeeNavigator.js
     └── 📁screens
         └── 📁admin
+            ├── AdminCheckInOutScreen.js
             ├── AdminDashboard.js
+            ├── AllAttendanceListScreen.js
+            ├── AttendanceAnalyticsScreen.js
             ├── AttendanceManagementScreen.js
-            ├── EmployeeManagementScreen.js
+            ├── CreateNotificationScreen.js
+            ├── EmployeeManagement.js
+            ├── LeaveApprovalsScreen.js
+            ├── ManualCheckInOutScreen.js
+            ├── ProjectLogsScreen.js
+            ├── ProjectsOverviewScreen.js
             ├── ReportsScreen.js
+            ├── TodayAttendanceScreen.js
+            ├── TodayEmployeeAnalyticsScreen.js
+            ├── WFHApprovalsScreen.js
+            ├── WFHSettingsScreen.js
         └── 📁auth
             ├── ForgotPasswordScreen.js
             ├── LoginScreen.js
             ├── SplashScreen.js
         └── 📁employee
+            ├── AttendanceHistoryScreen.js
             ├── AttendanceScreen.js
+            ├── CheckInOutScreen.js
+            ├── CompensatoryLeaveScreen.js
+            ├── ExpenseClaimScreen.js
+            ├── HolidayListScreen.js
             ├── HomeScreen.js
+            ├── LeaveApplicationScreen.js
             ├── LeavesScreen.js
+            ├── MyProjectsScreen.js
+            ├── MyTasksScreen.js
+            ├── NotificationsScreen.js
+            ├── PayslipScreen.js
             ├── ProfileScreen.js
+            ├── SalaryStructureScreen.js
             ├── TasksScreen.js
+            ├── TravelRequestScreen.js
+            ├── WFHRequestScreen.js
     └── 📁services
         ├── api.service.js
         ├── auth.service.js

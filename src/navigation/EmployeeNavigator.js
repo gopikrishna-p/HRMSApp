@@ -3,9 +3,26 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { TouchableOpacity, View, Image, StyleSheet, Text } from 'react-native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 
-// Import Admin Screens
-import HomeScreen from '../screens/employee/HomeScreen';
-
+// Import Employee Screens
+import HomeScreen from '../screens/employee/EmployeeDashboard';
+import CheckInOutScreen from '../screens/employee/CheckInOutScreen';
+import AttendanceHistoryScreen from '../screens/employee/AttendanceHistoryScreen';
+import AttendanceScreen from '../screens/employee/AttendanceScreen';
+import WFHRequestScreen from '../screens/employee/WFHRequestScreen';
+import HolidayListScreen from '../screens/employee/HolidayListScreen';
+import LeaveApplicationScreen from '../screens/employee/LeaveApplicationScreen';
+import LeavesScreen from '../screens/employee/LeavesScreen';
+import CompensatoryLeaveScreen from '../screens/employee/CompensatoryLeaveScreen';
+import ExpenseClaimScreen from '../screens/employee/ExpenseClaimScreen';
+import TravelRequestScreen from '../screens/employee/TravelRequestScreen';
+import MyProjectsScreen from '../screens/employee/MyProjectsScreen';
+import MyTasksScreen from '../screens/employee/MyTasksScreen';
+import TasksScreen from '../screens/employee/TasksScreen';
+import SalaryStructureScreen from '../screens/employee/SalaryStructureScreen';
+import PayslipScreen from '../screens/employee/PayslipScreen';
+import NotificationsScreen from '../screens/employee/NotificationsScreen';
+import ProfileScreen from '../screens/employee/ProfileScreen';
+import EmployeeDashboard from '../screens/employee/EmployeeDashboard';
 
 const Stack = createNativeStackNavigator();
 
@@ -43,7 +60,7 @@ const HeaderLeft = ({ navigation, canGoBack = true }) => {
 const EmployeeNavigator = () => {
     return (
         <Stack.Navigator
-            initialRouteName="HomeScreen"
+            initialRouteName="EmployeeDashboard"
             screenOptions={({ navigation, route }) => ({
                 headerStyle: styles.header,
                 headerTintColor: '#111827',
@@ -52,49 +69,123 @@ const EmployeeNavigator = () => {
                 headerTitle: () => (
                     <HeaderTitle
                         title={route.params?.title || route.name}
-                        showLogo={route.name === 'HomeScreen'}
+                        showLogo={route.name === 'EmployeeDashboard'}
                     />
                 ),
                 headerLeft: () => (
                     <HeaderLeft
                         navigation={navigation}
-                        canGoBack={route.name !== 'HomeScreen'}
+                        canGoBack={route.name !== 'EmployeeDashboard'}
                     />
                 ),
             })}
         >
+            {/* Main Dashboard */}
             <Stack.Screen
-                name="HomeScreen"
-                component={HomeScreen}
+                name="EmployeeDashboard"
+                component={EmployeeDashboard}
                 options={{
-                    title: 'Admin Dashboard',
+                    title: 'Home',
                     headerLeft: () => null,
                 }}
             />
-            {/* <Stack.Screen
-                name="EmployeeManagement"
-                component={EmployeeManagement}
-                options={{
-                    title: 'Employee Management',
-                    headerTitleStyle: styles.screenTitle,
-                }}
+
+            {/* Attendance Module */}
+            <Stack.Screen
+                name="CheckInOut"
+                component={CheckInOutScreen}
+                options={{ title: 'Check In/Out' }}
             />
             <Stack.Screen
-                name="AttendanceManagement"
-                component={AttendanceManagementScreen}
-                options={{
-                    title: 'Attendance Management',
-                    headerTitleStyle: styles.screenTitle,
-                }}
+                name="AttendanceHistory"
+                component={AttendanceHistoryScreen}
+                options={{ title: 'Attendance History' }}
             />
             <Stack.Screen
-                name="Reports"
-                component={ReportsScreen}
-                options={{
-                    title: 'Reports & Analytics',
-                    headerTitleStyle: styles.screenTitle,
-                }}
-            /> */}
+                name="Attendance"
+                component={AttendanceScreen}
+                options={{ title: 'My Attendance' }}
+            />
+            <Stack.Screen
+                name="WFHRequest"
+                component={WFHRequestScreen}
+                options={{ title: 'WFH Request' }}
+            />
+
+            {/* Leave Module */}
+            <Stack.Screen
+                name="HolidayList"
+                component={HolidayListScreen}
+                options={{ title: 'Holiday List' }}
+            />
+            <Stack.Screen
+                name="LeaveApplication"
+                component={LeaveApplicationScreen}
+                options={{ title: 'Apply Leave' }}
+            />
+            <Stack.Screen
+                name="Leaves"
+                component={LeavesScreen}
+                options={{ title: 'My Leaves' }}
+            />
+            <Stack.Screen
+                name="CompensatoryLeave"
+                component={CompensatoryLeaveScreen}
+                options={{ title: 'Comp-Off Request' }}
+            />
+
+            {/* Expense & Travel Module */}
+            <Stack.Screen
+                name="ExpenseClaim"
+                component={ExpenseClaimScreen}
+                options={{ title: 'Expense Claim' }}
+            />
+            <Stack.Screen
+                name="TravelRequest"
+                component={TravelRequestScreen}
+                options={{ title: 'Travel Request' }}
+            />
+
+            {/* Projects & Tasks Module */}
+            <Stack.Screen
+                name="MyProjects"
+                component={MyProjectsScreen}
+                options={{ title: 'My Projects' }}
+            />
+            <Stack.Screen
+                name="MyTasks"
+                component={MyTasksScreen}
+                options={{ title: 'My Tasks' }}
+            />
+            <Stack.Screen
+                name="Tasks"
+                component={TasksScreen}
+                options={{ title: 'Tasks' }}
+            />
+
+            {/* Payroll Module */}
+            <Stack.Screen
+                name="SalaryStructure"
+                component={SalaryStructureScreen}
+                options={{ title: 'Salary Structure' }}
+            />
+            <Stack.Screen
+                name="Payslip"
+                component={PayslipScreen}
+                options={{ title: 'Payslips' }}
+            />
+
+            {/* Notifications & Profile */}
+            <Stack.Screen
+                name="Notifications"
+                component={NotificationsScreen}
+                options={{ title: 'Notifications' }}
+            />
+            <Stack.Screen
+                name="Profile"
+                component={ProfileScreen}
+                options={{ title: 'My Profile' }}
+            />
         </Stack.Navigator>
     );
 };
