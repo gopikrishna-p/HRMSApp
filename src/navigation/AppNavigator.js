@@ -1,14 +1,13 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { createNativeStackNavigator as createStackNavigator } from '@react-navigation/native-stack';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAuth } from '../context/AuthContext';
 import AuthNavigator from './AuthNavigator';
 import EmployeeNavigator from './EmployeeNavigator';
 import AdminNavigator from './AdminNavigator';
 import SplashScreen from '../screens/auth/SplashScreen';
-import { ROUTES } from '../config/constants';
 
-const Stack = createStackNavigator();
+const Stack = createNativeStackNavigator();
 
 const AppNavigator = () => {
     const { isAuthenticated, loading, isAdmin } = useAuth();

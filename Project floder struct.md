@@ -34,7 +34,7 @@
         ├── EmployeeNavigator.js
     └── 📁screens
         └── 📁admin
-            ├── AdminDashboardScreen.js
+            ├── AdminDashboard.js
             ├── AttendanceManagementScreen.js
             ├── EmployeeManagementScreen.js
             ├── ReportsScreen.js
@@ -60,7 +60,6 @@
         ├── storage.js
         ├── validators.js
     ├── App.js
-    └── temp.txt
 ├── .env
 ├── .eslintrc.js
 ├── .gitignore

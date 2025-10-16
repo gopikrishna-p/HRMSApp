@@ -5,8 +5,8 @@ import { useAuth } from '../../context/AuthContext';
 import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 
-const HomeScreen = ({ navigation }) => {
-    const { logout, employee } = useAuth();
+const AdminDashboard = ({ navigation }) => {
+    const { logout, user, employee } = useAuth();
 
     const handleLogout = async () => {
         await logout();
@@ -15,35 +15,27 @@ const HomeScreen = ({ navigation }) => {
     const menuItems = [
         {
             id: 1,
-            title: 'Attendance',
-            icon: 'calendar-check',
+            title: 'Employee Management',
+            icon: 'users',
             color: '#6366F1',
-            screen: 'Attendance',
-            description: 'View your attendance'
+            screen: 'EmployeeManagement',
+            description: 'Manage employee records'
         },
         {
             id: 2,
-            title: 'Leaves',
-            icon: 'umbrella-beach',
+            title: 'Attendance Management',
+            icon: 'clipboard-check',
             color: '#10B981',
-            screen: 'Leaves',
-            description: 'Manage leave requests'
+            screen: 'AttendanceManagement',
+            description: 'Track attendance records'
         },
         {
             id: 3,
-            title: 'Tasks',
-            icon: 'tasks',
+            title: 'Reports & Analytics',
+            icon: 'chart-bar',
             color: '#F59E0B',
-            screen: 'Tasks',
-            description: 'View assigned tasks'
-        },
-        {
-            id: 4,
-            title: 'Profile',
-            icon: 'user-circle',
-            color: '#8B5CF6',
-            screen: 'Profile',
-            description: 'Update your profile'
+            screen: 'Reports',
+            description: 'View reports and insights'
         },
     ];
 
@@ -60,36 +52,35 @@ const HomeScreen = ({ navigation }) => {
                 {/* Welcome Section */}
                 <View style={styles.welcomeSection}>
                     <Text style={styles.welcomeTitle}>Welcome back!</Text>
-                    <Text style={styles.welcomeSubtitle}>{employee?.employee_name}</Text>
-                    <View style={styles.infoRow}>
-                        <View style={styles.infoItem}>
-                            <Icon name="id-badge" size={14} color={colors.textSecondary} />
-                            <Text style={styles.infoText}>{employee?.name}</Text>
-                        </View>
-                        <View style={styles.infoItem}>
-                            <Icon name="building" size={14} color={colors.textSecondary} />
-                            <Text style={styles.infoText}>{employee?.department}</Text>
-                        </View>
+                    <Text style={styles.welcomeSubtitle}>{user?.full_name}</Text>
+                    <View style={styles.roleContainer}>
+                        <Icon name="shield-alt" size={14} color={colors.primary} />
+                        <Text style={styles.roleText}>
+                            {user?.roles?.join(', ')}
+                        </Text>
                     </View>
+                    {employee && (
+                        <Text style={styles.employeeId}>ID: {employee.name}</Text>
+                    )}
                 </View>
 
                 {/* Quick Stats */}
                 <View style={styles.statsContainer}>
                     <View style={styles.statCard}>
-                        <Icon name="calendar-day" size={24} color="#6366F1" />
-                        <Text style={styles.statValue}>22</Text>
-                        <Text style={styles.statLabel}>Days Present</Text>
+                        <Icon name="users" size={24} color="#6366F1" />
+                        <Text style={styles.statValue}>125</Text>
+                        <Text style={styles.statLabel}>Total Employees</Text>
                     </View>
                     <View style={styles.statCard}>
-                        <Icon name="umbrella-beach" size={24} color="#10B981" />
-                        <Text style={styles.statValue}>5</Text>
-                        <Text style={styles.statLabel}>Days Leave</Text>
+                        <Icon name="user-check" size={24} color="#10B981" />
+                        <Text style={styles.statValue}>98</Text>
+                        <Text style={styles.statLabel}>Present Today</Text>
                     </View>
                 </View>
 
                 {/* Menu Items */}
                 <View style={styles.menuSection}>
-                    <Text style={styles.sectionTitle}>Quick Access</Text>
+                    <Text style={styles.sectionTitle}>Quick Actions</Text>
                     {menuItems.map((item) => (
                         <TouchableOpacity
                             key={item.id}
@@ -147,21 +138,23 @@ const styles = StyleSheet.create({
         fontSize: 24,
         fontWeight: 'bold',
         color: colors.textPrimary,
-        marginBottom: 12,
+        marginBottom: 8,
     },
-    infoRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginTop: 8,
-    },
-    infoItem: {
+    roleContainer: {
         flexDirection: 'row',
         alignItems: 'center',
+        marginTop: 8,
     },
-    infoText: {
-        fontSize: 13,
-        color: colors.textSecondary,
+    roleText: {
+        fontSize: 14,
+        color: colors.primary,
         marginLeft: 6,
+        fontWeight: '600',
+    },
+    employeeId: {
+        fontSize: 12,
+        color: colors.textSecondary,
+        marginTop: 4,
     },
     statsContainer: {
         flexDirection: 'row',
@@ -241,4 +234,4 @@ const styles = StyleSheet.create({
     },
 });
 
-export default HomeScreen;
+export default AdminDashboard;

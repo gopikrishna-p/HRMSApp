@@ -1,58 +1,162 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import Button from '../components/common/Button';
-import { useAuth } from '../context/AuthContext';
-import { colors } from '../theme/colors';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { TouchableOpacity, View, Image, StyleSheet, Text } from 'react-native';
+import Icon from 'react-native-vector-icons/FontAwesome5';
 
-const AdminNavigator = () => {
-    const { logout, user, employee } = useAuth();
+// Import Admin Screens
+import AdminDashboard from '../screens/admin/AdminDashboard';
+import EmployeeManagement from '../screens/admin/EmployeeManagement';
+import AttendanceManagementScreen from '../screens/admin/AttendanceManagementScreen';
+import ReportsScreen from '../screens/admin/ReportsScreen';
 
-    const handleLogout = async () => {
-        await logout();
-    };
+const Stack = createNativeStackNavigator();
+
+const HeaderTitle = ({ title, showLogo = false }) => (
+    <View style={styles.headerTitleContainer}>
+        {showLogo ? (
+            <View style={styles.logoContainer}>
+                <Image 
+                    source={require('../assets/images/mainLogo.jpg')} 
+                    style={styles.logo} 
+                />
+            </View>
+        ) : (
+            <View style={styles.titleContainer}>
+                <Text style={styles.headerTitleText}>{title}</Text>
+            </View>
+        )}
+    </View>
+);
+
+const HeaderLeft = ({ navigation, canGoBack = true }) => {
+    if (!canGoBack) return null;
 
     return (
-        <View style={styles.container}>
-            <Text style={styles.title}>Admin Dashboard</Text>
-            <Text style={styles.subtitle}>Welcome, {user?.full_name}!</Text>
-            <Text style={styles.text}>Roles: {user?.roles?.join(', ')}</Text>
-            {employee && (
-                <Text style={styles.text}>Employee ID: {employee.name}</Text>
-            )}
-            <Button onPress={handleLogout} style={styles.button}>
-                Logout
-            </Button>
-        </View>
+        <TouchableOpacity
+            style={styles.headerButton}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.8}
+        >
+            <Icon name="arrow-left" size={18} color="#6366F1" />
+        </TouchableOpacity>
+    );
+};
+
+const AdminNavigator = () => {
+    return (
+        <Stack.Navigator
+            initialRouteName="AdminDashboard"
+            screenOptions={({ navigation, route }) => ({
+                headerStyle: styles.header,
+                headerTintColor: '#111827',
+                headerTitleAlign: 'center',
+                headerShadowVisible: true,
+                headerTitle: () => (
+                    <HeaderTitle
+                        title={route.params?.title || route.name}
+                        showLogo={route.name === 'AdminDashboard'}
+                    />
+                ),
+                headerLeft: () => (
+                    <HeaderLeft
+                        navigation={navigation}
+                        canGoBack={route.name !== 'AdminDashboard'}
+                    />
+                ),
+            })}
+        >
+            <Stack.Screen
+                name="AdminDashboard"
+                component={AdminDashboard}
+                options={{
+                    title: 'Admin Dashboard',
+                    headerLeft: () => null,
+                }}
+            />
+            {/* <Stack.Screen
+                name="EmployeeManagement"
+                component={EmployeeManagement}
+                options={{
+                    title: 'Employee Management',
+                    headerTitleStyle: styles.screenTitle,
+                }}
+            />
+            <Stack.Screen
+                name="AttendanceManagement"
+                component={AttendanceManagementScreen}
+                options={{
+                    title: 'Attendance Management',
+                    headerTitleStyle: styles.screenTitle,
+                }}
+            />
+            <Stack.Screen
+                name="Reports"
+                component={ReportsScreen}
+                options={{
+                    title: 'Reports & Analytics',
+                    headerTitleStyle: styles.screenTitle,
+                }}
+            /> */}
+        </Stack.Navigator>
     );
 };
 
 const styles = StyleSheet.create({
-    container: {
+    header: {
+        backgroundColor: '#FFFFFF',
+        height: 80,
+        elevation: 4,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        borderBottomWidth: 1,
+        borderBottomColor: '#E5E7EB',
+    },
+    headerTitleContainer: {
         flex: 1,
-        justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: colors.background,
-        padding: 24,
+        justifyContent: 'center',
     },
-    title: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: colors.primary,
-        marginBottom: 16,
+    logoContainer: {
+        alignItems: 'center',
+        justifyContent: 'center',
     },
-    subtitle: {
+    logo: {
+        width: 120,
+        height: 40,
+        resizeMode: 'contain',
+    },
+    titleContainer: {
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    headerTitleText: {
         fontSize: 18,
-        color: colors.textPrimary,
-        marginBottom: 8,
+        fontWeight: '700',
+        color: '#111827',
+        textAlign: 'center',
     },
-    text: {
-        fontSize: 14,
-        color: colors.textSecondary,
-        marginBottom: 8,
+    screenTitle: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#374151',
     },
-    button: {
-        marginTop: 24,
-        minWidth: 200,
+    headerButton: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: '#F8FAFC',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginHorizontal: 8,
+        elevation: 2,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 2,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
     },
 });
 
