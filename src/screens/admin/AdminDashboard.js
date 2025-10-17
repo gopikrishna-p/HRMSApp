@@ -1,464 +1,116 @@
+// src/screens/admin/AdminDashboard.js
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, ScrollView } from 'react-native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
+import { Text, useTheme } from 'react-native-paper';
 import { useAuth } from '../../context/AuthContext';
-import { colors } from '../../theme/colors';
+import AppHeader from '../../components/ui/AppHeader';
+import Section from '../../components/ui/Section';
+import ListItem from '../../components/ui/ListItem';
+import StatCard from '../../components/ui/StatCard';
 import Button from '../../components/common/Button';
 
 const AdminDashboard = ({ navigation }) => {
     const { logout, user, employee } = useAuth();
+    const { custom } = useTheme();
 
-    const handleLogout = async () => {
-        await logout();
-    };
+    const handleLogout = async () => { await logout(); };
 
-    // Quick Stats Data
     const quickStats = [
-        {
-            id: 1,
-            icon: 'users',
-            iconColor: '#6366F1',
-            value: '125',
-            label: 'Total Employees',
-            bgColor: '#EEF2FF',
-        },
-        {
-            id: 2,
-            icon: 'user-check',
-            iconColor: '#10B981',
-            value: '98',
-            label: 'Present Today',
-            bgColor: '#D1FAE5',
-        },
-        {
-            id: 3,
-            icon: 'user-times',
-            iconColor: '#EF4444',
-            value: '12',
-            label: 'Absent',
-            bgColor: '#FEE2E2',
-        },
-        {
-            id: 4,
-            icon: 'home',
-            iconColor: '#F59E0B',
-            value: '15',
-            label: 'WFH',
-            bgColor: '#FEF3C7',
-        },
+        { id: 1, icon: 'users', tint: custom.palette.primary, value: '125', label: 'Total Employees' },
+        { id: 2, icon: 'user-check', tint: custom.palette.success, value: '98', label: 'Present Today' },
+        { id: 3, icon: 'user-times', tint: custom.palette.danger, value: '12', label: 'Absent' },
+        { id: 4, icon: 'home', tint: custom.palette.warning, value: '15', label: 'WFH' },
     ];
-
-    // Section-wise Menu Items
-    const sections = [
-        {
-            id: 'attendance',
-            title: 'Attendance Control',
-            icon: 'clipboard-check',
-            iconColor: '#6366F1',
-            items: [
-                {
-                    id: 1,
-                    title: 'Admin Check In/Out',
-                    icon: 'user-clock',
-                    screen: 'AdminCheckInOut',
-                    description: 'Kiosk/Supervisor mode',
-                },
-                {
-                    id: 2,
-                    title: 'All Attendance List',
-                    icon: 'list-alt',
-                    screen: 'AllAttendanceList',
-                    description: 'View all employee records',
-                },
-                {
-                    id: 3,
-                    title: 'Manual Check In/Out',
-                    icon: 'edit',
-                    screen: 'ManualCheckInOut',
-                    description: 'Attendance regularization',
-                },
-                {
-                    id: 4,
-                    title: "Today's Attendance",
-                    icon: 'calendar-day',
-                    screen: 'TodayAttendance',
-                    description: 'Live attendance view',
-                },
-            ],
-        },
-        {
-            id: 'wfh',
-            title: 'WFH Policy & Settings',
-            icon: 'home',
-            iconColor: '#10B981',
-            items: [
-                {
-                    id: 1,
-                    title: 'Manage WFH Settings',
-                    icon: 'cog',
-                    screen: 'WFHSettings',
-                    description: 'Configure rules & eligibility',
-                },
-                {
-                    id: 2,
-                    title: 'WFH Approvals',
-                    icon: 'check-circle',
-                    screen: 'WFHApprovals',
-                    description: 'Approve/reject requests',
-                    badge: '5',
-                },
-            ],
-        },
-        {
-            id: 'analytics',
-            title: 'Analytics & Reports',
-            icon: 'chart-line',
-            iconColor: '#F59E0B',
-            items: [
-                {
-                    id: 1,
-                    title: 'Attendance Analytics',
-                    icon: 'chart-bar',
-                    screen: 'AttendanceAnalytics',
-                    description: 'Trends, late/early, absences',
-                },
-                {
-                    id: 2,
-                    title: 'Today Employee Analytics',
-                    icon: 'chart-pie',
-                    screen: 'TodayEmployeeAnalytics',
-                    description: 'Real-time counts & heatmap',
-                },
-                {
-                    id: 3,
-                    title: 'Reports & Analytics',
-                    icon: 'file-chart-line',
-                    screen: 'Reports',
-                    description: 'Comprehensive reports',
-                },
-            ],
-        },
-        {
-            id: 'leave',
-            title: 'Leave Management',
-            icon: 'umbrella-beach',
-            iconColor: '#8B5CF6',
-            items: [
-                {
-                    id: 1,
-                    title: 'Leave Approvals',
-                    icon: 'clipboard-list',
-                    screen: 'LeaveApprovals',
-                    description: 'Approve/reject leave requests',
-                    badge: '8',
-                },
-            ],
-        },
-        {
-            id: 'employee',
-            title: 'Employee Management',
-            icon: 'users-cog',
-            iconColor: '#EC4899',
-            items: [
-                {
-                    id: 1,
-                    title: 'Employee Management',
-                    icon: 'users',
-                    screen: 'EmployeeManagement',
-                    description: 'Manage employee records',
-                },
-            ],
-        },
-        {
-            id: 'projects',
-            title: 'Projects Oversight',
-            icon: 'project-diagram',
-            iconColor: '#14B8A6',
-            items: [
-                {
-                    id: 1,
-                    title: 'View Projects',
-                    icon: 'folder-open',
-                    screen: 'ProjectsOverview',
-                    description: 'Portfolio & status',
-                },
-                {
-                    id: 2,
-                    title: 'View Project Logs',
-                    icon: 'history',
-                    screen: 'ProjectLogs',
-                    description: 'Progress & time entries',
-                },
-            ],
-        },
-        {
-            id: 'notifications',
-            title: 'Notifications & Announcements',
-            icon: 'bullhorn',
-            iconColor: '#F43F5E',
-            items: [
-                {
-                    id: 1,
-                    title: 'Create Notification',
-                    icon: 'plus-circle',
-                    screen: 'CreateNotification',
-                    description: 'Target by dept/location',
-                },
-            ],
-        },
-    ];
-
-    const renderSection = (section) => (
-        <View key={section.id} style={styles.section}>
-            <View style={styles.sectionHeader}>
-                <View style={styles.sectionHeaderLeft}>
-                    <View style={[styles.sectionIcon, { backgroundColor: section.iconColor + '20' }]}>
-                        <Icon name={section.icon} size={18} color={section.iconColor} />
-                    </View>
-                    <Text style={styles.sectionTitle}>{section.title}</Text>
-                </View>
-            </View>
-
-            <View style={styles.sectionContent}>
-                {section.items.map((item, index) => (
-                    <TouchableOpacity
-                        key={item.id}
-                        style={[
-                            styles.menuCard,
-                            index === section.items.length - 1 && styles.lastMenuCard,
-                        ]}
-                        onPress={() => navigation.navigate(item.screen)}
-                        activeOpacity={0.7}
-                    >
-                        <View style={[styles.menuIconContainer, { backgroundColor: section.iconColor + '15' }]}>
-                            <Icon name={item.icon} size={20} color={section.iconColor} />
-                        </View>
-                        <View style={styles.menuContent}>
-                            <View style={styles.menuTitleRow}>
-                                <Text style={styles.menuTitle}>{item.title}</Text>
-                                {item.badge && (
-                                    <View style={styles.badge}>
-                                        <Text style={styles.badgeText}>{item.badge}</Text>
-                                    </View>
-                                )}
-                            </View>
-                            <Text style={styles.menuDescription}>{item.description}</Text>
-                        </View>
-                        <Icon name="chevron-right" size={16} color="#9CA3AF" />
-                    </TouchableOpacity>
-                ))}
-            </View>
-        </View>
-    );
 
     return (
-        <View style={styles.container}>
-            <ScrollView 
-                contentContainerStyle={styles.scrollContent}
-                showsVerticalScrollIndicator={false}
-            >
-                {/* Welcome Section */}
-                <View style={styles.welcomeSection}>
-                    <Text style={styles.welcomeTitle}>Welcome back!</Text>
-                    <Text style={styles.welcomeSubtitle}>{user?.full_name || 'Admin'}</Text>
-                    <View style={styles.roleContainer}>
-                        <Icon name="shield-alt" size={13} color={colors.primary} />
-                        <Text style={styles.roleText}>
+        <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
+            <AppHeader title="logo" canGoBack={false} rightIcon="bell" badge={5} onRightPress={() => navigation.navigate('AdminNotifications')}/>
+
+            <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
+                {/* Welcome */}
+                <View style={{
+                    backgroundColor: '#FFF', padding: 20, borderRadius: 16, marginBottom: 14,
+                    elevation: 2, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }
+                }}>
+                    <Text style={{ fontSize: 14, color: custom.palette.textSecondary }}>Welcome back!</Text>
+                    <Text style={{ fontSize: 22, fontWeight: '800', marginTop: 6 }}>
+                        {user?.full_name || 'Admin'}
+                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+                        <Icon name="shield-alt" size={13} color={custom.palette.primary} />
+                        <Text style={{ fontSize: 13, color: custom.palette.primary, marginLeft: 6, fontWeight: '600' }}>
                             {user?.roles?.join(', ') || 'Administrator'}
                         </Text>
                     </View>
-                    {employee && (
-                        <Text style={styles.employeeId}>ID: {employee.name}</Text>
-                    )}
+                    {employee?.name ? (
+                        <Text style={{ fontSize: 11, color: custom.palette.textSecondary, marginTop: 4 }}>ID: {employee.name}</Text>
+                    ) : null}
                 </View>
 
-                {/* Quick Stats */}
-                <View style={styles.statsRow}>
-                    {quickStats.map((stat) => (
-                        <View key={stat.id} style={[styles.statCard, { backgroundColor: stat.bgColor }]}>
-                            <Icon name={stat.icon} size={20} color={stat.iconColor} />
-                            <Text style={styles.statValue}>{stat.value}</Text>
-                            <Text style={styles.statLabel}>{stat.label}</Text>
+                {/* Stats */}
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4, marginBottom: 14 }}>
+                    {quickStats.map(s => (
+                        <View key={s.id} style={{ width: '50%', paddingHorizontal: 4, marginBottom: 8 }}>
+                            <StatCard icon={s.icon} tint={s.tint} value={s.value} label={s.label} />
                         </View>
                     ))}
                 </View>
 
-                {/* Section-wise Menu */}
-                {sections.map(renderSection)}
+                {/* Sections */}
+                <Section title="Attendance Control" icon="clipboard-check" tint={custom.palette.primary}>
+                    <ListItem title="Admin Check In/Out" subtitle="Kiosk/Supervisor mode" leftIcon="user-clock"
+                        tint={custom.palette.primary} onPress={() => navigation.navigate('AdminCheckInOut')} />
+                    <ListItem title="All Attendance List" subtitle="View all employee records" leftIcon="list-alt"
+                        tint={custom.palette.primary} onPress={() => navigation.navigate('AllAttendanceList')} />
+                    <ListItem title="Manual Check In/Out" subtitle="Attendance regularization" leftIcon="edit"
+                        tint={custom.palette.primary} onPress={() => navigation.navigate('ManualCheckInOut')} />
+                    <ListItem title="Today's Attendance" subtitle="Live attendance view" leftIcon="calendar-day"
+                        tint={custom.palette.primary} onPress={() => navigation.navigate('TodayAttendance')} />
+                </Section>
 
-                {/* Logout Button */}
-                <Button onPress={handleLogout} style={styles.logoutButton}>
-                    Logout
-                </Button>
+                <Section title="WFH Policy & Settings" icon="home" tint={custom.palette.success}>
+                    <ListItem title="Manage WFH Settings" subtitle="Configure rules & eligibility" leftIcon="cog"
+                        tint={custom.palette.success} onPress={() => navigation.navigate('WFHSettings')} />
+                    <ListItem title="WFH Approvals" subtitle="Approve/reject requests" leftIcon="check-circle" badge="5"
+                        tint={custom.palette.success} onPress={() => navigation.navigate('WFHApprovals')} />
+                </Section>
+
+                <Section title="Analytics & Reports" icon="chart-line" tint={custom.palette.warning}>
+                    <ListItem title="Attendance Analytics" subtitle="Trends, late/early, absences" leftIcon="chart-bar"
+                        tint={custom.palette.warning} onPress={() => navigation.navigate('AttendanceAnalytics')} />
+                    <ListItem title="Today Employee Analytics" subtitle="Real-time counts & heatmap" leftIcon="chart-pie"
+                        tint={custom.palette.warning} onPress={() => navigation.navigate('TodayEmployeeAnalytics')} />
+                    <ListItem title="Reports & Analytics" subtitle="Comprehensive reports" leftIcon="file-chart-line"
+                        tint={custom.palette.warning} onPress={() => navigation.navigate('Reports')} />
+                </Section>
+
+                <Section title="Leave Management" icon="umbrella-beach" tint="#8B5CF6">
+                    <ListItem title="Leave Approvals" subtitle="Approve/reject leave requests" leftIcon="clipboard-list" badge="8"
+                        tint="#8B5CF6" onPress={() => navigation.navigate('LeaveApprovals')} />
+                </Section>
+
+                <Section title="Employee Management" icon="users-cog" tint="#EC4899">
+                    <ListItem title="Employee Management" subtitle="Manage employee records" leftIcon="users"
+                        tint="#EC4899" onPress={() => navigation.navigate('EmployeeManagement')} />
+                </Section>
+
+                <Section title="Projects Oversight" icon="project-diagram" tint="#14B8A6">
+                    <ListItem title="View Projects" subtitle="Portfolio & status" leftIcon="folder-open"
+                        tint="#14B8A6" onPress={() => navigation.navigate('ProjectsOverview')} />
+                    <ListItem title="View Project Logs" subtitle="Progress & time entries" leftIcon="history"
+                        tint="#14B8A6" onPress={() => navigation.navigate('ProjectLogs')} />
+                </Section>
+
+                <Section title="Notifications & Announcements" icon="bullhorn" tint="#F43F5E">
+                    <ListItem title="Create Notification" subtitle="Target by dept/location" leftIcon="plus-circle"
+                        tint="#F43F5E" onPress={() => navigation.navigate('CreateNotification')} />
+                </Section>
+
+                <Button onPress={handleLogout} style={{ marginTop: 8 }}>Logout</Button>
             </ScrollView>
         </View>
     );
 };
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.background,
-    },
-    scrollContent: {
-        padding: 16,
-        paddingBottom: 40,
-    },
-    welcomeSection: {
-        backgroundColor: '#FFFFFF',
-        padding: 20,
-        borderRadius: 16,
-        marginBottom: 16,
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-    },
-    welcomeTitle: {
-        fontSize: 15,
-        color: colors.textSecondary,
-        marginBottom: 4,
-    },
-    welcomeSubtitle: {
-        fontSize: 22,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-        marginBottom: 8,
-    },
-    roleContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginTop: 8,
-    },
-    roleText: {
-        fontSize: 13,
-        color: colors.primary,
-        marginLeft: 6,
-        fontWeight: '600',
-    },
-    employeeId: {
-        fontSize: 11,
-        color: colors.textSecondary,
-        marginTop: 4,
-    },
-    statsRow: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        marginHorizontal: -4,
-        marginBottom: 20,
-    },
-    statCard: {
-        width: '48%',
-        padding: 14,
-        borderRadius: 12,
-        alignItems: 'center',
-        marginHorizontal: '1%',
-        marginBottom: 8,
-        elevation: 1,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
-    },
-    statValue: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-        marginTop: 6,
-    },
-    statLabel: {
-        fontSize: 10,
-        color: colors.textSecondary,
-        marginTop: 2,
-        textAlign: 'center',
-    },
-    section: {
-        marginBottom: 20,
-    },
-    sectionHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    sectionHeaderLeft: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    sectionIcon: {
-        width: 36,
-        height: 36,
-        borderRadius: 10,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 10,
-    },
-    sectionTitle: {
-        fontSize: 17,
-        fontWeight: '700',
-        color: colors.textPrimary,
-    },
-    sectionContent: {
-        backgroundColor: '#FFFFFF',
-        borderRadius: 12,
-        overflow: 'hidden',
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.08,
-        shadowRadius: 3,
-    },
-    menuCard: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: 14,
-        borderBottomWidth: 1,
-        borderBottomColor: '#F3F4F6',
-    },
-    lastMenuCard: {
-        borderBottomWidth: 0,
-    },
-    menuIconContainer: {
-        width: 42,
-        height: 42,
-        borderRadius: 10,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 12,
-    },
-    menuContent: {
-        flex: 1,
-    },
-    menuTitleRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 2,
-    },
-    menuTitle: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: colors.textPrimary,
-    },
-    menuDescription: {
-        fontSize: 12,
-        color: colors.textSecondary,
-    },
-    badge: {
-        backgroundColor: '#EF4444',
-        borderRadius: 10,
-        paddingHorizontal: 6,
-        paddingVertical: 2,
-        marginLeft: 8,
-    },
-    badgeText: {
-        color: '#FFFFFF',
-        fontSize: 10,
-        fontWeight: '600',
-    },
-    logoutButton: {
-        marginTop: 8,
-    },
-});
 
 export default AdminDashboard;

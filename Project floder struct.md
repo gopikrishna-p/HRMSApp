@@ -16,12 +16,22 @@
             ├── tempmainLogo.jpg
     └── 📁components
         └── 📁admin
+        └── 📁attendance
+            ├── CheckInOutScreen.js
+            ├── GeoAttendanceCard.js
         └── 📁common
             ├── Button.js
             ├── ErrorText.js
             ├── Input.js
             ├── Loading.js
         └── 📁employee
+        └── 📁ui
+            ├── AppHeader.js
+            ├── EmptyState.js
+            ├── HeaderWithNotifications.js
+            ├── ListItem.js
+            ├── Section.js
+            ├── StatCard.js
     └── 📁config
         ├── api.config.js
         ├── constants.js
@@ -36,6 +46,7 @@
         └── 📁admin
             ├── AdminCheckInOutScreen.js
             ├── AdminDashboard.js
+            ├── AdminNotifications.js
             ├── AllAttendanceListScreen.js
             ├── AttendanceAnalyticsScreen.js
             ├── AttendanceManagementScreen.js
@@ -59,9 +70,9 @@
             ├── AttendanceScreen.js
             ├── CheckInOutScreen.js
             ├── CompensatoryLeaveScreen.js
+            ├── EmployeeDashboard.js
             ├── ExpenseClaimScreen.js
             ├── HolidayListScreen.js
-            ├── HomeScreen.js
             ├── LeaveApplicationScreen.js
             ├── LeavesScreen.js
             ├── MyProjectsScreen.js
