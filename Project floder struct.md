@@ -37,7 +37,6 @@
             ├── Section.js
             ├── StatCard.js
     └── 📁config
-        ├── api.config.js
         ├── constants.js
     └── 📁context
         ├── AuthContext.js
