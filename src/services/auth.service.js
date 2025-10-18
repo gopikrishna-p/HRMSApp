@@ -1,14 +1,22 @@
 import ApiService from './api.service';
-import API_CONFIG from '../config/api.config';
 import StorageService from '../utils/storage';
 import { STORAGE_KEYS } from '../config/constants';
+
+// API Endpoints - defined directly without config file
+const ENDPOINTS = {
+    LOGIN: '/api/method/login',
+    LOGOUT: '/api/method/logout',
+    GET_CURRENT_USER: '/api/method/hrms.api.get_current_user_info',
+    GET_CURRENT_EMPLOYEE: '/api/method/hrms.api.get_current_employee_info',
+    GET_USER_WFH_INFO: '/api/method/hrms.api.get_user_wfh_info',
+};
 
 class AuthService {
     // Login
     async login(username, password) {
         try {
             // Frappe login endpoint
-            const response = await ApiService.post(API_CONFIG.ENDPOINTS.LOGIN, {
+            const response = await ApiService.post(ENDPOINTS.LOGIN, {
                 usr: username,
                 pwd: password,
             });
@@ -43,7 +51,7 @@ class AuthService {
     // Get current user info
     async getCurrentUserInfo() {
         try {
-            const response = await ApiService.get(API_CONFIG.ENDPOINTS.GET_CURRENT_USER);
+            const response = await ApiService.get(ENDPOINTS.GET_CURRENT_USER);
 
             if (response.success) {
                 await StorageService.setItem(STORAGE_KEYS.USER_DATA, response.data.message);
@@ -60,7 +68,7 @@ class AuthService {
     // Get current employee info
     async getCurrentEmployeeInfo() {
         try {
-            const response = await ApiService.get(API_CONFIG.ENDPOINTS.GET_CURRENT_EMPLOYEE);
+            const response = await ApiService.get(ENDPOINTS.GET_CURRENT_EMPLOYEE);
 
             if (response.success && response.data.message) {
                 await StorageService.setItem(STORAGE_KEYS.EMPLOYEE_DATA, response.data.message);
@@ -77,7 +85,7 @@ class AuthService {
     // Get WFH info
     async getUserWFHInfo() {
         try {
-            const response = await ApiService.get(API_CONFIG.ENDPOINTS.GET_USER_WFH_INFO);
+            const response = await ApiService.get(ENDPOINTS.GET_USER_WFH_INFO);
             return response;
         } catch (error) {
             console.error('Get WFH info error:', error);
@@ -88,7 +96,7 @@ class AuthService {
     // Logout
     async logout() {
         try {
-            await ApiService.post(API_CONFIG.ENDPOINTS.LOGOUT);
+            await ApiService.post(ENDPOINTS.LOGOUT);
 
             // Clear all stored data
             await StorageService.removeItem(STORAGE_KEYS.AUTH_TOKEN);
