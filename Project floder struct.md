@@ -17,8 +17,12 @@
     └── 📁components
         └── 📁admin
         └── 📁attendance
-            ├── CheckInOutScreen.js
-            ├── GeoAttendanceCard.js
+            └── 📁attendanceCard
+                ├── CheckInOutScreen.js
+                ├── GeoAttendanceCard.js
+            └── 📁attendanceService
+                ├── attendanceService.js
+                ├── locationService.js
         └── 📁common
             ├── Button.js
             ├── ErrorText.js
@@ -94,6 +98,7 @@
     └── 📁utils
         ├── helpers.js
         ├── storage.js
+        ├── Toast.js
         ├── validators.js
     ├── App.js
 ├── .env

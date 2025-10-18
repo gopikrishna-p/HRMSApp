@@ -1,34 +1,7 @@
+// src/screens/employee/CheckInOutScreen.js
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { colors } from '../../theme/colors';
+import CheckInOutScreen from '../../components/attendance/attendanceCard/CheckInOutScreen';
 
-const CheckInOutScreen = ({ navigation }) => {
-    return (
-        <View style={styles.container}>
-            <Text style={styles.title}>Employee Check-In/Out Screen</Text>
-            <Text style={styles.subtitle}>To be implemented with API</Text>
-        </View>
-    );
-};
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.background,
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 20,
-    },
-    title: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-        marginBottom: 8,
-    },
-    subtitle: {
-        fontSize: 14,
-        color: colors.textSecondary,
-    },
-});
-
-export default CheckInOutScreen;
+export default function EmployeeCheckInOutScreen(props) {
+    return <CheckInOutScreen {...props} />;
+}
