@@ -15,14 +15,7 @@ class AttendanceService {
         const isWFH = work_type === 'WFH';
         const lat = isWFH ? 0 : Number(latitude ?? 0);
         const lon = isWFH ? 0 : Number(longitude ?? 0);
-
-        return ApiService.post(ENDPOINTS.GEO_ATTENDANCE, {
-            employee,
-            action,
-            latitude: lat,
-            longitude: lon,
-            work_type: isWFH ? 'WFH' : undefined,
-        });
+        return ApiService.post(ENDPOINTS.GEO_ATTENDANCE, { employee, action, latitude: lat, longitude: lon, work_type: isWFH ? 'WFH' : undefined });
     }
 
     async getOfficeLocation(employee) {
@@ -38,14 +31,18 @@ class AttendanceService {
     }
 
     async toggleWFHEligibility(employee_id, wfh_eligible) {
-        return ApiService.post(ENDPOINTS.TOGGLE_WFH_ELIGIBILITY, {
-            employee_id,
-            wfh_eligible: !!wfh_eligible ? 1 : 0,
-        });
+        return ApiService.post(ENDPOINTS.TOGGLE_WFH_ELIGIBILITY, { employee_id, wfh_eligible: !!wfh_eligible ? 1 : 0 });
     }
 
-    async getTodayAttendance() {
-        return ApiService.get(ENDPOINTS.TODAY_ATTENDANCE);
+    // ✅ date is optional: 'YYYY-MM-DD'
+    async getTodayAttendance(date) {
+        const resp = await ApiService.get(ENDPOINTS.TODAY_ATTENDANCE, date ? { date } : {});
+        // unwrap envelope to the raw payload the screen expects
+        if (resp?.success) {
+            return resp.data?.message ?? resp.data ?? {};
+        }
+        // normalize error case to empty payload to avoid .length crash
+        return { present: [], absent: [], holiday: [], total_employees: 0, working_employees: 0, date: date || '' };
     }
 }
 
