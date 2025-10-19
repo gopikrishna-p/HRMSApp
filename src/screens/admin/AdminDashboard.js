@@ -81,7 +81,7 @@ const AdminDashboard = ({ navigation }) => {
                         tint={custom.palette.warning} onPress={() => navigation.navigate('AttendanceAnalytics')} />
                     <ListItem title="Today Employee Analytics" subtitle="Real-time counts & heatmap" leftIcon="chart-pie"
                         tint={custom.palette.warning} onPress={() => navigation.navigate('TodayEmployeeAnalytics')} />
-                    <ListItem title="Reports & Analytics" subtitle="Comprehensive reports" leftIcon="file-chart-line"
+                    <ListItem title="Reports & Analytics" subtitle="Comprehensive reports" leftIcon="file-alt"
                         tint={custom.palette.warning} onPress={() => navigation.navigate('Reports')} />
                 </Section>
 

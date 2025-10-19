@@ -16,13 +16,6 @@
             ├── tempmainLogo.jpg
     └── 📁components
         └── 📁admin
-        └── 📁attendance
-            └── 📁attendanceCard
-                ├── CheckInOutScreen.js
-                ├── GeoAttendanceCard.js
-            └── 📁attendanceService
-                ├── attendanceService.js
-                ├── locationService.js
         └── 📁common
             ├── Button.js
             ├── ErrorText.js
@@ -89,6 +82,7 @@
             ├── WFHRequestScreen.js
     └── 📁services
         ├── api.service.js
+        ├── attendance.service.js
         ├── auth.service.js
     └── 📁theme
         ├── colors.js
@@ -96,6 +90,7 @@
         ├── theme.js
     └── 📁utils
         ├── helpers.js
+        ├── location.js
         ├── storage.js
         ├── Toast.js
         ├── validators.js
