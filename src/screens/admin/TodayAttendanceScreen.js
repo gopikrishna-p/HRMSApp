@@ -87,7 +87,6 @@ const TodayAttendanceScreen = () => {
 
     return (
         <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
-            <AppHeader title="Today's Attendance" />
 
             {showPicker && Platform.OS === 'ios' && (
                 <DateTimePicker
