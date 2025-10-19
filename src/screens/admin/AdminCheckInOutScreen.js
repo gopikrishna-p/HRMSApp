@@ -1,25 +1,21 @@
 // src/screens/admin/AdminCheckInOutScreen.js
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Alert, StyleSheet, ScrollView } from 'react-native';
-import { Text, Switch, Card, useTheme, ProgressBar, Searchbar, Chip } from 'react-native-paper';
+import { Text, Switch, Card, useTheme, ProgressBar, Searchbar, Chip, IconButton } from 'react-native-paper';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { useAuth } from '../../context/AuthContext';
 import AttendanceService from '../../services/attendance.service';
 import { ensureLocationPermission, getCurrentPosition } from '../../utils/location';
-import AppHeader from '../../components/ui/AppHeader';
-import Loading from '../../components/common/Loading';
 import Button from '../../components/common/Button';
 
-// Haversine distance (meters)
+// Haversine (meters)
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
     const R = 6371e3;
     const φ1 = (lat1 * Math.PI) / 180;
     const φ2 = (lat2 * Math.PI) / 180;
     const Δφ = ((lat2 - lat1) * Math.PI) / 180;
     const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-    const a =
-        Math.sin(Δφ / 2) ** 2 +
-        Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+    const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
 };
@@ -33,7 +29,7 @@ const AdminCheckInOutScreen = () => {
     const [wfhEligible, setWfhEligible] = useState(false);
     const [officeLocation, setOfficeLocation] = useState(null);
     const [currentLocation, setCurrentLocation] = useState(null);
-    const [locationStatus, setLocationStatus] = useState('checking');
+    const [locationStatus, setLocationStatus] = useState('checking'); // checking | inside | outside | error | wfh
     const [distance, setDistance] = useState(null);
     const [locationError, setLocationError] = useState(null);
 
@@ -53,9 +49,10 @@ const AdminCheckInOutScreen = () => {
     }, []);
 
     const fetchOfficeLocation = useCallback(async () => {
+        if (!adminEmployeeId) return;
         const res = await AttendanceService.getOfficeLocation(adminEmployeeId);
         if (res.success && res.data?.message) {
-            setOfficeLocation(res.data.message);
+            setOfficeLocation(res.data.message); // {latitude, longitude, radius}
         }
     }, [adminEmployeeId]);
 
@@ -87,9 +84,7 @@ const AdminCheckInOutScreen = () => {
             const userLon = pos.coords.longitude;
             setCurrentLocation({ latitude: userLat, longitude: userLon });
 
-            const dist = calculateDistance(
-                userLat, userLon, officeLocation.latitude, officeLocation.longitude
-            );
+            const dist = calculateDistance(userLat, userLon, officeLocation.latitude, officeLocation.longitude);
             const rounded = Math.round(dist);
             setDistance(rounded);
 
@@ -100,34 +95,37 @@ const AdminCheckInOutScreen = () => {
         }
     }, [isWFH, officeLocation]);
 
+    // Initial data loads
     useEffect(() => {
         if (adminEmployeeId) {
             fetchWFHInfo();
             fetchOfficeLocation();
         }
-        if (kioskMode) {
-            fetchEmployeeList();
-        }
-    }, [adminEmployeeId, fetchWFHInfo, fetchOfficeLocation, kioskMode, fetchEmployeeList]);
+    }, [adminEmployeeId, fetchWFHInfo, fetchOfficeLocation]);
 
+    // Run location check exactly once, after officeLocation becomes available
     useEffect(() => {
-        checkGeofenceStatus();
-        const id = setInterval(() => {
-            if (!isWFH && officeLocation) checkGeofenceStatus();
-        }, 10000);
-        return () => clearInterval(id);
-    }, [checkGeofenceStatus, isWFH, officeLocation]);
-
-    useEffect(() => {
-        if (!searchQuery.trim()) {
-            setFilteredEmployees(employeeList);
+        if (officeLocation) {
+            checkGeofenceStatus();
         } else {
+            setLocationStatus(isWFH ? 'wfh' : 'checking');
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [officeLocation]);
+
+    // Kiosk list load (once when enabled)
+    useEffect(() => {
+        if (kioskMode) fetchEmployeeList();
+    }, [kioskMode, fetchEmployeeList]);
+
+    // Search filter
+    useEffect(() => {
+        if (!searchQuery.trim()) setFilteredEmployees(employeeList);
+        else {
             const q = searchQuery.toLowerCase();
             setFilteredEmployees(
                 employeeList.filter(
-                    (e) =>
-                        e.employee_name?.toLowerCase().includes(q) ||
-                        e.name?.toLowerCase().includes(q)
+                    (e) => e.employee_name?.toLowerCase().includes(q) || e.name?.toLowerCase().includes(q)
                 )
             );
         }
@@ -158,14 +156,13 @@ const AdminCheckInOutScreen = () => {
         if (!isWFH && locationStatus === 'outside') {
             Alert.alert(
                 'Outside Geofence',
-                `${kioskMode ? 'This device is' : 'You are'} ${distance}m away. Must be within ${officeLocation?.radius}m to check ${action === 'Check-In' ? 'in' : 'out'}.\n\nMove closer or use WFH mode.`
+                `${kioskMode ? 'This device is' : 'You are'} ${distance}m away. Must be within ${officeLocation?.radius}m to ${action === 'Check-In' ? 'check in' : 'check out'}.`
             );
             return;
         }
-        if (!isWFH && locationStatus === 'error') {
-            Alert.alert('Location Error', 'Cannot determine location.', [
-                { text: 'Retry', onPress: checkGeofenceStatus },
-                { text: 'Cancel', style: 'cancel' },
+        if (!isWFH && (locationStatus === 'error' || locationStatus === 'checking')) {
+            Alert.alert('Location Error', 'Cannot determine location. Tap the refresh icon to retry.', [
+                { text: 'OK' }
             ]);
             return;
         }
@@ -185,12 +182,13 @@ const AdminCheckInOutScreen = () => {
             setLoading(true);
 
             let latitude, longitude, work_type;
+
             if (isWFH) {
                 if (!wfhEligible && !kioskMode) {
                     Alert.alert('WFH Not Allowed', 'You are not eligible for WFH.');
                     return;
                 }
-                work_type = 'WFH';
+                work_type = 'WFH'; // will force (0,0) in service
             } else {
                 if (currentLocation) {
                     latitude = currentLocation.latitude;
@@ -205,7 +203,7 @@ const AdminCheckInOutScreen = () => {
 
             const res = await AttendanceService.geoAttendance({
                 employee: emp,
-                action,
+                action, // "Check-In" | "Check-Out"
                 latitude,
                 longitude,
                 work_type,
@@ -215,16 +213,8 @@ const AdminCheckInOutScreen = () => {
                 const m = res.data.message;
                 Alert.alert(
                     'Success',
-                    `${action} successful for ${displayName}!\n\nRef: ${m.geo_log || m.attendance}\n${isWFH ? 'Mode: WFH' : `Distance: ${distance}m`}`,
-                    [{
-                        text: 'OK',
-                        onPress: () => {
-                            if (kioskMode) {
-                                setSelectedEmployee(null);
-                                setSearchQuery('');
-                            }
-                        },
-                    }]
+                    `${action} successful for ${displayName}!\nRef: ${m.geo_log || m.attendance}\n${isWFH ? 'Mode: WFH' : `Distance: ${distance}m`}`,
+                    [{ text: 'OK', onPress: () => { if (kioskMode) { setSelectedEmployee(null); setSearchQuery(''); } } }]
                 );
             } else {
                 const msg = parseBackendError(res);
@@ -270,9 +260,8 @@ const AdminCheckInOutScreen = () => {
 
     return (
         <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
-
             <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 36 }}>
-                {/* Admin Identity */}
+                {/* Admin identity */}
                 <Card style={styles.card}>
                     <Card.Content>
                         <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
@@ -284,12 +273,6 @@ const AdminCheckInOutScreen = () => {
                         <View style={styles.rowCenter}>
                             <Icon name="id-badge" size={14} color={custom.palette.textSecondary} />
                             <Text style={styles.subtleText}>{adminEmployeeId || 'N/A'}</Text>
-                        </View>
-                        <View style={[styles.rowCenter, { marginTop: 4 }]}>
-                            <Icon name="shield-alt" size={14} color={custom.palette.primary} />
-                            <Text style={{ fontSize: 13, color: custom.palette.primary, marginLeft: 8, fontWeight: '700' }}>
-                                {user?.roles?.join(', ') || 'Administrator'}
-                            </Text>
                         </View>
                     </Card.Content>
                 </Card>
@@ -320,9 +303,7 @@ const AdminCheckInOutScreen = () => {
                         </View>
                         {kioskMode && (
                             <View style={styles.bannerWarn}>
-                                <Text style={styles.bannerWarnText}>
-                                    💡 In kiosk mode, you can check in/out any employee using this device.
-                                </Text>
+                                <Text style={styles.bannerWarnText}>💡 In kiosk mode, you can check in/out any employee using this device.</Text>
                             </View>
                         )}
                     </Card.Content>
@@ -339,14 +320,11 @@ const AdminCheckInOutScreen = () => {
                                 value={searchQuery}
                                 style={{ marginBottom: 12 }}
                             />
-
                             {selectedEmployee ? (
                                 <View style={styles.selectedEmployee}>
                                     <View style={{ flex: 1 }}>
                                         <Text style={{ fontWeight: '800', fontSize: 16 }}>{selectedEmployee.employee_name}</Text>
-                                        <Text style={{ color: custom.palette.textSecondary, fontSize: 13 }}>
-                                            {selectedEmployee.name}
-                                        </Text>
+                                        <Text style={{ color: custom.palette.textSecondary, fontSize: 13 }}>{selectedEmployee.name}</Text>
                                         {!!selectedEmployee.department && (
                                             <Text style={{ color: custom.palette.textSecondary, fontSize: 12, marginTop: 4 }}>
                                                 {selectedEmployee.department}
@@ -360,9 +338,7 @@ const AdminCheckInOutScreen = () => {
                             ) : (
                                 <ScrollView style={{ maxHeight: 220 }}>
                                     {filteredEmployees.length === 0 ? (
-                                        <Text style={styles.subtleCenter}>
-                                            {searchQuery ? 'No employees found' : 'Loading employees...'}
-                                        </Text>
+                                        <Text style={styles.subtleCenter}>{searchQuery ? 'No employees found' : 'Loading employees...'}</Text>
                                     ) : (
                                         filteredEmployees.slice(0, 10).map((emp) => (
                                             <Card key={emp.name} style={{ marginBottom: 8 }} onPress={() => setSelectedEmployee(emp)}>
@@ -381,9 +357,7 @@ const AdminCheckInOutScreen = () => {
                                         ))
                                     )}
                                     {filteredEmployees.length > 10 && (
-                                        <Text style={styles.subtleCenter}>
-                                            Showing 10 of {filteredEmployees.length} results. Refine your search.
-                                        </Text>
+                                        <Text style={styles.subtleCenter}>Showing 10 of {filteredEmployees.length} results. Refine your search.</Text>
                                     )}
                                 </ScrollView>
                             )}
@@ -410,12 +384,20 @@ const AdminCheckInOutScreen = () => {
                     </Card.Content>
                 </Card>
 
-                {/* Location Status */}
+                {/* Location Status (with REFRESH icon at top-right) */}
                 {!isWFH && (
                     <Card style={styles.card}>
                         <Card.Title
                             title="Location Status"
-                            subtitle={locationStatus === 'checking' ? 'Verifying location...' : 'Real-time geofence monitoring'}
+                            subtitle={locationStatus === 'checking' ? 'Verifying location...' : 'Tap refresh to re-check'}
+                            right={() => (
+                                <IconButton
+                                    icon="refresh"
+                                    onPress={checkGeofenceStatus}
+                                    disabled={loading}
+                                    accessibilityLabel="Refresh location"
+                                />
+                            )}
                         />
                         <Card.Content>
                             <View style={[styles.statusContainer, { backgroundColor: `${statusColor}15` }]}>
@@ -482,7 +464,7 @@ const AdminCheckInOutScreen = () => {
                     style={{ marginBottom: 12 }}
                     disabled={loading || (!isWFH && locationStatus !== 'inside') || (kioskMode && !selectedEmployee)}
                 >
-                    <Icon name="sign-in-alt" size={14} />  {kioskMode && selectedEmployee ? `Check In - ${selectedEmployee.employee_name}` : 'Check In'}
+                    <Icon name="sign-in-alt" size={14} /> {kioskMode && selectedEmployee ? `Check In - ${selectedEmployee.employee_name}` : 'Check In'}
                 </Button>
 
                 <Button
@@ -490,7 +472,7 @@ const AdminCheckInOutScreen = () => {
                     onPress={() => doAction('Check-Out')}
                     disabled={loading || (!isWFH && locationStatus !== 'inside') || (kioskMode && !selectedEmployee)}
                 >
-                    <Icon name="sign-out-alt" size={14} />  {kioskMode && selectedEmployee ? `Check Out - ${selectedEmployee.employee_name}` : 'Check Out'}
+                    <Icon name="sign-out-alt" size={14} /> {kioskMode && selectedEmployee ? `Check Out - ${selectedEmployee.employee_name}` : 'Check Out'}
                 </Button>
 
                 {!isWFH && locationStatus === 'outside' && (
@@ -501,15 +483,7 @@ const AdminCheckInOutScreen = () => {
                         </Text>
                     </View>
                 )}
-
-                {!isWFH && (
-                    <Button variant="text" onPress={checkGeofenceStatus} style={{ marginTop: 8 }}>
-                        <Icon name="sync" size={14} />  Refresh Location
-                    </Button>
-                )}
             </ScrollView>
-
-            <Loading visible={loading} />
         </View>
     );
 };
@@ -530,31 +504,18 @@ const styles = StyleSheet.create({
     boldText: { marginLeft: 8, fontWeight: '600' },
     subtleText: { fontSize: 13, color: '#6B7280', marginLeft: 8 },
     subtleCenter: { textAlign: 'center', color: '#6B7280', padding: 10, fontSize: 12 },
-    statusContainer: {
-        flexDirection: 'row', alignItems: 'center',
-        padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E0E0E0',
-    },
+    statusContainer: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E0E0E0' },
     statusTitle: { fontWeight: '800', fontSize: 16 },
     secondaryText: { marginTop: 4, color: '#6B7280', fontSize: 13 },
     errorText: { marginTop: 4, fontSize: 12 },
-    infoRow: {
-        flexDirection: 'row', justifyContent: 'space-between',
-        paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#E0E0E0',
-    },
+    infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#E0E0E0' },
     infoLabel: { fontSize: 13, color: '#757575', fontWeight: '500' },
     infoValue: { fontSize: 13, color: '#111827', fontWeight: '700' },
     bannerWarn: { marginTop: 12, padding: 10, backgroundColor: '#FFF3CD', borderRadius: 10 },
     bannerWarnText: { color: '#856404', fontSize: 13 },
-    bannerError: {
-        marginTop: 12, padding: 12, backgroundColor: '#FFEBEE',
-        borderRadius: 10, borderLeftWidth: 4,
-    },
+    bannerError: { marginTop: 12, padding: 12, backgroundColor: '#FFEBEE', borderRadius: 10, borderLeftWidth: 4 },
     errorTitle: { fontWeight: '700', fontSize: 13 },
-    selectedEmployee: {
-        flexDirection: 'row', alignItems: 'center',
-        padding: 16, backgroundColor: '#E3F2FD',
-        borderRadius: 12, borderWidth: 1.5, borderColor: '#2196F3',
-    },
+    selectedEmployee: { flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: '#E3F2FD', borderRadius: 12, borderWidth: 1.5, borderColor: '#2196F3' },
 });
 
 export default AdminCheckInOutScreen;

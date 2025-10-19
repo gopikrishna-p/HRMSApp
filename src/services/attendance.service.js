@@ -12,7 +12,6 @@ const ENDPOINTS = {
 
 class AttendanceService {
     async geoAttendance({ employee, action, latitude, longitude, work_type }) {
-        // Enforce (0,0) when WFH, and ensure numbers are sent
         const isWFH = work_type === 'WFH';
         const lat = isWFH ? 0 : Number(latitude ?? 0);
         const lon = isWFH ? 0 : Number(longitude ?? 0);

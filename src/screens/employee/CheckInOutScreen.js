@@ -1,26 +1,21 @@
 // src/screens/employee/CheckInOutScreen.js
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Alert, StyleSheet } from 'react-native';
-import { Text, Switch, Card, useTheme, ProgressBar } from 'react-native-paper';
+import { Text, Switch, Card, useTheme, ProgressBar, IconButton } from 'react-native-paper';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { useAuth } from '../../context/AuthContext';
 import AttendanceService from '../../services/attendance.service';
 import { ensureLocationPermission, getCurrentPosition } from '../../utils/location';
-import AppHeader from '../../components/ui/AppHeader';
-import Loading from '../../components/common/Loading';
 import Button from '../../components/common/Button';
 
-// Haversine distance (meters)
+// Haversine (meters)
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
     const R = 6371e3;
     const φ1 = (lat1 * Math.PI) / 180;
     const φ2 = (lat2 * Math.PI) / 180;
     const Δφ = ((lat2 - lat1) * Math.PI) / 180;
     const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-
-    const a =
-        Math.sin(Δφ / 2) ** 2 +
-        Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+    const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
 };
@@ -48,10 +43,10 @@ const CheckInOutScreen = () => {
     }, []);
 
     const fetchOfficeLocation = useCallback(async () => {
+        if (!employeeId) return;
         const res = await AttendanceService.getOfficeLocation(employeeId);
         if (res.success && res.data?.message) {
-            // { latitude, longitude, radius }
-            setOfficeLocation(res.data.message);
+            setOfficeLocation(res.data.message); // {latitude, longitude, radius}
         }
     }, [employeeId]);
 
@@ -71,12 +66,7 @@ const CheckInOutScreen = () => {
             const userLon = pos.coords.longitude;
             setCurrentLocation({ latitude: userLat, longitude: userLon });
 
-            const dist = calculateDistance(
-                userLat,
-                userLon,
-                officeLocation.latitude,
-                officeLocation.longitude
-            );
+            const dist = calculateDistance(userLat, userLon, officeLocation.latitude, officeLocation.longitude);
             const rounded = Math.round(dist);
             setDistance(rounded);
 
@@ -87,6 +77,7 @@ const CheckInOutScreen = () => {
         }
     }, [isWFH, officeLocation]);
 
+    // Initial loads
     useEffect(() => {
         if (employeeId) {
             fetchWFHInfo();
@@ -94,13 +85,15 @@ const CheckInOutScreen = () => {
         }
     }, [employeeId, fetchWFHInfo, fetchOfficeLocation]);
 
+    // Run location check exactly once after officeLocation is available
     useEffect(() => {
-        checkGeofenceStatus();
-        const id = setInterval(() => {
-            if (!isWFH && officeLocation) checkGeofenceStatus();
-        }, 10000);
-        return () => clearInterval(id);
-    }, [checkGeofenceStatus, isWFH, officeLocation]);
+        if (officeLocation) {
+            checkGeofenceStatus();
+        } else {
+            setLocationStatus(isWFH ? 'wfh' : 'checking');
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [officeLocation]);
 
     const canDoWFH = useMemo(() => wfhEligible, [wfhEligible]);
 
@@ -118,19 +111,15 @@ const CheckInOutScreen = () => {
     };
 
     const doAction = async (action) => {
-        // Guard rails
         if (!isWFH && locationStatus === 'outside') {
             Alert.alert(
                 'Outside Geofence',
-                `You are ${distance}m away. You must be within ${officeLocation?.radius}m to check ${action === 'Check-In' ? 'in' : 'out'}.\n\nMove closer or enable WFH if eligible.`
+                `You are ${distance}m away. You must be within ${officeLocation?.radius}m to ${action === 'Check-In' ? 'check in' : 'check out'}.`
             );
             return;
         }
-        if (!isWFH && locationStatus === 'error') {
-            Alert.alert('Location Error', 'Cannot determine your location. Check GPS & permissions.', [
-                { text: 'Retry', onPress: checkGeofenceStatus },
-                { text: 'Cancel', style: 'cancel' },
-            ]);
+        if (!isWFH && (locationStatus === 'error' || locationStatus === 'checking')) {
+            Alert.alert('Location Error', 'Cannot determine your location. Tap the refresh icon to retry.', [{ text: 'OK' }]);
             return;
         }
 
@@ -143,7 +132,7 @@ const CheckInOutScreen = () => {
                     Alert.alert('WFH Not Allowed', 'You are not eligible for WFH.');
                     return;
                 }
-                work_type = 'WFH';
+                work_type = 'WFH'; // will force (0,0) in service
             } else {
                 if (currentLocation) {
                     latitude = currentLocation.latitude;
@@ -166,10 +155,7 @@ const CheckInOutScreen = () => {
 
             if (res.success && res.data?.message) {
                 const m = res.data.message;
-                Alert.alert(
-                    'Success',
-                    `${action} successful!\n\nRef: ${m.geo_log || m.attendance}\n${isWFH ? 'Mode: WFH' : `Distance: ${distance}m`}`
-                );
+                Alert.alert('Success', `${action} successful!\nRef: ${m.geo_log || m.attendance}\n${isWFH ? 'Mode: WFH' : `Distance: ${distance}m`}`);
             } else {
                 const msg = parseBackendError(res);
                 Alert.alert('Failed', msg);
@@ -214,8 +200,6 @@ const CheckInOutScreen = () => {
 
     return (
         <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
-            
-
             <View style={{ padding: 16 }}>
                 {/* Work Mode */}
                 <Card style={styles.card}>
@@ -236,12 +220,20 @@ const CheckInOutScreen = () => {
                     </Card.Content>
                 </Card>
 
-                {/* Location Status */}
+                {/* Location Status (with REFRESH icon at top-right) */}
                 {!isWFH && (
                     <Card style={styles.card}>
                         <Card.Title
                             title="Location Status"
-                            subtitle={locationStatus === 'checking' ? 'Verifying your location...' : 'Real-time geofence monitoring'}
+                            subtitle={locationStatus === 'checking' ? 'Verifying your location...' : 'Tap refresh to re-check'}
+                            right={() => (
+                                <IconButton
+                                    icon="refresh"
+                                    onPress={checkGeofenceStatus}
+                                    disabled={loading}
+                                    accessibilityLabel="Refresh location"
+                                />
+                            )}
                         />
                         <Card.Content>
                             <View style={[styles.statusContainer, { backgroundColor: `${statusColor}15` }]}>
@@ -255,9 +247,7 @@ const CheckInOutScreen = () => {
                                 </View>
                             </View>
 
-                            {locationStatus === 'checking' && (
-                                <ProgressBar indeterminate color={custom.palette.primary} style={{ marginTop: 12 }} />
-                            )}
+                            {locationStatus === 'checking' && <ProgressBar indeterminate color={custom.palette.primary} style={{ marginTop: 12 }} />}
 
                             {locationStatus !== 'checking' && distance !== null && officeLocation && (
                                 <View style={{ marginTop: 16 }}>
@@ -299,42 +289,28 @@ const CheckInOutScreen = () => {
                                 <Text style={styles.infoValue}>{officeLocation.radius}m</Text>
                             </View>
                             <View style={styles.bannerInfo}>
-                                <Text style={styles.bannerInfoText}>
-                                    💡 You must be within the geofence radius to check in/out from office.
-                                </Text>
+                                <Text style={styles.bannerInfoText}>💡 You must be within the geofence radius to check in/out from office.</Text>
                             </View>
                         </Card.Content>
                     </Card>
                 )}
 
                 {/* Actions */}
-                <Button onPress={() => doAction('Check-In')} style={{ marginBottom: 12 }}
-                    disabled={loading || (!isWFH && locationStatus !== 'inside')}>
-                    <Icon name="sign-in-alt" size={14} />  Check In
+                <Button onPress={() => doAction('Check-In')} style={{ marginBottom: 12 }} disabled={loading || (!isWFH && locationStatus !== 'inside')}>
+                    <Icon name="sign-in-alt" size={14} /> Check In
                 </Button>
 
-                <Button variant="outline" onPress={() => doAction('Check-Out')}
-                    disabled={loading || (!isWFH && locationStatus !== 'inside')}>
-                    <Icon name="sign-out-alt" size={14} />  Check Out
+                <Button variant="outline" onPress={() => doAction('Check-Out')} disabled={loading || (!isWFH && locationStatus !== 'inside')}>
+                    <Icon name="sign-out-alt" size={14} /> Check Out
                 </Button>
 
                 {!isWFH && locationStatus === 'outside' && (
                     <View style={[styles.bannerError, { borderLeftColor: custom.palette.danger }]}>
                         <Text style={[styles.errorTitle, { color: custom.palette.danger }]}>⚠️ Check-in/out disabled</Text>
-                        <Text style={[styles.errorText, { color: custom.palette.danger }]}>
-                            You are currently {distance}m away. Move closer to the office or enable WFH mode.
-                        </Text>
+                        <Text style={[styles.errorText, { color: custom.palette.danger }]}>You are currently {distance}m away. Move closer to the office or enable WFH mode.</Text>
                     </View>
                 )}
-
-                {!isWFH && (
-                    <Button variant="text" onPress={checkGeofenceStatus} style={{ marginTop: 8 }}>
-                        <Icon name="sync" size={14} />  Refresh Location
-                    </Button>
-                )}
             </View>
-
-            <Loading visible={loading} />
         </View>
     );
 };
@@ -353,27 +329,18 @@ const styles = StyleSheet.create({
     rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     rowCenter: { flexDirection: 'row', alignItems: 'center' },
     boldText: { marginLeft: 8, fontWeight: '600' },
-    statusContainer: {
-        flexDirection: 'row', alignItems: 'center',
-        padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E0E0E0',
-    },
+    statusContainer: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E0E0E0' },
     statusTitle: { fontWeight: '800', fontSize: 16 },
     secondaryText: { marginTop: 4, color: '#6B7280', fontSize: 13 },
     errorText: { marginTop: 4, fontSize: 12 },
-    infoRow: {
-        flexDirection: 'row', justifyContent: 'space-between',
-        paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#E0E0E0',
-    },
+    infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#E0E0E0' },
     infoLabel: { fontSize: 13, color: '#757575', fontWeight: '500' },
     infoValue: { fontSize: 13, color: '#111827', fontWeight: '700' },
     bannerInfo: { marginTop: 12, padding: 10, backgroundColor: '#E3F2FD', borderRadius: 10 },
     bannerInfoText: { color: '#1565C0', fontSize: 12 },
     bannerWarn: { marginTop: 12, padding: 10, backgroundColor: '#FFF3CD', borderRadius: 10 },
     bannerWarnText: { color: '#856404', fontSize: 13 },
-    bannerError: {
-        marginTop: 12, padding: 12, backgroundColor: '#FFEBEE',
-        borderRadius: 10, borderLeftWidth: 4,
-    },
+    bannerError: { marginTop: 12, padding: 12, backgroundColor: '#FFEBEE', borderRadius: 10, borderLeftWidth: 4 },
     errorTitle: { fontWeight: '700', fontSize: 13 },
 });
 
