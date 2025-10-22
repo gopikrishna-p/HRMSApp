@@ -5,8 +5,8 @@ import { colors } from '../../theme/colors';
 const AllAttendanceAnalyticsScreen = ({ navigation }) => {
     return (
         <View style={styles.container}>
-            <Text style={styles.title}>All Attendance List</Text>
-            <Text style={styles.subtitle}>View all employees attendance</Text>
+            <Text style={styles.title}>All Attendance Analytics Screen</Text>
+            <Text style={styles.subtitle}>View All Attendance Analytics Screen</Text>
         </View>
     );
 };
