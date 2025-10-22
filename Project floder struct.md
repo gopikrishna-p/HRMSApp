@@ -84,7 +84,6 @@
         ├── api.service.js
         ├── attendance.service.js
         ├── auth.service.js
-        ├── service.js
     └── 📁theme
         ├── colors.js
         ├── fonts.js
