@@ -15,6 +15,7 @@
     "@react-native-community/netinfo": "^11.3.1",
     "@react-native-firebase/app": "^23.4.1",
     "@react-native-firebase/messaging": "^23.4.1",
+    "@react-native-picker/picker": "^2.11.4",
     "@react-navigation/native": "^6.1.18",
     "@react-navigation/native-stack": "^6.9.23",
     "@react-navigation/stack": "^6.4.1",

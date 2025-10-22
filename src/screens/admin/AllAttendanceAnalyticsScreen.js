@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { colors } from '../../theme/colors';
 
-const AllAttendanceListScreen = ({ navigation }) => {
+const AllAttendanceAnalyticsScreen = ({ navigation }) => {
     return (
         <View style={styles.container}>
             <Text style={styles.title}>All Attendance List</Text>
@@ -31,4 +31,4 @@ const styles = StyleSheet.create({
     },
 });
 
-export default AllAttendanceListScreen;
+export default AllAttendanceAnalyticsScreen;

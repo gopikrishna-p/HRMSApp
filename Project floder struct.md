@@ -43,7 +43,7 @@
             ├── AdminCheckInOutScreen.js
             ├── AdminDashboard.js
             ├── AdminNotifications.js
-            ├── AllAttendanceListScreen.js
+            ├── AllAttendanceAnalyticsScreen.js
             ├── AttendanceAnalyticsScreen.js
             ├── AttendanceManagementScreen.js
             ├── CreateNotificationScreen.js

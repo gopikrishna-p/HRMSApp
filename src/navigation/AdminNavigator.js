@@ -9,7 +9,7 @@ import EmployeeManagement from '../screens/admin/EmployeeManagement';
 import AttendanceManagementScreen from '../screens/admin/AttendanceManagementScreen';
 import ReportsScreen from '../screens/admin/ReportsScreen';
 import AdminCheckInOutScreen from '../screens/admin/AdminCheckInOutScreen';
-import AllAttendanceListScreen from '../screens/admin/AllAttendanceListScreen';
+import AllAttendanceAnalyticsScreen from '../screens/admin/AllAttendanceAnalyticsScreen';
 import ManualCheckInOutScreen from '../screens/admin/ManualCheckInOutScreen';
 import TodayAttendanceScreen from '../screens/admin/TodayAttendanceScreen';
 import WFHSettingsScreen from '../screens/admin/WFHSettingsScreen';
@@ -45,7 +45,7 @@ const AdminNavigator = () => {
             {/* Keep RN header for the rest (or migrate gradually) */}
             <Stack.Screen name="EmployeeManagement" component={EmployeeManagement} options={{ title: 'Employee Management' }} />
             <Stack.Screen name="AdminCheckInOut" component={AdminCheckInOutScreen} options={{ title: 'Admin Check In/Out' }} />
-            <Stack.Screen name="AllAttendanceList" component={AllAttendanceListScreen} options={{ title: 'All Attendance' }} />
+            <Stack.Screen name="AllAttendanceAnalyticsScreen" component={AllAttendanceAnalyticsScreen} options={{ title: 'All Attendance' }} />
             <Stack.Screen name="ManualCheckInOut" component={ManualCheckInOutScreen} options={{ title: 'Manual Attendance' }} />
             <Stack.Screen name="TodayAttendance" component={TodayAttendanceScreen} options={{ title: "Today's Attendance" }} />
             <Stack.Screen name="AttendanceManagement" component={AttendanceManagementScreen} options={{ title: 'Attendance Management' }} />
