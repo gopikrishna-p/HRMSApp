@@ -33,7 +33,7 @@ const AdminDashboard = ({ navigation }) => {
 
     return (
         <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
-            <AppHeader title="logo" canGoBack={false} rightIcon="bell" badge={5} onRightPress={() => navigation.navigate('AdminNotifications')}/>
+            <AppHeader title="logo" canGoBack={false} rightIcon="bell" badge={5} onRightPress={() => navigation.navigate('AdminNotifications')} />
 
             <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
                 {/* Welcome */}
@@ -106,8 +106,11 @@ const AdminDashboard = ({ navigation }) => {
                 <Section title="Projects Oversight" icon="project-diagram" tint="#14B8A6">
                     <ListItem title="View Projects" subtitle="Portfolio & status" leftIcon="folder-open"
                         tint="#14B8A6" onPress={() => navigation.navigate('ProjectsOverview')} />
+                    <ListItem title="Project Tasks" subtitle="Assign & track tasks" leftIcon="tasks"
+                        tint="#14B8A6" onPress={() => navigation.navigate('ProjectTasksScreen')} />
                     <ListItem title="View Project Logs" subtitle="Progress & time entries" leftIcon="history"
-                        tint="#14B8A6" onPress={() => navigation.navigate('ProjectLogs')} />
+                        tint="#14B8A6" onPress={() => navigation.navigate('ProjectLogsScreen')} />
+
                 </Section>
 
                 <Section title="Notifications & Announcements" icon="bullhorn" tint="#F43F5E">

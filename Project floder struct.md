@@ -23,6 +23,10 @@
             ├── Input.js
             ├── Loading.js
         └── 📁employee
+        └── 📁project
+            ├── LogFormModal.js
+            ├── LogListItem.js
+            ├── ProjectCard.js
         └── 📁ui
             ├── AppHeader.js
             ├── EmptyState.js
@@ -53,6 +57,7 @@
             ├── ManualCheckInOutScreen.js
             ├── ProjectLogsScreen.js
             ├── ProjectsOverviewScreen.js
+            ├── ProjectTasksScreen.js
             ├── ReportsScreen.js
             ├── TodayAttendanceScreen.js
             ├── TodayEmployeeAnalyticsScreen.js
@@ -77,6 +82,7 @@
             ├── NotificationsScreen.js
             ├── PayslipScreen.js
             ├── ProfileScreen.js
+            ├── ProjectLogsScreen.js
             ├── SalaryStructureScreen.js
             ├── TasksScreen.js
             ├── TravelRequestScreen.js
@@ -85,6 +91,7 @@
         ├── api.service.js
         ├── attendance.service.js
         ├── auth.service.js
+        ├── project.service.js
     └── 📁theme
         ├── colors.js
         ├── fonts.js

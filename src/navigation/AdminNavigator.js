@@ -18,8 +18,11 @@ import AttendanceAnalyticsScreen from '../screens/admin/AttendanceAnalyticsScree
 import TodayEmployeeAnalyticsScreen from '../screens/admin/TodayEmployeeAnalyticsScreen';
 import LeaveApprovalsScreen from '../screens/admin/LeaveApprovalsScreen';
 import CreateNotificationScreen from '../screens/admin/CreateNotificationScreen';
+
 import ProjectsOverviewScreen from '../screens/admin/ProjectsOverviewScreen';
 import ProjectLogsScreen from '../screens/admin/ProjectLogsScreen';
+import ProjectTasksScreen from '../screens/admin/ProjectTasksScreen';
+
 import AdminNotifications from '../screens/admin/AdminNotifications';
 
 const Stack = createNativeStackNavigator();
@@ -56,8 +59,11 @@ const AdminNavigator = () => {
             <Stack.Screen name="Reports" component={ReportsScreen} options={{ title: 'Reports & Analytics' }} />
             <Stack.Screen name="LeaveApprovals" component={LeaveApprovalsScreen} options={{ title: 'Leave Approvals' }} />
             <Stack.Screen name="CreateNotification" component={CreateNotificationScreen} options={{ title: 'Create Notification' }} />
+
             <Stack.Screen name="ProjectsOverview" component={ProjectsOverviewScreen} options={{ title: 'Projects Overview' }} />
-            <Stack.Screen name="ProjectLogs" component={ProjectLogsScreen} options={{ title: 'Project Logs' }} />
+            <Stack.Screen name="ProjectLogsScreen" component={ProjectLogsScreen} options={{ title: 'Project Logs' }} />
+            <Stack.Screen name="ProjectTasksScreen" component={ProjectTasksScreen} options={{ title: 'Project Tasks' }} />
+
             <Stack.Screen name="AdminNotifications" component={AdminNotifications} options={{ title: 'Notifications' }} />
         </Stack.Navigator>
     );

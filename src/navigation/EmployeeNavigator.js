@@ -15,14 +15,16 @@ import LeavesScreen from '../screens/employee/LeavesScreen';
 import CompensatoryLeaveScreen from '../screens/employee/CompensatoryLeaveScreen';
 import ExpenseClaimScreen from '../screens/employee/ExpenseClaimScreen';
 import TravelRequestScreen from '../screens/employee/TravelRequestScreen';
+
 import MyProjectsScreen from '../screens/employee/MyProjectsScreen';
-import MyTasksScreen from '../screens/employee/MyTasksScreen';
-import TasksScreen from '../screens/employee/TasksScreen';
+import MyLogsScreen from '../screens/employee/MyLogsScreen';
+
 import SalaryStructureScreen from '../screens/employee/SalaryStructureScreen';
 import PayslipScreen from '../screens/employee/PayslipScreen';
 import NotificationsScreen from '../screens/employee/NotificationsScreen';
 import ProfileScreen from '../screens/employee/ProfileScreen';
 import EmployeeDashboard from '../screens/employee/EmployeeDashboard';
+import MyTasksScreen from '../screens/employee/MyTasksScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -58,9 +60,9 @@ const EmployeeNavigator = () => {
             <Stack.Screen name="ExpenseClaim" component={ExpenseClaimScreen} options={{ title: 'Expense Claim' }} />
             <Stack.Screen name="TravelRequest" component={TravelRequestScreen} options={{ title: 'Travel Request' }} />
 
-            <Stack.Screen name="MyProjects" component={MyProjectsScreen} options={{ title: 'My Projects' }} />
-            <Stack.Screen name="MyTasks" component={MyTasksScreen} options={{ title: 'My Tasks' }} />
-            <Stack.Screen name="Tasks" component={TasksScreen} options={{ title: 'Tasks' }} />
+            <Stack.Screen name="MyProjectsScreen" component={MyProjectsScreen} options={{ title: 'My Projects' }} />
+            <Stack.Screen name="MyTasksScreen" component={MyTasksScreen} options={{ title: 'Tasks' }} />
+            <Stack.Screen name="MyLogsScreen" component={MyLogsScreen} options={{ title: 'My Tasks Logs' }} />
 
             <Stack.Screen name="SalaryStructure" component={SalaryStructureScreen} options={{ title: 'Salary Structure' }} />
             <Stack.Screen name="Payslip" component={PayslipScreen} options={{ title: 'Payslips' }} />
