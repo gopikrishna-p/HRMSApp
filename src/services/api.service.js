@@ -283,15 +283,58 @@ class ApiService {
         return this.get(m('get_shift_assignments'), { employee, start_date, end_date });
     }
 
+    /**
+     * Get attendance history for a specific employee with date range
+     * @param {Object} params - {employee_id, start_date, end_date}
+     * @returns {Promise} Response with attendance records and summary stats
+     */
     getEmployeeAttendanceHistory({ employee_id, start_date, end_date }) {
-        return this.get(m('get_employee_attendance_history'), { employee_id, start_date, end_date });
+        return this.get(m('get_employee_attendance_history'), {
+            employee_id,
+            start_date,
+            end_date,
+        });
     }
 
+    /**
+   * Get all employees attendance summary
+   * @param {Object} params - {start_date, end_date, department}
+   * @returns {Promise} Response with summary data for all employees
+   */
     getAllEmployeesAttendanceSummary({ start_date, end_date, department }) {
         return this.get(m('get_all_employees_attendance_summary'), {
             start_date,
             end_date,
             department,
+        });
+    }
+
+    /**
+ * Export all employees attendance report
+ * @param {Object} params - {start_date, end_date, format, department}
+ * @returns {Promise} Response with file download info
+ */
+    exportAllEmployeesReport({ start_date, end_date, format = 'pdf', department }) {
+        return this.post(m('export_all_employees_attendance'), {
+            start_date,
+            end_date,
+            export_format: format,
+            department,
+        });
+    }
+
+
+
+    /**
+  * Get employee attendance analytics
+  * @param {Object} params - {employee_id, start_date, end_date}
+  * @returns {Promise} Response with analytics data
+  */
+    getEmployeeAttendanceAnalytics({ employee_id, start_date, end_date }) {
+        return this.get(m('get_employee_attendance_analytics'), {
+            employee_id,
+            start_date,
+            end_date,
         });
     }
 
@@ -365,6 +408,8 @@ class ApiService {
     downloadSalarySlip({ name }) {
         return this.get(m('download_salary_slip'), { name });
     }
+
+
 }
 
 export default new ApiService();
