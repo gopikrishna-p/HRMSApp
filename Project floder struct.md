@@ -77,14 +77,13 @@
             ├── HolidayListScreen.js
             ├── LeaveApplicationScreen.js
             ├── LeavesScreen.js
+            ├── MyLogsScreen.js
             ├── MyProjectsScreen.js
             ├── MyTasksScreen.js
             ├── NotificationsScreen.js
             ├── PayslipScreen.js
             ├── ProfileScreen.js
-            ├── ProjectLogsScreen.js
             ├── SalaryStructureScreen.js
-            ├── TasksScreen.js
             ├── TravelRequestScreen.js
             ├── WFHRequestScreen.js
     └── 📁services
