@@ -2,11 +2,11 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { colors } from '../../theme/colors';
 
-const MyProjectsScreen = ({ navigation }) => {
+const CreateNotificationScreen = ({ navigation }) => {
     return (
         <View style={styles.container}>
-            <Text style={styles.title}>My Projects</Text>
-            <Text style={styles.subtitle}>View assigned projects</Text>
+            <Text style={styles.title}>Create Notification</Text>
+            <Text style={styles.subtitle}>Send notifications to employees</Text>
         </View>
     );
 };
@@ -31,4 +31,4 @@ const styles = StyleSheet.create({
     },
 });
 
-export default MyProjectsScreen;
+export default CreateNotificationScreen;

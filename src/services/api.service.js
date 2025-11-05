@@ -338,57 +338,8 @@ class ApiService {
         });
     }
 
-    /* -------------------------
-     * TASK LOGS (Daily Task Log + Updates)
-     * -----------------------*/
-    taskLog({ employee, action, task_name, description, task_id, comments }) {
-        // action: "Start" | "Complete"
-        return this.post(m('task_log'), {
-            employee,
-            action,
-            task_name,
-            description,
-            task_id,
-            comments,
-        });
-    }
 
-    getAllTaskLogs() {
-        return this.get(m('get_all_task_logs'));
-    }
 
-    addTaskUpdate({ task_id, update_description, progress_status, next_plan }) {
-        return this.post(m('add_task_update'), {
-            task_id,
-            update_description,
-            progress_status,
-            next_plan,
-        });
-    }
-
-    getTaskWithUpdates({ task_id }) {
-        return this.get(m('get_task_with_updates'), { task_id });
-    }
-
-    getAllSubmittedUpdates({ employee_id, task_id, limit = 100 }) {
-        return this.get(m('get_all_submitted_updates'), { employee_id, task_id, limit });
-    }
-
-    updateTaskProgressStatus({ update_id, new_progress_status, reason }) {
-        return this.post(m('update_task_progress_status'), {
-            update_id,
-            new_progress_status,
-            reason,
-        });
-    }
-
-    getUpdateDetails({ update_id }) {
-        return this.get(m('get_update_details'), { update_id });
-    }
-
-    getUpdateHistory({ task_id }) {
-        return this.get(m('get_update_history'), { task_id });
-    }
 
     /* -------------------------
      * FILES (upload/download/attach)

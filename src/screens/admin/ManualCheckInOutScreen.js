@@ -24,7 +24,7 @@ import {
     Divider,
 } from 'react-native-paper';
 
-import Api from '../../services/api.service';
+import ApiService from '../../services/api.service';
 
 const fmt = (d) =>
     typeof d === 'string'
@@ -86,7 +86,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
 
     // ---- data fetchers
     const fetchStats = useCallback(async () => {
-        const res = await Api.getAttendanceStatisticsForDate({ date: ymd });
+        const res = await ApiService.getAttendanceStatisticsForDate({ date: ymd });
         if (res.success) setStats(res.data?.message ?? res.data ?? null);
     }, [ymd]);
 
@@ -94,8 +94,8 @@ const ManualCheckInOutScreen = ({ navigation }) => {
         setLoading(true);
         const res =
             mode === 'pending'
-                ? await Api.getPendingCheckouts({ date: ymd })
-                : await Api.getAttendanceRecordsForDate({ date: ymd });
+                ? await ApiService.getPendingCheckouts({ date: ymd })
+                : await ApiService.getAttendanceRecordsForDate({ date: ymd });
 
         if (res.success) {
             if (mode === 'pending') {
@@ -135,7 +135,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
 
     // ---- actions (single)
     const doManualCheckout = async (attendance_id) => {
-        const res = await Api.manualCheckout({ attendance_id });
+        const res = await ApiService.manualCheckout({ attendance_id });
         setSnack({
             visible: true,
             msg: res.success ? 'Checkout added (6 PM)' : res.message || 'Failed to checkout',
@@ -161,7 +161,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
             check_in_time: checkIn ? fmt(checkIn) : undefined,
             check_out_time: checkOut ? fmt(checkOut) : undefined,
         };
-        const res = await Api.updateAttendanceTimes(payload);
+        const res = await ApiService.updateAttendanceTimes(payload);
         setSnack({
             visible: true,
             msg: res.success ? 'Times updated' : res.message || 'Failed to update',
@@ -182,7 +182,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
                     text: 'Yes',
                     style: 'destructive',
                     onPress: async () => {
-                        const res = await Api.deleteAttendanceRecord({ attendance_id: row.name, reason: 'Admin action' });
+                        const res = await ApiService.deleteAttendanceRecord({ attendance_id: row.name, reason: 'Admin action' });
                         setSnack({
                             visible: true,
                             msg: res.success ? 'Record removed' : res.message || 'Failed to remove',
@@ -237,7 +237,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
                 // Quick checkout with default time
                 const t = new Date(date);
                 t.setHours(18, 0, 0, 0);
-                const res = await Api.bulkManualCheckout({
+                const res = await ApiService.bulkManualCheckout({
                     attendance_ids: ids,
                     default_checkout_time: checkOut || fmt(t),
                 });
@@ -263,7 +263,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
                     check_out_time: checkOut || undefined,
                 }));
                 
-                const res = await Api.bulkUpdateAttendanceTimes({ attendance_updates: payload });
+                const res = await ApiService.bulkUpdateAttendanceTimes({ attendance_updates: payload });
                 
                 setSnack({
                     visible: true,

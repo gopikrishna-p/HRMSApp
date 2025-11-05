@@ -5,8 +5,8 @@ import { colors } from '../../theme/colors';
 const EmployeeManagement = ({ navigation }) => {
     return (
         <View style={styles.container}>
-            <Text style={styles.title}>My Projects</Text>
-            <Text style={styles.subtitle}>View assigned projects</Text>
+            <Text style={styles.title}>Employee Management</Text>
+            <Text style={styles.subtitle}>Manage employee records and profiles</Text>
         </View>
     );
 };

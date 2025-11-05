@@ -5,8 +5,8 @@ import { colors } from '../../theme/colors';
 const AttendanceScreen = ({ navigation }) => {
     return (
         <View style={styles.container}>
-            <Text style={styles.title}>My Projects</Text>
-            <Text style={styles.subtitle}>View assigned projects</Text>
+            <Text style={styles.title}>My Attendance</Text>
+            <Text style={styles.subtitle}>View attendance records and history</Text>
         </View>
     );
 };

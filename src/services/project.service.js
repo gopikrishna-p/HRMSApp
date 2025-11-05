@@ -1,5 +1,5 @@
 // src/services/project.service.js
-import api from './api.service';
+import ApiService from './api.service';
 
 const unwrap = (res) => res?.data?.message ?? res?.data ?? res;
 
@@ -38,7 +38,7 @@ const handleError = (error, context = '') => {
  */
 export const listProjects = async ({ q = '', limit = 200 } = {}) => {
     try {
-        const res = await api.post(`${BASE}.my_projects`, { q, limit });
+        const res = await ApiService.post(`${BASE}.my_projects`, { q, limit });
         return unwrap(res);
     } catch (error) {
         handleError(error, 'List Projects');
@@ -53,7 +53,7 @@ export const getProjectDetail = async (project) => {
         if (!project) {
             throw new Error('Project ID is required');
         }
-        const res = await api.post(`${BASE}.my_project_summary`, { project });
+        const res = await ApiService.post(`${BASE}.my_project_summary`, { project });
         return unwrap(res);
     } catch (error) {
         handleError(error, 'Get Project Detail');
@@ -76,7 +76,7 @@ export const assignMembers = async (project, employee_ids, role_in_project = 'Co
 
         console.log('Assigning members:', { project, employee_ids, role_in_project });
 
-        const res = await api.post(`${BASE}.assign_members`, {
+        const res = await ApiService.post(`${BASE}.assign_members`, {
             project,
             employee_ids: JSON.stringify(employee_ids),
             role_in_project,
@@ -103,7 +103,7 @@ export const removeMember = async (project, employee) => {
             throw new Error('Employee ID is required');
         }
 
-        const res = await api.post(`${BASE}.remove_member`, { project, employee });
+        const res = await ApiService.post(`${BASE}.remove_member`, { project, employee });
         return unwrap(res);
     } catch (error) {
         handleError(error, 'Remove Member');
@@ -121,7 +121,7 @@ export const listTasks = async (project, { status, limit = 200 } = {}) => {
             throw new Error('Project ID is required');
         }
 
-        const res = await api.post(`${BASE}.my_tasks`, { project, status, limit });
+        const res = await ApiService.post(`${BASE}.my_tasks`, { project, status, limit });
         return unwrap(res);
     } catch (error) {
         handleError(error, 'List Tasks');
@@ -149,7 +149,7 @@ export const createTask = async (project, title, description = '', extra = {}) =
 
         console.log('Creating task with payload:', payload);
 
-        const res = await api.post(`${BASE}.create_task`, payload);
+        const res = await ApiService.post(`${BASE}.create_task`, payload);
         const result = unwrap(res);
 
         console.log('Create task response:', result);
@@ -171,7 +171,7 @@ export const listProjectLogs = async (project, { task, limit = 200 } = {}) => {
             throw new Error('Project ID is required');
         }
 
-        const res = await api.post(`${BASE}.my_task_logs`, { project, task, limit });
+        const res = await ApiService.post(`${BASE}.my_task_logs`, { project, task, limit });
         return unwrap(res);
     } catch (error) {
         handleError(error, 'List Project Logs');
@@ -190,7 +190,7 @@ export const addTaskLog = async ({ task, description, log_time = null }) => {
             throw new Error('Log description is required');
         }
 
-        const res = await api.post(`${BASE}.add_task_log`, {
+        const res = await ApiService.post(`${BASE}.add_task_log`, {
             task,
             description: description.trim(),
             log_time
@@ -214,7 +214,7 @@ export const startLog = async ({ project, task = null, message = '' }) => {
             throw new Error('Log message is required');
         }
 
-        const res = await api.post(`${BASE}.add_task_log`, {
+        const res = await ApiService.post(`${BASE}.add_task_log`, {
             task,
             description: message.trim()
         });
@@ -243,7 +243,7 @@ export const stopLog = async ({ log_name, message = '', new_status = 'Completed'
  */
 export const adminListProjects = async ({ q = '', limit = 200 } = {}) => {
     try {
-        const res = await api.post(`${BASE}.admin_projects`, { q, limit });
+        const res = await ApiService.post(`${BASE}.admin_projects`, { q, limit });
         return unwrap(res);
     } catch (error) {
         handleError(error, 'Admin List Projects');
@@ -255,7 +255,7 @@ export const adminListProjects = async ({ q = '', limit = 200 } = {}) => {
  */
 export const adminListTasks = async (project = null, { limit = 500 } = {}) => {
     try {
-        const res = await api.post(`${BASE}.admin_tasks`, { project, limit });
+        const res = await ApiService.post(`${BASE}.admin_tasks`, { project, limit });
         return unwrap(res);
     } catch (error) {
         handleError(error, 'Admin List Tasks');
@@ -267,7 +267,7 @@ export const adminListTasks = async (project = null, { limit = 500 } = {}) => {
  */
 export const adminListProjectLogs = async (project = null, { task = null, limit = 500 } = {}) => {
     try {
-        const res = await api.post(`${BASE}.admin_task_logs`, { project, task, limit });
+        const res = await ApiService.post(`${BASE}.admin_task_logs`, { project, task, limit });
         return unwrap(res);
     } catch (error) {
         handleError(error, 'Admin List Project Logs');
@@ -281,7 +281,7 @@ export const adminListProjectLogs = async (project = null, { task = null, limit 
  */
 export const getAllEmployees = async () => {
     try {
-        const res = await api.get('/api/method/hrms.api.get_all_employees');
+        const res = await ApiService.get('/api/method/hrms.api.get_all_employees');
         return unwrap(res);
     } catch (error) {
         handleError(error, 'Get All Employees');

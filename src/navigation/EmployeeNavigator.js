@@ -4,7 +4,6 @@ import { TouchableOpacity, View, Image, StyleSheet, Text } from 'react-native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 
 // Import Employee Screens
-import HomeScreen from '../screens/employee/EmployeeDashboard';
 import CheckInOutScreen from '../screens/employee/CheckInOutScreen';
 import AttendanceHistoryScreen from '../screens/employee/AttendanceHistoryScreen';
 import AttendanceScreen from '../screens/employee/AttendanceScreen';

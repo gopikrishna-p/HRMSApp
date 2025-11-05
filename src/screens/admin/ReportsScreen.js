@@ -5,8 +5,8 @@ import { colors } from '../../theme/colors';
 const ReportsScreen = ({ navigation }) => {
     return (
         <View style={styles.container}>
-            <Text style={styles.title}>My Projects</Text>
-            <Text style={styles.subtitle}>View assigned projects</Text>
+            <Text style={styles.title}>Reports & Analytics</Text>
+            <Text style={styles.subtitle}>Generate comprehensive reports</Text>
         </View>
     );
 };

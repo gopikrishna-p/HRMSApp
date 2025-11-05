@@ -23,10 +23,6 @@
             ├── Input.js
             ├── Loading.js
         └── 📁employee
-        └── 📁project
-            ├── LogFormModal.js
-            ├── LogListItem.js
-            ├── ProjectCard.js
         └── 📁ui
             ├── AppHeader.js
             ├── EmptyState.js

@@ -5,8 +5,8 @@ import { colors } from '../../theme/colors';
 const LeavesScreen = ({ navigation }) => {
     return (
         <View style={styles.container}>
-            <Text style={styles.title}>My Projects</Text>
-            <Text style={styles.subtitle}>View assigned projects</Text>
+            <Text style={styles.title}>My Leaves</Text>
+            <Text style={styles.subtitle}>View and manage leave applications</Text>
         </View>
     );
 };

@@ -15,16 +15,33 @@ import {
     Switch,
     Linking,
     PermissionsAndroid,
+    BackHandler,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import RNFS from 'react-native-fs';
-import apiService from '../../services/api.service';
+import ApiService from '../../services/api.service';
 import showToast from '../../utils/Toast';
 import AttendanceList from '../../components/admin/AttendanceList';
 
 function AllAttendanceAnalyticsScreen({ navigation }) {
+    // Safety check for navigation prop
+    if (!navigation) {
+        console.error('Navigation prop is missing in AllAttendanceAnalyticsScreen');
+        return (
+            <View style={styles.container}>
+                <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+                <View style={styles.errorContainer}>
+                    <Icon name="exclamation-triangle" size={48} color="#EF4444" />
+                    <Text style={styles.errorTitle}>Navigation Error</Text>
+                    <Text style={styles.errorText}>Unable to initialize screen properly</Text>
+                </View>
+            </View>
+        );
+    }
+
     // ===========================================
     // STATE MANAGEMENT
     // ===========================================
@@ -62,6 +79,14 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
     // LIFECYCLE METHODS
     // ===========================================
     useEffect(() => {
+        console.log('AllAttendanceAnalyticsScreen mounted');
+        console.log('Navigation prop:', navigation ? 'exists' : 'missing');
+        console.log('Navigation methods:', {
+            navigate: typeof navigation?.navigate,
+            goBack: typeof navigation?.goBack,
+            canGoBack: typeof navigation?.canGoBack
+        });
+        
         initializeComponent();
     }, []);
 
@@ -75,9 +100,59 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
         filterEmployees();
     }, [employees, searchQuery]);
 
+    // Handle Android back button
+    useFocusEffect(
+        React.useCallback(() => {
+            const onBackPress = () => {
+                handleGoBack();
+                return true; // Prevent default behavior
+            };
+
+            const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+            return () => subscription.remove();
+        }, [navigation])
+    );
+
     // ===========================================
     // INITIALIZATION
     // ===========================================
+    const handleGoBack = () => {
+        try {
+            if (!navigation) {
+                console.error('Navigation prop is undefined');
+                return;
+            }
+            
+            // Log navigation state for debugging
+            console.log('Navigation state:', navigation.getState ? navigation.getState() : 'getState not available');
+            
+            if (typeof navigation.canGoBack === 'function' && navigation.canGoBack()) {
+                console.log('Can go back, calling goBack()');
+                navigation.goBack();
+            } else if (typeof navigation.navigate === 'function') {
+                console.log('Cannot go back, navigating to AdminDashboard');
+                navigation.navigate('AdminDashboard');
+            } else {
+                console.error('Navigation methods not available');
+            }
+        } catch (error) {
+            console.error('Navigation error:', error);
+            console.error('Error stack:', error.stack);
+            
+            // Fallback: try to navigate to AdminDashboard
+            try {
+                if (navigation && typeof navigation.navigate === 'function') {
+                    navigation.navigate('AdminDashboard');
+                } else if (navigation && typeof navigation.replace === 'function') {
+                    navigation.replace('AdminDashboard');
+                }
+            } catch (fallbackError) {
+                console.error('Fallback navigation error:', fallbackError);
+            }
+        }
+    };
+
     const initializeComponent = async () => {
         try {
             await Promise.all([
@@ -122,7 +197,7 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
     const loadEmployees = async () => {
         setLoading(true);
         try {
-            const response = await apiService.getAllEmployees();
+            const response = await ApiService.getAllEmployees();
 
             if (response.success && response.data?.message) {
                 const data = response.data.message;
@@ -157,7 +232,7 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
 
     const loadDepartments = async () => {
         try {
-            const response = await apiService.getDepartments();
+            const response = await ApiService.getDepartments();
             if (response.success && response.data?.message) {
                 setDepartments(response.data.message);
             }
@@ -181,7 +256,7 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
                 end_date: dateRange.endDate?.toISOString().split('T')[0]
             };
 
-            const response = await apiService.getEmployeeAttendanceHistory(params);
+            const response = await ApiService.getEmployeeAttendanceHistory(params);
 
             if (response.success && response.data?.message) {
                 const responseData = response.data.message;
@@ -357,7 +432,7 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
                 export_format: format
             };
 
-            const response = await apiService.exportAttendanceReport(params);
+            const response = await ApiService.exportAttendanceReport(params);
 
             if (response.success && response.data?.message) {
                 const result = response.data.message;
@@ -414,7 +489,7 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
                                 department: selectedDepartment || null
                             };
 
-                            const response = await apiService.exportAttendanceReport(params);
+                            const response = await ApiService.exportAttendanceReport(params);
 
                             if (response.success && response.data?.message) {
                                 const result = response.data.message;
@@ -741,7 +816,7 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
             <View style={styles.headerSection}>
                 <View style={styles.headerTop}>
                     <TouchableOpacity
-                        onPress={() => navigation.goBack()}
+                        onPress={handleGoBack}
                         style={styles.backButton}
                     >
                         <Icon name="arrow-left" size={20} color="#374151" />
@@ -994,6 +1069,24 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: '#F3F4F6',
+    },
+    errorContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 40,
+    },
+    errorTitle: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: '#EF4444',
+        marginTop: 16,
+        marginBottom: 8,
+    },
+    errorText: {
+        fontSize: 14,
+        color: '#6B7280',
+        textAlign: 'center',
     },
     flatListContent: {
         paddingBottom: 20,
