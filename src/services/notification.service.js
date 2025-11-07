@@ -24,13 +24,22 @@ import { Platform, Alert, PermissionsAndroid } from 'react-native';
 import ApiService from './api.service';
 import showToast from '../utils/Toast';
 
+// Global flags to prevent multiple handler registrations
+if (!global.notificationServiceInstance) {
+    global.notificationServiceInstance = null;
+    global.fcmHandlersRegistered = false;
+}
+
 class NotificationService {
     constructor() {
         this.fcmToken = null;
         this.unsubscribe = null;
         this.backgroundUnsubscribe = null;
+        this.tokenRefreshUnsubscribe = null; // Track token refresh listener
         this.notificationHandlers = new Map();
         this.isInitialized = false;
+        this.processedMessageIds = new Set(); // Track processed message IDs to prevent duplicates
+        this.messageIdCleanupInterval = null;
     }
 
     // ==========================================
@@ -40,12 +49,26 @@ class NotificationService {
         try {
             console.log('Initializing notification service...');
             
+            // Prevent multiple initializations
+            if (this.isInitialized) {
+                console.log('⚠️ Notification service already initialized, skipping...');
+                return true;
+            }
+            
             // Check if required modules are available
             if (!messaging || !notifee) {
                 console.warn('⚠️ Notification modules not available. Install @react-native-firebase/messaging and @notifee/react-native');
                 this.isInitialized = false;
                 return false;
             }
+            
+            // Clean up old message IDs every 5 minutes to prevent memory leak
+            this.messageIdCleanupInterval = setInterval(() => {
+                if (this.processedMessageIds.size > 100) {
+                    console.log('🧹 Cleaning up old message IDs...');
+                    this.processedMessageIds.clear();
+                }
+            }, 5 * 60 * 1000);
             
             // Request permissions
             const hasPermission = await this.requestPermissions();
@@ -60,14 +83,14 @@ class NotificationService {
             // Setup notification channels (Android)
             await this.createNotificationChannels();
             
-            // Setup message handlers
+            // Setup message handlers (only once!)
             this.setupMessageHandlers();
             
             // Register notification action handlers
             this.setupNotificationHandlers();
             
             this.isInitialized = true;
-            console.log('Notification service initialized successfully');
+            console.log('✅ Notification service initialized successfully');
             return true;
         } catch (error) {
             console.error('Failed to initialize notifications:', error);
@@ -149,8 +172,15 @@ class NotificationService {
             // Save token locally
             await AsyncStorage.setItem('fcm_token', token);
             
-            // Listen for token refresh
-            messaging().onTokenRefresh(async (newToken) => {
+            // Clean up existing token refresh listener to prevent duplicates
+            if (this.tokenRefreshUnsubscribe) {
+                console.log('🧹 Cleaning up existing token refresh listener...');
+                this.tokenRefreshUnsubscribe();
+                this.tokenRefreshUnsubscribe = null;
+            }
+            
+            // Listen for token refresh (only register once!)
+            this.tokenRefreshUnsubscribe = messaging().onTokenRefresh(async (newToken) => {
                 console.log('FCM Token refreshed:', newToken);
                 this.fcmToken = newToken;
                 await this.saveFCMTokenToServer(newToken);
@@ -166,11 +196,30 @@ class NotificationService {
 
     async saveFCMTokenToServer(token) {
         try {
-            const deviceType = Platform.OS;
-            await ApiService.saveFcmToken({ token, device_type: deviceType });
-            console.log('FCM token saved to server');
+            // Capitalize first letter to match server validation (Android/iOS not android/ios)
+            const deviceType = Platform.OS === 'android' ? 'Android' : 'iOS';
+            
+            console.log('📤 Saving FCM token to server:', {
+                token: token.substring(0, 20) + '...',
+                device_type: deviceType,
+                user: 'current_user'
+            });
+            
+            const response = await ApiService.saveFcmToken({ 
+                token, 
+                device_type: deviceType 
+            });
+            
+            if (response.success) {
+                console.log('✅ FCM token saved to server successfully');
+            } else {
+                console.error('❌ Failed to save FCM token:', response.message);
+            }
+            
+            return response;
         } catch (error) {
-            console.error('Failed to save FCM token to server:', error);
+            console.error('❌ Failed to save FCM token to server:', error);
+            throw error;
         }
     }
 
@@ -188,7 +237,8 @@ class NotificationService {
                 description: 'Hourly project log entry reminders',
                 importance: AndroidImportance.HIGH,
                 sound: 'default',
-                vibration: [300, 500],
+                vibration: true,
+                vibrationPattern: [300, 500],
             });
 
             // Attendance reminder channel
@@ -198,7 +248,8 @@ class NotificationService {
                 description: 'Check-in and check-out reminders',
                 importance: AndroidImportance.HIGH,
                 sound: 'default',
-                vibration: [300, 500],
+                vibration: true,
+                vibrationPattern: [300, 500],
             });
 
             // Admin notifications channel
@@ -208,7 +259,8 @@ class NotificationService {
                 description: 'Important notifications from admin',
                 importance: AndroidImportance.HIGH,
                 sound: 'default',
-                vibration: [300, 500],
+                vibration: true,
+                vibrationPattern: [300, 500],
             });
 
             // WFH requests channel
@@ -218,12 +270,13 @@ class NotificationService {
                 description: 'Work from home approval requests',
                 importance: AndroidImportance.HIGH,
                 sound: 'default',
-                vibration: [300, 500],
+                vibration: true,
+                vibrationPattern: [300, 500],
             });
 
-            console.log('Notification channels created');
+            console.log('✅ Notification channels created successfully');
         } catch (error) {
-            console.error('Failed to create notification channels:', error);
+            console.error('❌ Failed to create notification channels:', error);
         }
     }
 
@@ -231,56 +284,106 @@ class NotificationService {
     // MESSAGE HANDLERS
     // ==========================================
     setupMessageHandlers() {
+        console.log('📨 Setting up message handlers...');
+        
+        // CRITICAL: Only register handlers ONCE globally, never again
+        if (global.fcmHandlersRegistered) {
+            console.log('⚠️ FCM handlers already registered globally, skipping...');
+            return;
+        }
+        
+        // Clean up existing handlers to prevent duplicates
+        if (this.unsubscribe) {
+            console.log('🧹 Cleaning up existing message handler...');
+            this.unsubscribe();
+            this.unsubscribe = null;
+        }
+        
         // Handle foreground messages
         this.unsubscribe = messaging().onMessage(async (remoteMessage) => {
-            console.log('Foreground message received:', remoteMessage);
             await this.handleForegroundMessage(remoteMessage);
         });
 
-        // Handle background messages
-        messaging().setBackgroundMessageHandler(async (remoteMessage) => {
-            console.log('Background message received:', remoteMessage);
-            await this.handleBackgroundMessage(remoteMessage);
-        });
-
-        // Handle notification opened app
+        // Handle notification opened app (when app is in background)
         messaging().onNotificationOpenedApp((remoteMessage) => {
-            console.log('Notification opened app:', remoteMessage);
+            console.log('📲 Notification opened app (background):', remoteMessage);
             this.handleNotificationPress(remoteMessage);
         });
 
-        // Check if app was opened from notification (when app was quit)
+        // Check if app was opened from notification (when app was quit/killed)
         messaging()
             .getInitialNotification()
             .then((remoteMessage) => {
                 if (remoteMessage) {
-                    console.log('App opened from notification:', remoteMessage);
+                    console.log('📲 App opened from notification (quit state):', remoteMessage);
                     this.handleNotificationPress(remoteMessage);
                 }
             });
+        
+        // Mark as registered globally
+        global.fcmHandlersRegistered = true;
+        console.log('✅ Message handlers setup complete and marked as registered globally');
     }
 
     async handleForegroundMessage(remoteMessage) {
         try {
-            const { notification, data } = remoteMessage;
+            const { notification, data, messageId } = remoteMessage;
+            
+            // Check if we've already processed this message
+            if (messageId && this.processedMessageIds.has(messageId)) {
+                console.log('⏭️  Skipping duplicate message:', messageId);
+                return;
+            }
+            
+            // Mark message as processed FIRST
+            if (messageId) {
+                this.processedMessageIds.add(messageId);
+                console.log('📬 New message received (ID:', messageId, ')');
+            }
+            
+            console.log('📢 Processing foreground notification:');
+            console.log('   Title:', notification?.title);
+            console.log('   Body:', notification?.body);
+            console.log('   Data:', data);
+            
+            // Determine channel based on notification type or data
+            let channelId = 'admin_notifications';
+            if (data?.type === 'attendance_reminder' || notification?.title?.includes('Check-in') || notification?.title?.includes('Check-out')) {
+                channelId = 'attendance_reminders';
+            } else if (data?.type === 'project_reminder' || notification?.title?.includes('Project')) {
+                channelId = 'project_reminders';
+            } else if (data?.type === 'wfh_request' || notification?.title?.includes('WFH')) {
+                channelId = 'wfh_requests';
+            }
+            
+            console.log('   Using channel:', channelId);
             
             // Show local notification with actions
             await this.showLocalNotification({
                 title: notification?.title || 'New Notification',
                 body: notification?.body || '',
                 data: data || {},
+                channelId: channelId,
             });
+            
+            console.log('✅ Foreground notification displayed');
         } catch (error) {
-            console.error('Error handling foreground message:', error);
+            console.error('❌ Error handling foreground message:', error);
         }
     }
 
     async handleBackgroundMessage(remoteMessage) {
         try {
-            console.log('Handling background message:', remoteMessage);
-            // Background message handling logic
+            console.log('🔔 Background message received:', remoteMessage);
+            const { notification, data } = remoteMessage;
+            
+            // For background messages, we can just log
+            // The system will handle displaying the notification
+            console.log('   Title:', notification?.title);
+            console.log('   Body:', notification?.body);
+            console.log('✅ Background message processed');
         } catch (error) {
-            console.error('Error handling background message:', error);
+            console.error('❌ Error handling background message:', error);
         }
     }
 
@@ -301,9 +404,15 @@ class NotificationService {
     // ==========================================
     async showLocalNotification({ title, body, data = {}, channelId = 'admin_notifications' }) {
         try {
+            console.log('📢 Showing local notification:');
+            console.log('   Title:', title);
+            console.log('   Body:', body);
+            console.log('   Channel:', channelId);
+            console.log('   Data:', data);
+            
             const actions = this.getNotificationActions(data.type);
             
-            await notifee.displayNotification({
+            const notificationId = await notifee.displayNotification({
                 title,
                 body,
                 data,
@@ -311,18 +420,32 @@ class NotificationService {
                     channelId,
                     importance: AndroidImportance.HIGH,
                     category: AndroidCategory.MESSAGE,
+                    smallIcon: 'ic_launcher', // Default app icon
+                    color: '#4F46E5', // Indigo color
                     actions,
                     pressAction: {
                         id: 'default',
                         launchActivity: 'default',
                     },
+                    // Add sound and vibration
+                    sound: 'default',
+                    vibrationPattern: [300, 500],
+                    // Show notification on lockscreen
+                    visibility: 1, // PUBLIC
+                    // Priority
+                    priority: 'high',
                 },
                 ios: {
                     categoryId: data.type || 'general',
+                    sound: 'default',
                 },
             });
+            
+            console.log('✅ Local notification displayed with ID:', notificationId);
+            return notificationId;
         } catch (error) {
-            console.error('Error showing local notification:', error);
+            console.error('❌ Error showing local notification:', error);
+            throw error;
         }
     }
 
@@ -868,7 +991,23 @@ class NotificationService {
         if (this.backgroundUnsubscribe) {
             this.backgroundUnsubscribe();
         }
+        if (this.tokenRefreshUnsubscribe) {
+            this.tokenRefreshUnsubscribe();
+        }
+        if (this.messageIdCleanupInterval) {
+            clearInterval(this.messageIdCleanupInterval);
+        }
+        this.processedMessageIds.clear();
+        this.isInitialized = false; // Allow re-initialization after cleanup
+        
+        // Reset global handler flag if we're truly cleaning up
+        global.fcmHandlersRegistered = false;
     }
 }
 
-export default new NotificationService();
+// Use global instance to survive hot reloads
+if (!global.notificationServiceInstance) {
+    global.notificationServiceInstance = new NotificationService();
+}
+
+export default global.notificationServiceInstance;

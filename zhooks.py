@@ -248,7 +248,7 @@ scheduler_events = {
 	"hourly": [
 		"hrms.hr.doctype.daily_work_summary_group.daily_work_summary_group.trigger_emails",
 		"hrms.api.send_work_log_reminder",
-		"zbackendserverfile.send_project_log_reminders",
+		"hrms.api.send_project_log_reminders",
 	],
 	"hourly_long": [
 		"hrms.hr.doctype.shift_type.shift_type.update_last_sync_of_checkin",
@@ -261,7 +261,7 @@ scheduler_events = {
 		"hrms.hr.doctype.daily_work_summary_group.daily_work_summary_group.send_summary",
 		"hrms.hr.doctype.interview.interview.send_daily_feedback_reminder",
 		"hrms.hr.doctype.job_opening.job_opening.close_expired_job_openings",
-		"zbackendserverfile.send_attendance_reminders",
+		"hrms.api.send_attendance_reminders",
 	],
 	"daily_long": [
 		"hrms.hr.doctype.leave_ledger_entry.leave_ledger_entry.process_expired_allocation",
@@ -273,13 +273,13 @@ scheduler_events = {
         # "* 19 * * *": ["hrms.api.send_checkout_reminder"],  # 7 PM daily
         # "*/5 * * * *": ["hrms.api.process_scheduled_notifications"],  # Every 5 minutes
         "30 9 * * 1-5": [
-			"zbackendserverfile.send_checkin_reminder"
+			"hrms.api.send_checkin_reminder"
 		],
 		"30 18 * * 1-5": [
-			"zbackendserverfile.send_checkout_reminder"
+			"hrms.api.send_checkout_reminder"
 		],
 		"0 10-19 * * 1-5": [
-			"zbackendserverfile.send_project_log_reminders"
+			"hrms.api.send_project_log_reminders"
 		]
 	},
 	"weekly": ["hrms.controllers.employee_reminders.send_reminders_in_advance_weekly"],

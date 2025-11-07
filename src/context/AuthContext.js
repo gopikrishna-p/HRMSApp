@@ -28,6 +28,24 @@ export const AuthProvider = ({ children }) => {
                     setUser(storedData.user);
                     setEmployee(storedData.employee);
                     setIsAuthenticated(true);
+                    
+                    // Register FCM token for existing session
+                    try {
+                        const NotificationService = require('../services/notification.service').default || require('../services/notification.service');
+                        console.log('🔔 Registering FCM token for existing session...');
+                        
+                        // Get the current FCM token
+                        const token = await NotificationService.getFCMToken();
+                        
+                        if (token) {
+                            console.log('✅ FCM token registered for existing session');
+                        } else {
+                            console.warn('⚠️ No FCM token available for existing session');
+                        }
+                    } catch (notifError) {
+                        console.warn('⚠️ Failed to register FCM token for existing session:', notifError.message);
+                        // Don't fail auth check if notification registration fails
+                    }
                 } else {
                     setIsAuthenticated(false);
                 }
@@ -50,6 +68,25 @@ export const AuthProvider = ({ children }) => {
                 setUser(result.user);
                 setEmployee(result.employee);
                 setIsAuthenticated(true);
+                
+                // Register FCM token after successful login
+                try {
+                    const NotificationService = require('../services/notification.service').default || require('../services/notification.service');
+                    console.log('🔔 Registering FCM token after login...');
+                    
+                    // Get the current FCM token
+                    const token = await NotificationService.getFCMToken();
+                    
+                    if (token) {
+                        console.log('✅ FCM token registered after login');
+                    } else {
+                        console.warn('⚠️ No FCM token available after login');
+                    }
+                } catch (notifError) {
+                    console.warn('⚠️ Failed to register FCM token after login:', notifError.message);
+                    // Don't fail login if notification registration fails
+                }
+                
                 return { success: true };
             }
 

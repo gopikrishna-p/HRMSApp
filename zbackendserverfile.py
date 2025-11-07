@@ -2689,21 +2689,6 @@ def is_late_arrival(in_time):
 
 
 @frappe.whitelist(allow_guest=False)
-def save_fcm_token(token, user):
-    """
-    Save FCM token for a user.
-    """
-    try:
-        if not frappe.db.exists("Employee", user):
-            return {"status": "error", "message": "User not found"}
-        frappe.db.set_value("User", user, "fcm_token", token)
-        frappe.db.commit()
-        return {"status": "success", "message": "FCM token saved"}
-    except Exception as e:
-        frappe.log_error(f"Error saving FCM token: {str(e)}")
-        return {"status": "error", "message": str(e)}
-
-
 @frappe.whitelist(allow_guest=False)
 def get_employee_count():
     """Get the total number of active employees."""
@@ -3025,52 +3010,91 @@ def initialize_firebase():
             if not service_account:
                 frappe.log_error("Firebase Initialization Error", "No firebase_service_account found in site_config.json")
                 raise ValueError("Firebase service account not configured")
-            cred = credentials.Certificate(service_account)
+            
+            # Check if service_account is a dict (JSON object) or a file path (string)
+            if isinstance(service_account, dict):
+                # Direct JSON configuration
+                cred = credentials.Certificate(service_account)
+                frappe.log_error("Firebase Initialization", "Using direct JSON configuration from site_config.json")
+            else:
+                # File path to service account JSON
+                cred = credentials.Certificate(service_account)
+                frappe.log_error("Firebase Initialization", f"Using service account file: {service_account}")
+            
             firebase_admin.initialize_app(cred)
-            frappe.log_error("Firebase Initialization", "Firebase Admin SDK initialized successfully")
+            frappe.log_error("Firebase Initialization Success", "Firebase Admin SDK initialized successfully")
         except Exception as e:
-            frappe.log_error("Firebase Initialization Error", str(e))
+            frappe.log_error("Firebase Initialization Error", f"Failed to initialize Firebase: {str(e)}")
+            frappe.log_error("Firebase Initialization Error Traceback", frappe.get_traceback())
             raise
 
 # Initialize Firebase at module level
-initialize_firebase()
+try:
+    initialize_firebase()
+except Exception as init_error:
+    frappe.log_error(f"Firebase Module Initialization Failed: {str(init_error)}", "Firebase Init")
 
 
 @frappe.whitelist(allow_guest=False)
 def save_fcm_token(token, device_type):
     """Save or update FCM token for a user."""
-    if not token or device_type not in ['Android', 'iOS']:
-        frappe.throw(_("Invalid token or device type"))
-    
-    user = frappe.session.user
-    existing = frappe.db.exists("Mobile Device", {"user": user})
-    
-    if existing:
-        frappe.db.set_value("Mobile Device", existing, {
-            "fcm_token": token,
-            "device_type": device_type,
-            "last_active": now_datetime()
-        })
-    else:
-        existing_token = frappe.db.exists("Mobile Device", {"fcm_token": token})
-        if existing_token:
-            frappe.db.set_value("Mobile Device", existing_token, {
-                "user": user,
-                "device_type": device_type,
-                "last_active": now_datetime()
-            })
-        else:
-            doc = frappe.get_doc({
-                "doctype": "Mobile Device",
-                "user": user,
+    try:
+        # Validate inputs
+        if not token:
+            frappe.throw(_("Token is required"))
+        
+        if device_type not in ['Android', 'iOS', 'android', 'ios']:
+            frappe.throw(_("Invalid device type. Expected: Android, iOS, android, or ios. Got: {0}").format(device_type))
+        
+        # Normalize device_type to capitalized format
+        device_type = 'Android' if device_type.lower() == 'android' else 'iOS'
+        
+        user = frappe.session.user
+        
+        # Log for debugging
+        frappe.log_error(
+            f"FCM Token Registration - User: {user}, Device: {device_type}, Token: {token[:20]}...",
+            "FCM Token Save"
+        )
+        
+        existing = frappe.db.exists("Mobile Device", {"user": user})
+        
+        if existing:
+            frappe.db.set_value("Mobile Device", existing, {
                 "fcm_token": token,
                 "device_type": device_type,
                 "last_active": now_datetime()
             })
-            doc.insert(ignore_permissions=True)
-    
-    frappe.db.commit()
-    return {"status": "success", "message": "FCM token saved"}
+            frappe.log_error(f"✅ Updated existing Mobile Device for user: {user}", "FCM Token Save")
+        else:
+            # Check if this token is already registered to a different user
+            existing_token = frappe.db.exists("Mobile Device", {"fcm_token": token})
+            if existing_token:
+                frappe.db.set_value("Mobile Device", existing_token, {
+                    "user": user,
+                    "device_type": device_type,
+                    "last_active": now_datetime()
+                })
+                frappe.log_error(f"✅ Updated Mobile Device with existing token for user: {user}", "FCM Token Save")
+            else:
+                doc = frappe.get_doc({
+                    "doctype": "Mobile Device",
+                    "user": user,
+                    "fcm_token": token,
+                    "device_type": device_type,
+                    "last_active": now_datetime()
+                })
+                doc.insert(ignore_permissions=True)
+                frappe.log_error(f"✅ Created new Mobile Device for user: {user}", "FCM Token Save")
+        
+        frappe.db.commit()
+        
+        return {"status": "success", "message": "FCM token saved", "user": user, "device_type": device_type}
+        
+    except Exception as e:
+        frappe.log_error(f"❌ Error saving FCM token: {str(e)}", "FCM Token Save Error")
+        frappe.log_error(frappe.get_traceback(), "FCM Token Save Error Traceback")
+        frappe.throw(_("Failed to save FCM token: {0}").format(str(e)))
 
 
 def send_fcm_notification(tokens, title, body):
@@ -3078,6 +3102,17 @@ def send_fcm_notification(tokens, title, body):
     if not tokens:
         frappe.log_error("FCM Send Error", "No tokens provided")
         return {"success_count": 0, "failure_count": 0, "message": "No tokens provided"}
+    
+    # Ensure tokens is a list and filter out None/empty values
+    if isinstance(tokens, str):
+        tokens = [tokens]
+    tokens = [t for t in tokens if t]
+    
+    if not tokens:
+        frappe.log_error("FCM Send Error", "All tokens were empty or None")
+        return {"success_count": 0, "failure_count": 0, "message": "All tokens were empty"}
+    
+    frappe.log_error(f"Attempting to send notification to {len(tokens)} tokens", f"Title: {title}, Body: {body}")
     
     messages = [messaging.Message(
         notification=messaging.Notification(title=title, body=body),
@@ -3101,6 +3136,7 @@ def send_fcm_notification(tokens, title, body):
         return result
     except Exception as e:
         frappe.log_error("FCM Send Error", str(e))
+        frappe.log_error("FCM Send Error Traceback", frappe.get_traceback())
         raise
 
 
@@ -3114,9 +3150,28 @@ def is_holiday_today(employee):
 
 
 def get_employee_tokens(employees):
-    """Get FCM tokens for a list of employees."""
-    users = frappe.get_all("Employee", filters={"name": ["in", employees], "status": "Active"}, pluck="user_id")
-    return frappe.get_all("Mobile Device", filters={"user": ["in", users]}, pluck="fcm_token")
+    """Get FCM tokens for a list of employees from Mobile Device table."""
+    if not employees:
+        return []
+    
+    users = frappe.get_all("Employee", 
+        filters={"name": ["in", employees], "status": "Active"}, 
+        pluck="user_id"
+    )
+    
+    # Filter out None values
+    valid_users = [u for u in users if u]
+    
+    if not valid_users:
+        return []
+    
+    tokens = frappe.get_all("Mobile Device", 
+        filters={"user": ["in", valid_users]}, 
+        pluck="fcm_token"
+    )
+    
+    # Filter out None/empty tokens
+    return [t for t in tokens if t]
 
 
 @frappe.whitelist(allow_guest=False)
@@ -4190,7 +4245,7 @@ def send_checkin_reminder():
             return
         
         # Check if it's a holiday
-        holiday_lists = frappe.get_all("Holiday List", filters={"enabled": 1}, pluck="name")
+        holiday_lists = frappe.get_all("Holiday List", pluck="name")
         is_holiday = False
         
         for holiday_list in holiday_lists:
@@ -4202,12 +4257,13 @@ def send_checkin_reminder():
             return
         
         # Get employees who haven't checked in yet
+        # Note: Removed custom field checks that may not exist in all installations
         employees_not_checked_in = frappe.db.sql("""
-            SELECT e.name, e.employee_name
+            SELECT e.name, e.employee_name, e.user_id
             FROM `tabEmployee` e
             WHERE e.status = 'Active'
-            AND e.custom_notifications_enabled = 1
-            AND e.custom_attendance_reminders = 1
+            AND e.user_id IS NOT NULL
+            AND e.user_id != ''
             AND NOT EXISTS (
                 SELECT 1 FROM `tabAttendance` a
                 WHERE a.employee = e.name
@@ -4217,25 +4273,32 @@ def send_checkin_reminder():
         """, (today,), as_dict=True)
         
         if not employees_not_checked_in:
+            frappe.log_error(f"No employees need check-in reminder. All {frappe.db.count('Employee', {'status': 'Active'})} active employees have already checked in.", "Check-in Reminder")
             return
         
-        # Get FCM tokens
-        employee_ids = [emp.name for emp in employees_not_checked_in]
+        frappe.log_error(f"Found {len(employees_not_checked_in)} employees without check-in: {[e.employee_name for e in employees_not_checked_in]}", "Check-in Reminder")
+        
+        # Get FCM tokens from Mobile Device table using user_id directly from query
         tokens = []
         
-        for emp_id in employee_ids:
-            emp_tokens = frappe.get_all("FCM Token", 
-                filters={"employee": emp_id}, 
-                pluck="token"
-            )
-            tokens.extend(emp_tokens)
+        for emp in employees_not_checked_in:
+            if emp.user_id:
+                emp_tokens = frappe.get_all("Mobile Device", 
+                    filters={"user": emp.user_id}, 
+                    pluck="fcm_token"
+                )
+                tokens.extend([t for t in emp_tokens if t])  # Filter out None/empty tokens
+        
+        frappe.log_error(f"Total FCM tokens collected: {len(tokens)}", "Check-in Reminder")
         
         if tokens:
             title = "Check-in Reminder"
             message = "Good morning! Don't forget to check in when you arrive at the office."
             
             response = send_fcm_notification(tokens, title, message)
-            frappe.log_error(f"Check-in reminder sent to {len(tokens)} devices", "Attendance Reminder")
+            frappe.log_error(f"✅ Check-in reminder sent to {len(tokens)} devices. Response: {response}", "Attendance Reminder")
+        else:
+            frappe.log_error("No FCM tokens found for employees without check-in", "Check-in Reminder")
             
     except Exception as e:
         frappe.log_error(f"Check-in Reminder Error: {str(e)}", "Notification Scheduler")
@@ -4253,13 +4316,14 @@ def send_checkout_reminder():
             return
         
         # Get employees who checked in but haven't checked out
+        # Note: Removed custom field checks that may not exist in all installations
         employees_need_checkout = frappe.db.sql("""
-            SELECT e.name, e.employee_name, a.name as attendance_id
+            SELECT e.name, e.employee_name, e.user_id, a.name as attendance_id
             FROM `tabEmployee` e
             JOIN `tabAttendance` a ON e.name = a.employee
             WHERE e.status = 'Active'
-            AND e.custom_notifications_enabled = 1
-            AND e.custom_attendance_reminders = 1
+            AND e.user_id IS NOT NULL
+            AND e.user_id != ''
             AND a.attendance_date = %s
             AND a.docstatus != 2
             AND a.in_time IS NOT NULL
@@ -4267,18 +4331,19 @@ def send_checkout_reminder():
         """, (today,), as_dict=True)
         
         if not employees_need_checkout:
+            frappe.log_error("No employees found for check-out reminder", "Check-out Reminder")
             return
         
-        # Get FCM tokens
-        employee_ids = [emp.name for emp in employees_need_checkout]
+        # Get FCM tokens from Mobile Device table using user_id directly from query
         tokens = []
         
-        for emp_id in employee_ids:
-            emp_tokens = frappe.get_all("FCM Token", 
-                filters={"employee": emp_id}, 
-                pluck="token"
-            )
-            tokens.extend(emp_tokens)
+        for emp in employees_need_checkout:
+            if emp.user_id:
+                emp_tokens = frappe.get_all("Mobile Device", 
+                    filters={"user": emp.user_id}, 
+                    pluck="fcm_token"
+                )
+                tokens.extend([t for t in emp_tokens if t])  # Filter out None/empty tokens
         
         if tokens:
             title = "Check-out Reminder"

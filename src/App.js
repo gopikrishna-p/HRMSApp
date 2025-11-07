@@ -14,18 +14,36 @@ const App = () => {
         // Initialize notification service with error handling
         const initializeNotifications = async () => {
             try {
+                console.log('🚀 App.js: Starting notification initialization...');
                 // Try to import and initialize notification service
                 const NotificationService = require('./services/notification.service').default || require('./services/notification.service');
-                await NotificationService.initialize();
-                console.log('✅ Notification service initialized');
+                const initialized = await NotificationService.initialize();
+                if (initialized) {
+                    console.log('✅ App.js: Notification service initialized successfully');
+                } else {
+                    console.warn('⚠️ App.js: Notification service initialization returned false');
+                }
             } catch (error) {
-                console.warn('⚠️ Notification service initialization failed:', error.message);
+                console.warn('⚠️ App.js: Notification service initialization failed:', error.message);
                 console.log('📱 App will continue without native notifications');
                 // App continues to work without notifications
             }
         };
 
         initializeNotifications();
+        
+        // Cleanup on unmount
+        return () => {
+            try {
+                const NotificationService = require('./services/notification.service').default || require('./services/notification.service');
+                if (NotificationService.cleanup) {
+                    console.log('🧹 App.js: Cleaning up notification service...');
+                    NotificationService.cleanup();
+                }
+            } catch (error) {
+                console.warn('⚠️ App.js: Cleanup error:', error.message);
+            }
+        };
     }, []);
 
     return (
