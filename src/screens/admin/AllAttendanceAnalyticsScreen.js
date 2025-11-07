@@ -27,21 +27,6 @@ import showToast from '../../utils/Toast';
 import AttendanceList from '../../components/admin/AttendanceList';
 
 function AllAttendanceAnalyticsScreen({ navigation }) {
-    // Safety check for navigation prop
-    if (!navigation) {
-        console.error('Navigation prop is missing in AllAttendanceAnalyticsScreen');
-        return (
-            <View style={styles.container}>
-                <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-                <View style={styles.errorContainer}>
-                    <Icon name="exclamation-triangle" size={48} color="#EF4444" />
-                    <Text style={styles.errorTitle}>Navigation Error</Text>
-                    <Text style={styles.errorText}>Unable to initialize screen properly</Text>
-                </View>
-            </View>
-        );
-    }
-
     // ===========================================
     // STATE MANAGEMENT
     // ===========================================
@@ -80,13 +65,6 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
     // ===========================================
     useEffect(() => {
         console.log('AllAttendanceAnalyticsScreen mounted');
-        console.log('Navigation prop:', navigation ? 'exists' : 'missing');
-        console.log('Navigation methods:', {
-            navigate: typeof navigation?.navigate,
-            goBack: typeof navigation?.goBack,
-            canGoBack: typeof navigation?.canGoBack
-        });
-        
         initializeComponent();
     }, []);
 
@@ -104,14 +82,14 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
     useFocusEffect(
         React.useCallback(() => {
             const onBackPress = () => {
+                console.log('Android back button pressed');
                 handleGoBack();
                 return true; // Prevent default behavior
             };
 
             const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
-
             return () => subscription.remove();
-        }, [navigation])
+        }, [])
     );
 
     // ===========================================
@@ -119,37 +97,17 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
     // ===========================================
     const handleGoBack = () => {
         try {
-            if (!navigation) {
-                console.error('Navigation prop is undefined');
-                return;
-            }
+            console.log('AllAttendanceAnalyticsScreen - handleGoBack called');
             
-            // Log navigation state for debugging
-            console.log('Navigation state:', navigation.getState ? navigation.getState() : 'getState not available');
-            
-            if (typeof navigation.canGoBack === 'function' && navigation.canGoBack()) {
-                console.log('Can go back, calling goBack()');
+            if (navigation && navigation.canGoBack()) {
                 navigation.goBack();
-            } else if (typeof navigation.navigate === 'function') {
-                console.log('Cannot go back, navigating to AdminDashboard');
-                navigation.navigate('AdminDashboard');
             } else {
-                console.error('Navigation methods not available');
+                navigation.navigate('AdminDashboard');
             }
         } catch (error) {
             console.error('Navigation error:', error);
-            console.error('Error stack:', error.stack);
-            
-            // Fallback: try to navigate to AdminDashboard
-            try {
-                if (navigation && typeof navigation.navigate === 'function') {
-                    navigation.navigate('AdminDashboard');
-                } else if (navigation && typeof navigation.replace === 'function') {
-                    navigation.replace('AdminDashboard');
-                }
-            } catch (fallbackError) {
-                console.error('Fallback navigation error:', fallbackError);
-            }
+            // Simple fallback
+            navigation.navigate('AdminDashboard');
         }
     };
 

@@ -1,6 +1,6 @@
 // src/screens/employee/CheckInOutScreen.js
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Alert, StyleSheet } from 'react-native';
+import { View, Alert, StyleSheet, ScrollView } from 'react-native';
 import { Text, Switch, Card, useTheme, ProgressBar, IconButton } from 'react-native-paper';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { useAuth } from '../../context/AuthContext';
@@ -199,8 +199,13 @@ const CheckInOutScreen = () => {
     })();
 
     return (
-        <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
-            <View style={{ padding: 16 }}>
+        <View style={[styles.container, { backgroundColor: custom.palette.background }]}>
+            <ScrollView 
+                style={styles.scrollView}
+                contentContainerStyle={styles.scrollContent}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+            >
                 {/* Work Mode */}
                 <Card style={styles.card}>
                     <Card.Title title="Work Mode" subtitle="Choose your working location" />
@@ -296,13 +301,15 @@ const CheckInOutScreen = () => {
                 )}
 
                 {/* Actions */}
-                <Button onPress={() => doAction('Check-In')} style={{ marginBottom: 12 }} disabled={loading || (!isWFH && locationStatus !== 'inside')}>
-                    <Icon name="sign-in-alt" size={14} /> Check In
-                </Button>
+                <View style={styles.actionsContainer}>
+                    <Button onPress={() => doAction('Check-In')} style={styles.actionButton} disabled={loading || (!isWFH && locationStatus !== 'inside')}>
+                        <Icon name="sign-in-alt" size={14} /> Check In
+                    </Button>
 
-                <Button variant="outline" onPress={() => doAction('Check-Out')} disabled={loading || (!isWFH && locationStatus !== 'inside')}>
-                    <Icon name="sign-out-alt" size={14} /> Check Out
-                </Button>
+                    <Button variant="outline" onPress={() => doAction('Check-Out')} style={styles.actionButton} disabled={loading || (!isWFH && locationStatus !== 'inside')}>
+                        <Icon name="sign-out-alt" size={14} /> Check Out
+                    </Button>
+                </View>
 
                 {!isWFH && locationStatus === 'outside' && (
                     <View style={[styles.bannerError, { borderLeftColor: custom.palette.danger }]}>
@@ -310,12 +317,22 @@ const CheckInOutScreen = () => {
                         <Text style={[styles.errorText, { color: custom.palette.danger }]}>You are currently {distance}m away. Move closer to the office or enable WFH mode.</Text>
                     </View>
                 )}
-            </View>
+            </ScrollView>
         </View>
     );
 };
 
 const styles = StyleSheet.create({
+    container: {
+        flex: 1,
+    },
+    scrollView: {
+        flex: 1,
+    },
+    scrollContent: {
+        padding: 16,
+        paddingBottom: 32, // Extra bottom padding for better scrolling experience
+    },
     card: {
         marginBottom: 14,
         backgroundColor: '#FFF',
@@ -329,6 +346,13 @@ const styles = StyleSheet.create({
     rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     rowCenter: { flexDirection: 'row', alignItems: 'center' },
     boldText: { marginLeft: 8, fontWeight: '600' },
+    actionsContainer: {
+        marginTop: 8,
+        marginBottom: 16,
+    },
+    actionButton: {
+        marginBottom: 12,
+    },
     statusContainer: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E0E0E0' },
     statusTitle: { fontWeight: '800', fontSize: 16 },
     secondaryText: { marginTop: 4, color: '#6B7280', fontSize: 13 },

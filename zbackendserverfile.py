@@ -2702,19 +2702,11 @@ def save_fcm_token(token, user):
     except Exception as e:
         frappe.log_error(f"Error saving FCM token: {str(e)}")
         return {"status": "error", "message": str(e)}
-	
-
-#########################################################################################################################33
-
 
 
 @frappe.whitelist(allow_guest=False)
 def get_employee_count():
-    """
-    Get the total number of active employees.
-    Returns:
-        dict: {"count": int}
-    """
+    """Get the total number of active employees."""
     try:
         count = frappe.db.count("Employee", filters={"status": "Active"})
         return {"count": count}
@@ -2723,10 +2715,9 @@ def get_employee_count():
         frappe.throw(_("Failed to fetch employee count"))
 
 
-####################################################################################################
-
 @frappe.whitelist()
 def get_leave_applications(employee=None, for_approval=False, include_balances=False):
+    """Get leave applications with optional filters."""
     try:
         filters = {}
         if employee:
@@ -2752,8 +2743,10 @@ def get_leave_applications(employee=None, for_approval=False, include_balances=F
         frappe.log_error(frappe.get_traceback(), 'Get Leave Applications Error')
         return {'status': 'error', 'message': str(e)}
 
+
 @frappe.whitelist()
 def apply_workflow_action(doctype, docname, action):
+    """Apply workflow action (Approve/Reject) to documents."""
     try:
         if not frappe.has_permission(doctype, 'write', docname):
             frappe.throw(f'Insufficient permissions to {action.lower()} {doctype}')
@@ -2801,8 +2794,10 @@ def apply_workflow_action(doctype, docname, action):
         frappe.log_error(frappe.get_traceback(), f'Apply Workflow Action Error: {action}')
         return {'status': 'error', 'message': str(e)}
 
+
 @frappe.whitelist()
 def create_leave_application(employee, leave_type, from_date, to_date, half_day=0, half_day_date=None, description=None, leave_approver=None):
+    """Create a new leave application."""
     try:
         if not employee or not leave_type or not from_date or not to_date:
             frappe.throw("Employee, leave type, from date, and to date are mandatory fields", title="Validation Error")
@@ -2861,8 +2856,10 @@ def create_leave_application(employee, leave_type, from_date, to_date, half_day=
         frappe.response.http_status_code = 400
         frappe.throw(str(e), title="Failed to create leave application")
 
+
 @frappe.whitelist()
 def get_attendance_records(employee, start_date, end_date):
+    """Get attendance records for an employee within date range."""
     try:
         if not employee or not start_date or not end_date:
             frappe.throw("Employee, start date, and end date are mandatory fields", title="Validation Error")
@@ -2880,12 +2877,56 @@ def get_attendance_records(employee, start_date, end_date):
             filters={
                 'employee': employee,
                 'attendance_date': ['between', [start_date, end_date]],
-                'docstatus': 1  # Only submitted records
+                'docstatus': ['!=', 2]  # Include draft (0) and submitted (1), exclude cancelled (2)
             },
-            fields=['attendance_date', 'in_time as check_in', 'custom_out_time_copy as check_out', 'status']
+            fields=[
+                'name',
+                'attendance_date', 
+                'in_time', 
+                'out_time', 
+                'custom_out_time_copy',
+                'status',
+                'docstatus',
+                'working_hours',
+                'employee',
+                'employee_name'
+            ]
         )
+        
+        # Enrich with work_type from Geo Log
+        for record in attendance_records:
+            # Get work_type from Geo Log for check-in
+            geo_logs = frappe.get_all(
+                'Geo Log',
+                filters={
+                    'employee': employee,
+                    'attendance': record.get('name'),
+                    'action': 'Check-In'
+                },
+                fields=['work_type'],
+                limit=1
+            )
+            
+            if geo_logs and geo_logs[0].work_type:
+                record['work_type'] = geo_logs[0].work_type
+            else:
+                record['work_type'] = 'Office'  # Default to Office
+            
+            # Use out_time, fallback to custom_out_time_copy
+            if not record.get('out_time') and record.get('custom_out_time_copy'):
+                record['out_time'] = record['custom_out_time_copy']
+            
+            # Determine actual display status based on docstatus and in_time
+            if record.get('docstatus') == 0 and record.get('in_time'):
+                # Draft with check-in = Present (waiting for checkout)
+                record['status'] = 'Present'
+            elif record.get('docstatus') == 1:
+                # Submitted = use actual status from database
+                pass  # Keep the status as is
+            elif not record.get('in_time'):
+                # No check-in = Absent
+                record['status'] = 'Absent'
 
-        # Return consistent format that matches your frontend expectations
         return {
             'status': 'success', 
             'message': 'Attendance records fetched successfully', 
@@ -2899,8 +2940,10 @@ def get_attendance_records(employee, start_date, end_date):
             'data': []
         }
 
+
 @frappe.whitelist()
 def get_holidays(start_date, end_date):
+    """Get holidays within date range."""
     try:
         if not start_date or not end_date:
             frappe.throw("Start date and end date are mandatory fields", title="Validation Error")
@@ -2910,7 +2953,6 @@ def get_holidays(start_date, end_date):
         if end_date < start_date:
             frappe.throw("End date cannot be before start date", title="Invalid Date Range")
 
-        # Get holidays from all holiday lists (you might want to filter by employee's holiday list)
         holidays = frappe.get_all(
             'Holiday',
             filters={
@@ -2932,11 +2974,13 @@ def get_holidays(start_date, end_date):
             'data': []
         }
 
+
 @frappe.whitelist()
 def get_shift_assignments(employee, start_date, end_date):
+    """Get shift assignments for an employee within date range."""
     try:
         if not employee or not start_date or not end_date:
-            frappe.throw("Employee, start date, and end date are mandatory fields", title="Validation Error")
+            frappe.throw("Employee, start_date, and end_date are mandatory fields", title="Validation Error")
 
         if not frappe.db.exists("Employee", employee):
             frappe.throw(f"Employee {employee} does not exist", title="Invalid Employee")
@@ -2951,7 +2995,7 @@ def get_shift_assignments(employee, start_date, end_date):
             filters={
                 'employee': employee,
                 'start_date': ['<=', end_date],
-                'end_date': ['>=', start_date],  # Better date range filtering
+                'end_date': ['>=', start_date],
                 'docstatus': 1,
                 'status': 'Active'
             },
@@ -2972,13 +3016,10 @@ def get_shift_assignments(employee, start_date, end_date):
         }
 
 
-
-
-
-
-################################################################################################################
+# Firebase and Notification Management
 def initialize_firebase():
-    if not firebase_admin._apps:  # Check if Firebase is already initialized
+    """Initialize Firebase Admin SDK."""
+    if not firebase_admin._apps:
         try:
             service_account = frappe.get_site_config().get("firebase_service_account")
             if not service_account:
@@ -2991,7 +3032,7 @@ def initialize_firebase():
             frappe.log_error("Firebase Initialization Error", str(e))
             raise
 
-# Call initialize_firebase at module level
+# Initialize Firebase at module level
 initialize_firebase()
 
 
@@ -3031,6 +3072,7 @@ def save_fcm_token(token, device_type):
     frappe.db.commit()
     return {"status": "success", "message": "FCM token saved"}
 
+
 def send_fcm_notification(tokens, title, body):
     """Send FCM notification to multiple tokens."""
     if not tokens:
@@ -3061,6 +3103,7 @@ def send_fcm_notification(tokens, title, body):
         frappe.log_error("FCM Send Error", str(e))
         raise
 
+
 def is_holiday_today(employee):
     """Check if today is a holiday for the employee."""
     holiday_list = get_holiday_list_for_employee(employee, raise_exception=False)
@@ -3069,64 +3112,16 @@ def is_holiday_today(employee):
     today = getdate()
     return frappe.db.exists("Holiday", {"parent": holiday_list, "holiday_date": today})
 
+
 def get_employee_tokens(employees):
     """Get FCM tokens for a list of employees."""
     users = frappe.get_all("Employee", filters={"name": ["in", employees], "status": "Active"}, pluck="user_id")
     return frappe.get_all("Mobile Device", filters={"user": ["in", users]}, pluck="fcm_token")
 
-def send_work_log_reminder():
-    """Send hourly work log reminder between 10 AM and 7 PM IST, skipping holidays and existing logs."""
-    now = now_datetime()
-    current_hour = now.hour  # Get hour in 24-hour format (0-23)
-    
-    # Only send notifications between 10 AM (10) and 7 PM (19)
-    if not (10 < current_hour < 19):
-        frappe.log_error("Work Log Reminder Skipped", f"Current time {now.strftime('%H:%M:%S')} is outside 10 AM to 7 PM IST")
-        return
-    
-    today = getdate()
-    employees = frappe.get_all("Employee", filters={"status": "Active"}, pluck="name")
-    for emp in employees:
-        if is_holiday_today(emp):
-            continue
-        if frappe.db.exists("Daily Task Log", {"employee_id": emp, "posting_date": today, "docstatus": 1}):
-            continue
-        tokens = get_employee_tokens([emp])
-        if not tokens:
-            frappe.log_error("No Tokens Found", f"No valid tokens for employee: {emp}")
-            continue
-        response = send_fcm_notification(tokens, "Work Log Reminder", "Please update your work log.")
-        frappe.log_error(f"Work Log Reminder sent to {emp}", f"Tokens: {tokens}, Response: {response}")
-
-def send_checkin_reminder():
-    """Send daily check-in reminder at 10 AM, skipping holidays and checked-in employees."""
-    today = getdate()
-    employees = frappe.get_all("Employee", filters={"status": "Active"}, pluck="name")
-    for emp in employees:
-        if is_holiday_today(emp):
-            continue
-        if frappe.db.exists("Attendance", {"employee": emp, "attendance_date": today, "in_time": ["is", "set"]}):
-            continue
-        tokens = get_employee_tokens([emp])
-        send_fcm_notification(tokens, "Check-in Reminder", "Don't forget to check in today.")
-        frappe.log_error(f"Check-in Reminder sent to {emp}", tokens)
-
-def send_checkout_reminder():
-    """Send daily checkout reminder at 7 PM, skipping holidays and checked-out employees."""
-    today = getdate()
-    employees = frappe.get_all("Employee", filters={"status": "Active"}, pluck="name")
-    for emp in employees:
-        if is_holiday_today(emp):
-            continue
-        if frappe.db.exists("Attendance", {"employee": emp, "attendance_date": today, "custom_out_time_copy": ["is", "set"]}):
-            continue
-        tokens = get_employee_tokens([emp])
-        send_fcm_notification(tokens, "Checkout Reminder", "Time to check out!")
-        frappe.log_error(f"Checkout Reminder sent to {emp}", tokens)
 
 @frappe.whitelist(allow_guest=False)
 def send_admin_notification(docname):
-    """Send admin-triggered notification, ignoring holidays."""
+    """Send admin-triggered notification."""
     if not frappe.has_permission("Notification Master", "write"):
         frappe.throw(_("Insufficient permissions"))
     
@@ -3143,55 +3138,28 @@ def send_admin_notification(docname):
         employees = [doc.employee]
     
     tokens = get_employee_tokens(employees)
-    frappe.log_error("Tokens for Notification", str(tokens))  # Debug log
     if not tokens:
         frappe.log_error("No Tokens Found", f"No valid tokens for employees: {employees}")
         return {"status": "error", "message": "No valid tokens found"}
     
     response = send_fcm_notification(tokens, doc.title, doc.message)
-    frappe.log_error("FCM Notification Response", str(response))  # Debug log
     
     doc.status = "Sent"
     doc.save(ignore_permissions=True)
     frappe.db.commit()
     return {"status": "success", "message": "Notification sent"}
 
-def process_scheduled_notifications():
-    """Process scheduled notifications."""
-    now = now_datetime()
-    notifications = frappe.get_all("Notification Master", filters={
-        "status": "Queued",
-        "send_now": 0,
-        "schedule_time": ["<=", now]
-    }, pluck="name")
-    
-    for name in notifications:
-        send_admin_notification(name)
 
-
-
-####################################################################################
-
-
-
-
-###########################################################################################################
-
+# Admin Dashboard Statistics
 @frappe.whitelist(allow_guest=False)
 def get_employee_statistics():
-    """
-    Get comprehensive employee statistics for admin dashboard.
-    Returns statistics about attendance, WFH, leaves, etc.
-    Excludes employees on holidays from absent count.
-    """
+    """Get comprehensive employee statistics for admin dashboard."""
     try:
-        # Check permissions
         if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
             frappe.throw(_("You do not have permission to access this resource."), frappe.PermissionError)
 
         today = getdate()
         
-        # Get all active employees
         all_employees = frappe.get_all(
             "Employee",
             filters={"status": "Active"},
@@ -3199,7 +3167,6 @@ def get_employee_statistics():
         )
         total_employees = len(all_employees)
         
-        # Get today's attendance
         today_attendance = frappe.get_all(
             "Attendance",
             filters={
@@ -3209,20 +3176,16 @@ def get_employee_statistics():
             fields=["employee", "employee_name", "status", "in_time"]
         )
         
-        # Calculate attendance stats
         present_today = len([att for att in today_attendance if att.status == "Present"])
         wfh_today = len([att for att in today_attendance if att.status == "Work From Home"])
         
-        # Get employees who are present or WFH
         attended_employee_ids = {att.employee for att in today_attendance if att.status in ["Present", "Work From Home"]}
         
-        # Calculate absent count excluding holidays
         absent_today = 0
         employees_on_holiday = 0
         
         for emp in all_employees:
             if emp.name not in attended_employee_ids:
-                # Check if it's a holiday for this employee
                 is_holiday = is_employee_on_holiday(emp.name, today)
                 
                 if is_holiday:
@@ -3230,14 +3193,12 @@ def get_employee_statistics():
                 else:
                     absent_today += 1
         
-        # Calculate late arrivals (after 10:05 AM)
         late_arrivals = 0
         for att in today_attendance:
             if att.in_time and att.status == "Present":
                 if is_late_arrival(att.in_time):
                     late_arrivals += 1
         
-        # Get employees on approved leave today
         on_leave = frappe.db.count(
             "Leave Application",
             filters={
@@ -3248,7 +3209,6 @@ def get_employee_statistics():
             }
         )
         
-        # Calculate attendance rate excluding holidays
         working_employees = total_employees - employees_on_holiday
         attendance_rate = round((len(today_attendance) / working_employees * 100), 1) if working_employees > 0 else 0
         
@@ -3266,7 +3226,6 @@ def get_employee_statistics():
         
     except Exception as e:
         frappe.log_error(f"Get Employee Statistics Error: {str(e)[:100]}")
-        # Return fallback data instead of throwing error
         return {
             "totalEmployees": 0,
             "presentToday": 0,
@@ -3281,9 +3240,7 @@ def get_employee_statistics():
 
 
 def is_employee_on_holiday(employee_id, date):
-    """
-    Check if a specific employee is on holiday for a given date.
-    """
+    """Check if a specific employee is on holiday for a given date."""
     try:
         holiday_list = get_holiday_list_for_employee(employee_id, raise_exception=False)
         if not holiday_list:
@@ -3299,24 +3256,19 @@ def is_employee_on_holiday(employee_id, date):
 
 @frappe.whitelist(allow_guest=False)
 def get_absent_employees_list():
-    """
-    Get list of employees who are absent today.
-    """
+    """Get list of employees who are absent today."""
     try:
-        # Check permissions
         if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
             frappe.throw(_("You do not have permission to access this resource."), frappe.PermissionError)
 
         today = getdate()
         
-        # Get all active employees
         all_employees = frappe.get_all(
             "Employee",
             filters={"status": "Active"},
             fields=["name", "employee_name", "department", "designation", "user_id"]
         )
 
-        # Get today's attendance records
         today_attendance = frappe.get_all(
             "Attendance",
             filters={
@@ -3326,14 +3278,11 @@ def get_absent_employees_list():
             fields=["employee"]
         )
 
-        # Create set of present employees
         present_employee_ids = {att.employee for att in today_attendance}
         
-        # Find absent employees
         absent_employees = []
         for emp in all_employees:
             if emp.name not in present_employee_ids:
-                # Check if it's a holiday for this employee
                 holiday_list = get_holiday_list_for_employee(emp.name, raise_exception=False)
                 is_holiday = False
                 if holiday_list:
@@ -3342,7 +3291,6 @@ def get_absent_employees_list():
                         "holiday_date": today
                     })
                 
-                # Only include in absent list if it's not a holiday
                 if not is_holiday:
                     absent_employees.append({
                         "employee_id": emp.name,
@@ -3364,17 +3312,13 @@ def get_absent_employees_list():
 
 @frappe.whitelist(allow_guest=False)
 def get_late_arrivals_list():
-    """
-    Get list of employees who arrived late today (after 10:05 AM).
-    """
+    """Get list of employees who arrived late today (after 10:05 AM)."""
     try:
-        # Check permissions
         if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
             frappe.throw(_("You do not have permission to access this resource."), frappe.PermissionError)
 
         today = getdate()
         
-        # Get today's attendance with check-in times
         today_attendance = frappe.get_all(
             "Attendance",
             filters={
@@ -3388,12 +3332,11 @@ def get_late_arrivals_list():
         
         late_employees = []
         from datetime import time, datetime
-        standard_time = time(10, 5)  # 10:05 AM as requested
+        standard_time = time(10, 5)  # 10:05 AM
         
         for att in today_attendance:
             if att.in_time:
                 try:
-                    # Handle different time formats
                     if isinstance(att.in_time, str):
                         if ' ' in att.in_time:
                             check_in_time = datetime.strptime(att.in_time.split(' ')[1], "%H:%M:%S").time()
@@ -3403,7 +3346,6 @@ def get_late_arrivals_list():
                         check_in_time = att.in_time.time() if hasattr(att.in_time, 'time') else att.in_time
                     
                     if check_in_time > standard_time:
-                        # Get employee details
                         emp_details = frappe.get_value(
                             "Employee", 
                             att.employee, 
@@ -3411,7 +3353,6 @@ def get_late_arrivals_list():
                             as_dict=True
                         )
                         
-                        # Calculate how late they were
                         late_minutes = (datetime.combine(today, check_in_time) - 
                                       datetime.combine(today, standard_time)).total_seconds() / 60
                         
@@ -3425,11 +3366,9 @@ def get_late_arrivals_list():
                         })
                         
                 except Exception as parse_error:
-                    # Skip if time parsing fails
                     frappe.log_error(f"Time parsing error for {att.employee}: {str(parse_error)}")
                     continue
 
-        # Sort by latest first
         late_employees.sort(key=lambda x: x["late_by_minutes"], reverse=True)
 
         return {
@@ -3446,24 +3385,19 @@ def get_late_arrivals_list():
 
 @frappe.whitelist(allow_guest=False)
 def get_department_statistics():
-    """
-    Get department-wise attendance statistics excluding employees on holidays.
-    """
+    """Get department-wise attendance statistics excluding employees on holidays."""
     try:
-        # Check permissions
         if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
             frappe.throw(_("You do not have permission to access this resource."), frappe.PermissionError)
 
         today = getdate()
         
-        # Get all active employees with departments
         employees = frappe.get_all(
             "Employee",
             filters={"status": "Active"},
             fields=["name", "department"]
         )
         
-        # Get today's attendance
         today_attendance = frappe.get_all(
             "Attendance",
             filters={
@@ -3476,14 +3410,12 @@ def get_department_statistics():
         
         present_employees = {att.employee for att in today_attendance}
         
-        # Group by department and exclude holidays
         department_stats = {}
         for emp in employees:
             dept = emp.department or "Not Assigned"
             if dept not in department_stats:
                 department_stats[dept] = {"total": 0, "present": 0, "holiday": 0}
             
-            # Check if employee is on holiday
             is_holiday = is_employee_on_holiday(emp.name, today)
             
             if is_holiday:
@@ -3493,22 +3425,19 @@ def get_department_statistics():
                 if emp.name in present_employees:
                     department_stats[dept]["present"] += 1
         
-        # Convert to list format
         result = []
         for dept_name, stats in department_stats.items():
-            working_employees = stats["total"]  # Already excludes holidays
+            working_employees = stats["total"]
             result.append({
                 "department": dept_name,
-                "total": stats["total"] + stats["holiday"],  # All employees
-                "working_today": working_employees,  # Excluding holidays
+                "total": stats["total"] + stats["holiday"],
+                "working_today": working_employees,
                 "present": stats["present"],
                 "holiday": stats["holiday"],
                 "attendance_percentage": round((stats["present"] / working_employees * 100), 1) if working_employees > 0 else 0
             })
         
-        # Sort by total employees (largest departments first)
         result.sort(key=lambda x: x["total"], reverse=True)
-        
         return result
         
     except Exception as e:
@@ -3518,20 +3447,16 @@ def get_department_statistics():
 
 @frappe.whitelist(allow_guest=False)
 def get_attendance_analytics(period="week"):
-    """
-    Get attendance analytics for different time periods, excluding holidays.
-    """
+    """Get attendance analytics for different time periods, excluding holidays."""
     try:
-        # Check permissions
         if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
             frappe.throw(_("You do not have permission to access this resource."), frappe.PermissionError)
 
         today = getdate()
         
         if period == "week":
-            # Get last 7 days of data
             from datetime import timedelta
-            start_date = today - timedelta(days=6)  # Last 7 days including today
+            start_date = today - timedelta(days=6)
             
             daily_stats = []
             total_attendance = 0
@@ -3540,11 +3465,9 @@ def get_attendance_analytics(period="week"):
             for i in range(7):
                 current_date = start_date + timedelta(days=i)
                 
-                # Get all active employees
                 all_employees = frappe.get_all("Employee", filters={"status": "Active"}, pluck="name")
                 total_employees = len(all_employees)
                 
-                # Count employees on holiday for this date
                 employees_on_holiday = 0
                 for emp in all_employees:
                     if is_employee_on_holiday(emp, current_date):
@@ -3552,7 +3475,6 @@ def get_attendance_analytics(period="week"):
                 
                 working_employees = total_employees - employees_on_holiday
                 
-                # Get attendance for this date
                 attendance_count = frappe.db.count(
                     "Attendance",
                     filters={
@@ -3577,7 +3499,6 @@ def get_attendance_analytics(period="week"):
                 total_attendance += attendance_count
                 total_working_days += working_employees
             
-            # Calculate average attendance excluding holidays
             avg_attendance = round((total_attendance / total_working_days * 100), 1) if total_working_days > 0 else 0
             
             return {
@@ -3592,7 +3513,6 @@ def get_attendance_analytics(period="week"):
             }
         
         else:
-            # For other periods, return empty data for now
             return {
                 "weeklyTrend": [],
                 "averageAttendance": 0,
@@ -3609,18 +3529,11 @@ def get_attendance_analytics(period="week"):
             "trends": {}
         }
 
-#############################################################################################################
-
-
-
 
 @frappe.whitelist(allow_guest=False)
 def get_attendance_by_date(date, employee_id=None, department=None):
-    """
-    Fetch attendance records by date with optional filters.
-    """
+    """Fetch attendance records by date with optional filters."""
     try:
-        # Check admin permissions
         if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
             frappe.throw(_("You do not have permission to access this resource."), frappe.PermissionError)
         
@@ -3629,17 +3542,15 @@ def get_attendance_by_date(date, employee_id=None, department=None):
         
         date = getdate(date)
         
-        # Build filters
         filters = {
             "attendance_date": date,
-            "docstatus": ["!=", 2]  # Exclude cancelled records
+            "docstatus": ["!=", 2]
         }
         
         if employee_id:
             filters["employee"] = employee_id
         
         if department:
-            # Get employees from specific department
             dept_employees = frappe.get_all("Employee", 
                 filters={"department": department, "status": "Active"}, 
                 pluck="name"
@@ -3647,7 +3558,6 @@ def get_attendance_by_date(date, employee_id=None, department=None):
             if dept_employees:
                 filters["employee"] = ["in", dept_employees]
             else:
-                # No employees in department
                 return {
                     "attendance_records": [],
                     "total_records": 0,
@@ -3658,7 +3568,6 @@ def get_attendance_by_date(date, employee_id=None, department=None):
                     }
                 }
         
-        # Fetch attendance records
         attendance_records = frappe.get_all(
             "Attendance",
             filters=filters,
@@ -3671,7 +3580,6 @@ def get_attendance_by_date(date, employee_id=None, department=None):
             order_by="in_time desc"
         )
         
-        # Get employee department info
         employee_dept_map = {}
         if attendance_records:
             employee_ids = [record.employee for record in attendance_records]
@@ -3681,17 +3589,14 @@ def get_attendance_by_date(date, employee_id=None, department=None):
             )
             employee_dept_map = {emp.name: emp for emp in dept_info}
         
-        # Enhance records with additional info
         enhanced_records = []
         summary = {"total": 0, "present": 0, "absent": 0, "missing_checkout": 0, "draft": 0}
         
         for record in attendance_records:
-            # Add department info
             emp_info = employee_dept_map.get(record.employee, {})
             record.department = emp_info.get("department", "Not Assigned")
             record.designation = emp_info.get("designation", "Not Assigned")
             
-            # Calculate working hours if not already calculated
             if record.in_time and (record.out_time or record.custom_out_time_copy):
                 checkout_time = record.out_time or record.custom_out_time_copy
                 if not record.working_hours:
@@ -3701,10 +3606,8 @@ def get_attendance_by_date(date, employee_id=None, department=None):
                     except:
                         record.working_hours = 0
             
-            # Check if late arrival (after 10:05 AM)
             record.is_late = is_late_arrival(record.in_time) if record.in_time else False
             
-            # Determine record status for summary
             if record.docstatus == 0:
                 summary["draft"] += 1
             elif record.status in ["Present", "Work From Home"]:
@@ -3717,7 +3620,6 @@ def get_attendance_by_date(date, employee_id=None, department=None):
             summary["total"] += 1
             enhanced_records.append(record)
         
-        # Get all employees for the department/overall to calculate absent count
         if department:
             all_employees = frappe.get_all("Employee", 
                 filters={"department": department, "status": "Active"}, 
@@ -3731,13 +3633,11 @@ def get_attendance_by_date(date, employee_id=None, department=None):
                 pluck="name"
             )
         
-        # Calculate actual absent count (employees not in attendance records)
         attended_employees = [record.employee for record in enhanced_records]
         absent_employees = []
         
         for emp in all_employees:
             if emp not in attended_employees:
-                # Check if it's a holiday for this employee
                 if not is_employee_on_holiday(emp, date):
                     absent_employees.append(emp)
         
@@ -3760,12 +3660,9 @@ def get_attendance_by_date(date, employee_id=None, department=None):
         frappe.throw(_("Failed to fetch attendance records: {0}").format(str(e)))
 
 
-
 @frappe.whitelist(allow_guest=False)
 def get_departments_list():
-    """
-    Get list of all departments for filtering.
-    """
+    """Get list of all departments for filtering."""
     try:
         departments = frappe.get_all(
             "Department",
@@ -3778,13 +3675,630 @@ def get_departments_list():
         frappe.log_error(f"Get Departments Error: {str(e)}")
         return []
 
-##################################################################
+
+# ============================================================================
+# NOTIFICATION SYSTEM
+# ============================================================================
+
+@frappe.whitelist(allow_guest=False)
+def create_notification(title, message, target_type, target_employees=None, department=None):
+    """Create and send admin notification to employees."""
+    try:
+        if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
+            frappe.throw(_("You do not have permission to send notifications"), frappe.PermissionError)
+        
+        if not title or not message:
+            frappe.throw(_("Title and message are required"))
+        
+        # Create notification document
+        notification_doc = frappe.get_doc({
+            "doctype": "Notification Log",
+            "subject": title,
+            "email_content": message,
+            "message": message,
+            "type": "Alert",
+            "document_type": "Employee",
+            "from_user": frappe.session.user
+        })
+        
+        # Determine target employees
+        target_emp_list = []
+        if target_type == "all":
+            target_emp_list = frappe.get_all("Employee", 
+                filters={"status": "Active"}, 
+                pluck="name"
+            )
+        elif target_type == "department" and department:
+            target_emp_list = frappe.get_all("Employee", 
+                filters={"department": department, "status": "Active"}, 
+                pluck="name"
+            )
+        elif target_type == "specific" and target_employees:
+            target_emp_list = json.loads(target_employees) if isinstance(target_employees, str) else target_employees
+        
+        if not target_emp_list:
+            frappe.throw(_("No target employees found"))
+        
+        # Get FCM tokens for target employees
+        tokens = []
+        for emp_id in target_emp_list:
+            emp_tokens = frappe.get_all("FCM Token", 
+                filters={"employee": emp_id}, 
+                pluck="token"
+            )
+            tokens.extend(emp_tokens)
+        
+        # Send FCM notification
+        if tokens:
+            response = send_fcm_notification(tokens, title, message)
+            frappe.log_error(f"FCM Response: {response}", "Admin Notification")
+        
+        # Save notification for each target employee
+        for emp_id in target_emp_list:
+            notification_doc.for_user = frappe.get_value("Employee", emp_id, "user_id")
+            if notification_doc.for_user:
+                notification_copy = frappe.copy_doc(notification_doc)
+                notification_copy.insert(ignore_permissions=True)
+        
+        frappe.db.commit()
+        
+        return {
+            "status": "success",
+            "message": f"Notification sent to {len(target_emp_list)} employees",
+            "sent_count": len(target_emp_list)
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Create Notification Error: {str(e)}")
+        frappe.throw(_("Failed to create notification: {0}").format(str(e)))
+
+
+@frappe.whitelist(allow_guest=False)
+def send_admin_broadcast(title, body, target_type, target_ids=None, department_id=None):
+    """Send admin broadcast notification."""
+    try:
+        return create_notification(title, body, target_type, target_ids, department_id)
+    except Exception as e:
+        frappe.log_error(f"Send Admin Broadcast Error: {str(e)}")
+        frappe.throw(_("Failed to send broadcast: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def submit_wfh_request(request_type, from_date, to_date, reason):
+    """Submit WFH request and notify admin."""
+    try:
+        employee = get_employee_by_user()
+        if not employee:
+            frappe.throw(_("Employee record not found"), frappe.PermissionError)
+        
+        # Create WFH request document
+        wfh_request = frappe.get_doc({
+            "doctype": "Work From Home Request",
+            "employee": employee,
+            "request_type": request_type,
+            "from_date": from_date,
+            "to_date": to_date,
+            "reason": reason,
+            "status": "Pending"
+        })
+        
+        wfh_request.insert()
+        frappe.db.commit()
+        
+        # Notify admins/HR managers
+        admin_users = []
+        for role in ["System Manager", "HR Manager", "HR User"]:
+            role_users = frappe.get_all("Has Role", 
+                filters={"role": role}, 
+                pluck="parent"
+            )
+            admin_users.extend(role_users)
+        
+        admin_users = list(set(admin_users))  # Remove duplicates
+        
+        # Get admin FCM tokens
+        admin_tokens = []
+        for user in admin_users:
+            emp_id = frappe.get_value("Employee", {"user_id": user}, "name")
+            if emp_id:
+                tokens = frappe.get_all("FCM Token", 
+                    filters={"employee": emp_id}, 
+                    pluck="token"
+                )
+                admin_tokens.extend(tokens)
+        
+        # Send notification to admins
+        if admin_tokens:
+            emp_name = frappe.get_value("Employee", employee, "employee_name")
+            title = "New WFH Request"
+            message = f"{emp_name} has requested work from home from {from_date} to {to_date}"
+            
+            response = send_fcm_notification(admin_tokens, title, message)
+            frappe.log_error(f"WFH Notification Response: {response}", "WFH Request")
+        
+        return {
+            "status": "success",
+            "message": "WFH request submitted successfully",
+            "name": wfh_request.name
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Submit WFH Request Error: {str(e)}")
+        frappe.throw(_("Failed to submit WFH request: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_wfh_requests():
+    """Get WFH requests for current employee."""
+    try:
+        employee = get_employee_by_user()
+        if not employee:
+            return []
+        
+        requests = frappe.get_all("Work From Home Request",
+            filters={"employee": employee},
+            fields=["name", "from_date", "to_date", "reason", "status", "creation", "approved_by"],
+            order_by="creation desc"
+        )
+        
+        return requests
+        
+    except Exception as e:
+        frappe.log_error(f"Get WFH Requests Error: {str(e)}")
+        return []
+
+
+@frappe.whitelist()
+def get_pending_wfh_requests():
+    """Get all pending WFH requests for admin approval."""
+    try:
+        # Check if user has admin permissions
+        if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
+            frappe.throw(_("You do not have permission to view WFH requests"), frappe.PermissionError)
+        
+        requests = frappe.get_all("Work From Home Request",
+            filters={"status": "Pending"},
+            fields=[
+                "name", "employee", "employee_name", "from_date", "to_date", 
+                "reason", "status", "creation", "modified"
+            ],
+            order_by="creation desc"
+        )
+        
+        return requests
+        
+    except Exception as e:
+        frappe.log_error(f"Get Pending WFH Requests Error: {str(e)}")
+        return []
+
+
+@frappe.whitelist()
+def wfh_request_action():
+    """Handle WFH request approval/rejection."""
+    try:
+        request_id = frappe.form_dict.get('request_id')
+        action = frappe.form_dict.get('action')  # 'approve' or 'reject'
+        
+        if not request_id or not action:
+            frappe.throw(_("Request ID and action are required"))
+        
+        if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
+            frappe.throw(_("You do not have permission to process WFH requests"), frappe.PermissionError)
+        
+        # Get the WFH request
+        wfh_request = frappe.get_doc("Work From Home Request", request_id)
+        
+        if wfh_request.status != "Pending":
+            frappe.throw(_("Request has already been processed"))
+        
+        # Update request status
+        if action == 'approve':
+            wfh_request.status = "Approved"
+            wfh_request.approved_by = frappe.session.user
+            wfh_request.approved_on = frappe.utils.now()
+            
+            # Auto-enable WFH for employee
+            try:
+                employee_doc = frappe.get_doc("Employee", wfh_request.employee)
+                employee_doc.custom_wfh_eligible = 1
+                employee_doc.save(ignore_permissions=True)
+                
+                frappe.log_error(f"Auto-enabled WFH for employee {wfh_request.employee}", "WFH Auto Enable")
+            except Exception as e:
+                frappe.log_error(f"Failed to auto-enable WFH for {wfh_request.employee}: {str(e)}", "WFH Auto Enable Error")
+            
+        elif action == 'reject':
+            wfh_request.status = "Rejected"
+            wfh_request.rejected_by = frappe.session.user
+            wfh_request.rejected_on = frappe.utils.now()
+        else:
+            frappe.throw(_("Invalid action"))
+        
+        wfh_request.save(ignore_permissions=True)
+        
+        # Send notification to employee
+        try:
+            employee_doc = frappe.get_doc("Employee", wfh_request.employee)
+            if hasattr(employee_doc, 'user_id') and employee_doc.user_id:
+                notification_title = f"WFH Request {action.title()}"
+                notification_message = f"Your WFH request from {wfh_request.from_date} to {wfh_request.to_date} has been {action}d"
+                
+                # Send FCM notification
+                send_employee_notification(
+                    employee_id=wfh_request.employee,
+                    title=notification_title,
+                    message=notification_message,
+                    data={
+                        'type': 'wfh_response',
+                        'request_id': request_id,
+                        'action': action
+                    }
+                )
+        except Exception as e:
+            frappe.log_error(f"Failed to send notification: {str(e)}", "WFH Notification Error")
+        
+        return {
+            "success": True,
+            "message": f"Request {action}d successfully"
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"WFH Request Action Error: {str(e)}")
+        frappe.throw(_("Failed to process request: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def enable_wfh_for_employee():
+    """Enable WFH for specific employee."""
+    try:
+        employee_id = frappe.form_dict.get('employee_id')
+        
+        if not employee_id:
+            frappe.throw(_("Employee ID is required"))
+        
+        if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
+            frappe.throw(_("You do not have permission to modify WFH settings"), frappe.PermissionError)
+        
+        employee_doc = frappe.get_doc("Employee", employee_id)
+        employee_doc.custom_wfh_eligible = 1
+        employee_doc.save(ignore_permissions=True)
+        
+        return {
+            "success": True,
+            "message": f"WFH enabled for {employee_doc.employee_name}"
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Enable WFH Error: {str(e)}")
+        frappe.throw(_("Failed to enable WFH: {0}").format(str(e)))
 
 
 
 
+@frappe.whitelist(allow_guest=False)
+def approve_wfh_request(request_id):
+    """Approve WFH request."""
+    try:
+        if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
+            frappe.throw(_("You do not have permission to approve WFH requests"), frappe.PermissionError)
+        
+        wfh_request = frappe.get_doc("Work From Home Request", request_id)
+        wfh_request.status = "Approved"
+        wfh_request.approved_by = frappe.session.user
+        wfh_request.approval_date = now_datetime()
+        wfh_request.save()
+        
+        # Enable WFH for employee during the approved period
+        employee = wfh_request.employee
+        frappe.db.set_value("Employee", employee, "custom_wfh_enabled", 1)
+        
+        # Notify employee
+        emp_tokens = frappe.get_all("FCM Token", 
+            filters={"employee": employee}, 
+            pluck="token"
+        )
+        
+        if emp_tokens:
+            emp_name = frappe.get_value("Employee", employee, "employee_name")
+            title = "WFH Request Approved"
+            message = f"Your work from home request has been approved for {wfh_request.from_date} to {wfh_request.to_date}"
+            
+            send_fcm_notification(emp_tokens, title, message)
+        
+        frappe.db.commit()
+        
+        return {
+            "status": "success",
+            "message": "WFH request approved successfully"
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Approve WFH Request Error: {str(e)}")
+        frappe.throw(_("Failed to approve WFH request: {0}").format(str(e)))
 
 
+@frappe.whitelist(allow_guest=False)
+def reject_wfh_request(request_id):
+    """Reject WFH request."""
+    try:
+        if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
+            frappe.throw(_("You do not have permission to reject WFH requests"), frappe.PermissionError)
+        
+        wfh_request = frappe.get_doc("Work From Home Request", request_id)
+        wfh_request.status = "Rejected"
+        wfh_request.approved_by = frappe.session.user
+        wfh_request.approval_date = now_datetime()
+        wfh_request.save()
+        
+        # Notify employee
+        employee = wfh_request.employee
+        emp_tokens = frappe.get_all("FCM Token", 
+            filters={"employee": employee}, 
+            pluck="token"
+        )
+        
+        if emp_tokens:
+            title = "WFH Request Rejected"
+            message = f"Your work from home request for {wfh_request.from_date} to {wfh_request.to_date} has been rejected"
+            
+            send_fcm_notification(emp_tokens, title, message)
+        
+        frappe.db.commit()
+        
+        return {
+            "status": "success",
+            "message": "WFH request rejected"
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Reject WFH Request Error: {str(e)}")
+        frappe.throw(_("Failed to reject WFH request: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def send_wfh_notification(requestData):
+    """Send WFH notification (wrapper for submit_wfh_request)."""
+    try:
+        return submit_wfh_request(
+            requestData.get('request_type'),
+            requestData.get('from_date'),
+            requestData.get('to_date'),
+            requestData.get('reason')
+        )
+    except Exception as e:
+        frappe.log_error(f"Send WFH Notification Error: {str(e)}")
+        frappe.throw(_("Failed to send WFH notification: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_notification_settings():
+    """Get user notification settings."""
+    try:
+        employee = get_employee_by_user()
+        if not employee:
+            return {"notifications_enabled": False}
+        
+        settings = frappe.get_value("Employee", employee, 
+            ["custom_notifications_enabled", "custom_project_reminders", "custom_attendance_reminders"],
+            as_dict=True
+        ) or {}
+        
+        return {
+            "notifications_enabled": settings.get("custom_notifications_enabled", True),
+            "project_reminders": settings.get("custom_project_reminders", True),
+            "attendance_reminders": settings.get("custom_attendance_reminders", True)
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Get Notification Settings Error: {str(e)}")
+        return {"notifications_enabled": False}
+
+
+@frappe.whitelist()
+def update_notification_settings(settings):
+    """Update user notification settings."""
+    try:
+        employee = get_employee_by_user()
+        if not employee:
+            frappe.throw(_("Employee record not found"))
+        
+        if isinstance(settings, str):
+            settings = json.loads(settings)
+        
+        frappe.db.set_value("Employee", employee, {
+            "custom_notifications_enabled": settings.get("notifications_enabled", True),
+            "custom_project_reminders": settings.get("project_reminders", True),
+            "custom_attendance_reminders": settings.get("attendance_reminders", True)
+        })
+        
+        frappe.db.commit()
+        
+        return {
+            "status": "success",
+            "message": "Notification settings updated"
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Update Notification Settings Error: {str(e)}")
+        frappe.throw(_("Failed to update notification settings: {0}").format(str(e)))
+
+
+# ============================================================================
+# NOTIFICATION SCHEDULER
+# ============================================================================
+
+def send_project_log_reminders():
+    """Send hourly project log reminders during office hours (10 AM - 7 PM)."""
+    try:
+        import datetime
+        current_time = datetime.datetime.now()
+        current_hour = current_time.hour
+        
+        # Only send during office hours (10 AM to 7 PM) on weekdays
+        if current_hour < 10 or current_hour > 19:
+            return
+        
+        # Check if it's a weekday (Monday=0, Sunday=6)
+        if current_time.weekday() > 4:  # Saturday=5, Sunday=6
+            return
+        
+        # Get all active employees with project assignments
+        project_employees = frappe.db.sql("""
+            SELECT DISTINCT pm.employee, e.employee_name
+            FROM `tabProject Member` pm
+            JOIN `tabEmployee` e ON pm.employee = e.name
+            WHERE e.status = 'Active' 
+            AND COALESCE(pm.active, 1) = 1
+            AND e.custom_notifications_enabled = 1
+            AND e.custom_project_reminders = 1
+        """, as_dict=True)
+        
+        if not project_employees:
+            return
+        
+        # Get FCM tokens for these employees
+        employee_ids = [emp.employee for emp in project_employees]
+        tokens = []
+        
+        for emp_id in employee_ids:
+            emp_tokens = frappe.get_all("FCM Token", 
+                filters={"employee": emp_id}, 
+                pluck="token"
+            )
+            tokens.extend(emp_tokens)
+        
+        if tokens:
+            title = "Project Log Reminder"
+            message = f"Time to log your project activities! Don't forget to record what you've accomplished this hour."
+            
+            response = send_fcm_notification(tokens, title, message)
+            frappe.log_error(f"Project reminder sent to {len(tokens)} devices at {current_time}", "Project Reminder")
+            
+    except Exception as e:
+        frappe.log_error(f"Project Log Reminder Error: {str(e)}", "Notification Scheduler")
+
+
+def send_checkin_reminder():
+    """Send morning check-in reminder (9:30 AM)."""
+    try:
+        import datetime
+        current_time = datetime.datetime.now()
+        today = current_time.date()
+        
+        # Check if it's a weekday
+        if current_time.weekday() > 4:
+            return
+        
+        # Check if it's a holiday
+        holiday_lists = frappe.get_all("Holiday List", filters={"enabled": 1}, pluck="name")
+        is_holiday = False
+        
+        for holiday_list in holiday_lists:
+            if frappe.db.exists("Holiday", {"parent": holiday_list, "holiday_date": today}):
+                is_holiday = True
+                break
+        
+        if is_holiday:
+            return
+        
+        # Get employees who haven't checked in yet
+        employees_not_checked_in = frappe.db.sql("""
+            SELECT e.name, e.employee_name
+            FROM `tabEmployee` e
+            WHERE e.status = 'Active'
+            AND e.custom_notifications_enabled = 1
+            AND e.custom_attendance_reminders = 1
+            AND NOT EXISTS (
+                SELECT 1 FROM `tabAttendance` a
+                WHERE a.employee = e.name
+                AND a.attendance_date = %s
+                AND a.docstatus != 2
+            )
+        """, (today,), as_dict=True)
+        
+        if not employees_not_checked_in:
+            return
+        
+        # Get FCM tokens
+        employee_ids = [emp.name for emp in employees_not_checked_in]
+        tokens = []
+        
+        for emp_id in employee_ids:
+            emp_tokens = frappe.get_all("FCM Token", 
+                filters={"employee": emp_id}, 
+                pluck="token"
+            )
+            tokens.extend(emp_tokens)
+        
+        if tokens:
+            title = "Check-in Reminder"
+            message = "Good morning! Don't forget to check in when you arrive at the office."
+            
+            response = send_fcm_notification(tokens, title, message)
+            frappe.log_error(f"Check-in reminder sent to {len(tokens)} devices", "Attendance Reminder")
+            
+    except Exception as e:
+        frappe.log_error(f"Check-in Reminder Error: {str(e)}", "Notification Scheduler")
+
+
+def send_checkout_reminder():
+    """Send evening check-out reminder (6:30 PM)."""
+    try:
+        import datetime
+        current_time = datetime.datetime.now()
+        today = current_time.date()
+        
+        # Check if it's a weekday
+        if current_time.weekday() > 4:
+            return
+        
+        # Get employees who checked in but haven't checked out
+        employees_need_checkout = frappe.db.sql("""
+            SELECT e.name, e.employee_name, a.name as attendance_id
+            FROM `tabEmployee` e
+            JOIN `tabAttendance` a ON e.name = a.employee
+            WHERE e.status = 'Active'
+            AND e.custom_notifications_enabled = 1
+            AND e.custom_attendance_reminders = 1
+            AND a.attendance_date = %s
+            AND a.docstatus != 2
+            AND a.in_time IS NOT NULL
+            AND (a.out_time IS NULL AND a.custom_out_time_copy IS NULL)
+        """, (today,), as_dict=True)
+        
+        if not employees_need_checkout:
+            return
+        
+        # Get FCM tokens
+        employee_ids = [emp.name for emp in employees_need_checkout]
+        tokens = []
+        
+        for emp_id in employee_ids:
+            emp_tokens = frappe.get_all("FCM Token", 
+                filters={"employee": emp_id}, 
+                pluck="token"
+            )
+            tokens.extend(emp_tokens)
+        
+        if tokens:
+            title = "Check-out Reminder"
+            message = "Don't forget to check out before leaving the office!"
+            
+            response = send_fcm_notification(tokens, title, message)
+            frappe.log_error(f"Check-out reminder sent to {len(tokens)} devices", "Attendance Reminder")
+            
+    except Exception as e:
+        frappe.log_error(f"Check-out Reminder Error: {str(e)}", "Notification Scheduler")
+
+
+def send_attendance_reminders():
+    """Daily attendance reminder check."""
+    try:
+        # This function can be used for additional daily checks
+        # For now, we rely on cron jobs for specific times
+        pass
+    except Exception as e:
+        frappe.log_error(f"Daily Attendance Reminder Error: {str(e)}", "Notification Scheduler")
 
 
 # ============================================================================
@@ -3973,7 +4487,6 @@ def admin_task_logs(project=None, task=None, limit=500):
     """, vals, as_dict=True)
 
 
-# ---------------------- Employee Lists (Scoped) ----------------------
 @frappe.whitelist()
 def my_projects(q="", limit=200):
     """Get projects for current user."""
@@ -4034,7 +4547,7 @@ def my_tasks(project=None, status=None, limit=500):
     
     return frappe.db.sql(f"""
         select name, subject, project, status, priority, 
-               exp_start_date, exp_end_date, modified, progress
+        exp_start_date, exp_end_date, modified, progress
         from `tabTask`
         where {cond}
         order by modified desc 
@@ -4078,33 +4591,22 @@ def my_task_logs(project=None, task=None, limit=500):
     """, vals, as_dict=True)
 
 
-# ---------------------- Create Operations ----------------------
 @frappe.whitelist()
 def create_task(project, subject, description=None, exp_start_date=None, exp_end_date=None, priority=None):
     """Create a new task."""
     try:
-        if not project:
-            frappe.throw(_("Project is required"))
-        
-        if not subject:
-            frappe.throw(_("Task subject/title is required"))
+        if not project or not subject:
+            frappe.throw(_("Project and subject are required"))
         
         if not frappe.db.exists("Project", project):
-            frappe.throw(_("Project {0} does not exist").format(project))
+            frappe.throw(_("Project does not exist"))
         
         if not _is_priv():
             emp = _emp_of()
-            if not emp:
-                frappe.throw(_("No employee record found for current user"), frappe.PermissionError)
-            
-            is_member = frappe.db.exists("Project Member", {
-                "parent": project, 
-                "employee": emp, 
-                "active": 1
-            })
-            
-            if not is_member:
-                frappe.throw(_("You are not a member of this project"), frappe.PermissionError)
+            if not emp or not frappe.db.exists("Project Member", {
+                "parent": project, "employee": emp, "active": 1
+            }):
+                frappe.throw(_("Not permitted"), frappe.PermissionError)
         
         task = frappe.get_doc({
             "doctype": "Task",
@@ -4121,11 +4623,6 @@ def create_task(project, subject, description=None, exp_start_date=None, exp_end
         task.insert(ignore_permissions=True)
         frappe.db.commit()
         
-        frappe.log_error(
-            f"Task created: {task.name}",
-            f"Project: {project}, User: {frappe.session.user}"
-        )
-        
         return {
             "ok": True, 
             "task": task.name,
@@ -4133,11 +4630,8 @@ def create_task(project, subject, description=None, exp_start_date=None, exp_end
             "message": _("Task created successfully")
         }
         
-    except frappe.PermissionError as e:
-        frappe.log_error(f"Permission Error: {str(e)}", "Task Creation")
-        frappe.throw(str(e), frappe.PermissionError)
     except Exception as e:
-        frappe.log_error(f"Task Creation Error: {str(e)}", "Task Creation")
+        frappe.log_error(f"Task Creation Error: {str(e)}")
         frappe.throw(_("Failed to create task: {0}").format(str(e)))
 
 
@@ -4145,33 +4639,20 @@ def create_task(project, subject, description=None, exp_start_date=None, exp_end
 def add_task_log(task, description, log_time=None):
     """Add a task log entry."""
     try:
-        if not task:
-            frappe.throw(_("Task is required"))
-        
-        if not description or not description.strip():
-            frappe.throw(_("Log description is required"))
+        if not task or not description:
+            frappe.throw(_("Task and description are required"))
         
         if not frappe.db.exists("Task", task):
-            frappe.throw(_("Task {0} does not exist").format(task))
+            frappe.throw(_("Task does not exist"))
         
         project = frappe.db.get_value("Task", task, "project")
-        if not project:
-            frappe.throw(_("Invalid task - no project linked"))
-        
         emp = _emp_of()
         
         if not _is_priv():
-            if not emp:
-                frappe.throw(_("No employee record found"), frappe.PermissionError)
-            
-            is_member = frappe.db.exists("Project Member", {
-                "parent": project, 
-                "employee": emp, 
-                "active": 1
-            })
-            
-            if not is_member:
-                frappe.throw(_("You are not a member of this project"), frappe.PermissionError)
+            if not emp or not frappe.db.exists("Project Member", {
+                "parent": project, "employee": emp, "active": 1
+            }):
+                frappe.throw(_("Not permitted"), frappe.PermissionError)
         
         doc = frappe.get_doc({
             "doctype": "Task Log",
@@ -4192,15 +4673,11 @@ def add_task_log(task, description, log_time=None):
             "message": _("Log added successfully")
         }
         
-    except frappe.PermissionError as e:
-        frappe.log_error(f"Permission Error: {str(e)}", "Task Log")
-        frappe.throw(str(e), frappe.PermissionError)
     except Exception as e:
-        frappe.log_error(f"Task Log Error: {str(e)}", "Task Log")
+        frappe.log_error(f"Task Log Error: {str(e)}")
         frappe.throw(_("Failed to add task log: {0}").format(str(e)))
 
 
-# ---------------------- Project Summary ----------------------
 @frappe.whitelist()
 def my_project_summary(project, limit_tasks=200, limit_logs=200):
     """Get complete project summary."""
@@ -4210,7 +4687,7 @@ def my_project_summary(project, limit_tasks=200, limit_logs=200):
         if not emp or not frappe.db.exists("Project Member", {
             "parent": project, "employee": emp, "active": 1
         }):
-            frappe.throw(_("Not permitted."), frappe.PermissionError)
+            frappe.throw(_("Not permitted"), frappe.PermissionError)
 
     proj = frappe.db.get_value(
         "Project", project,

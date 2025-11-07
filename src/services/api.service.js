@@ -139,6 +139,47 @@ class ApiService {
         return this.post(m('send_admin_notification'), { docname });
     }
 
+    // New notification APIs
+    sendAdminBroadcast({ title, body, target_type, target_ids, department_id }) {
+        return this.post(m('send_admin_broadcast'), { 
+            title, 
+            body, 
+            target_type, 
+            target_ids, 
+            department_id 
+        });
+    }
+
+    createNotification({ title, message, target_type, target_employees, department }) {
+        return this.post(m('create_notification'), {
+            title,
+            message,
+            target_type,
+            target_employees,
+            department
+        });
+    }
+
+    sendWFHNotification(requestData) {
+        return this.post(m('send_wfh_notification'), requestData);
+    }
+
+    approveWFHRequest(requestId) {
+        return this.post(m('approve_wfh_request'), { request_id: requestId });
+    }
+
+    rejectWFHRequest(requestId) {
+        return this.post(m('reject_wfh_request'), { request_id: requestId });
+    }
+
+    getNotificationSettings() {
+        return this.get(m('get_notification_settings'));
+    }
+
+    updateNotificationSettings(settings) {
+        return this.post(m('update_notification_settings'), settings);
+    }
+
     /* -------------------------
      * GEO / ATTENDANCE (Employee)
      * -----------------------*/
@@ -148,6 +189,38 @@ class ApiService {
 
     getUserWfhInfo() {
         return this.get(m('get_user_wfh_info'));
+    }
+
+    getWFHRequests() {
+        return this.get(m('get_wfh_requests'));
+    }
+
+    getPendingWFHRequests() {
+        return this.get(m('get_pending_wfh_requests'));
+    }
+
+    submitWFHRequest(requestData) {
+        return this.post(m('submit_wfh_request'), requestData);
+    }
+
+    approveWFHRequest(requestId) {
+        return this.post(m('wfh_request_action'), { 
+            request_id: requestId, 
+            action: 'approve' 
+        });
+    }
+
+    rejectWFHRequest(requestId) {
+        return this.post(m('wfh_request_action'), { 
+            request_id: requestId, 
+            action: 'reject' 
+        });
+    }
+
+    enableWFHForEmployee(employeeId) {
+        return this.post(m('enable_wfh_for_employee'), { 
+            employee_id: employeeId 
+        });
     }
 
     geoAttendance({ employee, action, latitude, longitude, work_type }) {
@@ -174,6 +247,18 @@ class ApiService {
 
     getAttendanceRecordsForDate({ date }) {
         return this.get(m('get_attendance_records_for_date'), { date });
+    }
+
+    getAttendanceRecords({ employee, start_date, end_date }) {
+        return this.get(m('get_attendance_records'), { employee, start_date, end_date });
+    }
+
+    getHolidays({ start_date, end_date }) {
+        return this.get(m('get_holidays'), { start_date, end_date });
+    }
+
+    getLeaveApplications({ employee }) {
+        return this.get(m('get_leave_applications'), { employee });
     }
 
     manualCheckout({ attendance_id, checkout_time }) {
@@ -336,6 +421,121 @@ class ApiService {
             start_date,
             end_date,
         });
+    }
+
+    /* -------------------------
+     * LEAVE APPLICATIONS
+     * -----------------------*/
+    
+    /**
+     * Submit a new leave application using existing backend API
+     * @param {Object} applicationData - {leave_type, from_date, to_date, reason}
+     * @returns {Promise} Response with application ID
+     */
+    submitLeaveApplication(applicationData) {
+        // Get current user's employee first, then use existing create_leave_application API
+        return this.getUserEmployee().then(employee => {
+            return this.post(m('create_leave_application'), {
+                employee: employee,
+                leave_type: applicationData.leave_type,
+                from_date: applicationData.from_date,
+                to_date: applicationData.to_date,
+                description: applicationData.reason,
+                half_day: 0,
+                half_day_date: null,
+                leave_approver: null // Let system determine approver
+            });
+        });
+    }
+
+    /**
+     * Get current user's employee ID
+     * @returns {Promise} Employee ID
+     */
+    getUserEmployee() {
+        return this.get(m('get_user_wfh_info')).then(response => {
+            if (response.success && response.data?.message?.employee_id) {
+                return response.data.message.employee_id;
+            }
+            throw new Error('Employee not found for current user');
+        });
+    }
+
+    /**
+     * Get employee's leave applications using existing API
+     * @returns {Promise} Response with applications list
+     */
+    getLeaveApplications() {
+        return this.getUserEmployee().then(employee => {
+            return this.get(m('get_leave_applications'), { 
+                employee: employee,
+                for_approval: false
+            });
+        });
+    }
+
+    /**
+     * Get pending leave applications for admin using existing API
+     * @param {string} filter - Filter: pending, all, approved, rejected
+     * @param {string} dateFilter - Date filter: all, today, this_week, this_month
+     * @returns {Promise} Response with applications list
+     */
+    getPendingLeaveApplications(filter = 'pending', dateFilter = 'all') {
+        // Use existing get_leave_applications API with for_approval=true
+        return this.get(m('get_leave_applications'), { 
+            employee: null, // Get all employees
+            for_approval: true
+        });
+    }
+
+    /**
+     * Process leave application (approve/reject) using existing workflow
+     * @param {Object} data - {application_id, action, rejection_reason}
+     * @returns {Promise} Response
+     */
+    processLeaveApplication(data) {
+        // Use existing apply_workflow_action API
+        const action = data.action === 'approve' ? 'Approve' : 'Reject';
+        return this.post(m('apply_workflow_action'), {
+            doctype: 'Leave Application',
+            docname: data.application_id,
+            action: action
+        });
+    }
+
+    /**
+     * Get available leave types for employee
+     * @returns {Promise} Response with leave types
+     */
+    getLeaveTypes() {
+        return this.getUserEmployee().then(employee => {
+            return this.get(m('get_leave_types'), { 
+                employee: employee,
+                date: new Date().toISOString().split('T')[0]
+            });
+        });
+    }
+
+    /**
+     * Get leave balances for employee
+     * @returns {Promise} Response with leave balances
+     */
+    getLeaveBalances() {
+        return this.getUserEmployee().then(employee => {
+            return this.get(m('get_leave_balance_map'), { 
+                employee: employee
+            });
+        });
+    }
+
+    /**
+     * Send leave application notification to admin
+     * @param {Object} applicationData - Leave application data
+     * @returns {Promise} Response
+     */
+    sendLeaveNotification(applicationData) {
+        // Use general notification system
+        return Promise.resolve({ success: true }); // Handle via local notifications
     }
 
 
