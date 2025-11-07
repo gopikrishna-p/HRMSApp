@@ -3097,8 +3097,16 @@ def save_fcm_token(token, device_type):
         frappe.throw(_("Failed to save FCM token: {0}").format(str(e)))
 
 
-def send_fcm_notification(tokens, title, body):
-    """Send FCM notification to multiple tokens."""
+def send_fcm_notification(tokens, title, body, data=None, notification_tag=None):
+    """Send FCM notification to multiple tokens with optional data payload.
+    
+    Args:
+        tokens: List of FCM tokens or single token string
+        title: Notification title
+        body: Notification body
+        data: Optional dict of custom data
+        notification_tag: Optional tag for notification grouping/replacement
+    """
     if not tokens:
         frappe.log_error("FCM Send Error", "No tokens provided")
         return {"success_count": 0, "failure_count": 0, "message": "No tokens provided"}
@@ -3114,9 +3122,34 @@ def send_fcm_notification(tokens, title, body):
     
     frappe.log_error(f"Attempting to send notification to {len(tokens)} tokens", f"Title: {title}, Body: {body}")
     
+    # Add unique message ID and timestamp for deduplication
+    import time
+    import uuid
+    notification_data = data or {}
+    notification_data.update({
+        "notification_id": str(uuid.uuid4()),
+        "timestamp": str(int(time.time())),
+        "type": "hrms_notification"
+    })
+    
+    # Create messages with notification payload
     messages = [messaging.Message(
-        notification=messaging.Notification(title=title, body=body),
-        token=token
+        notification=messaging.Notification(
+            title=title,
+            body=body
+        ),
+        data={k: str(v) for k, v in notification_data.items()},
+        token=token,
+        android=messaging.AndroidConfig(
+            priority='high',
+            notification=messaging.AndroidNotification(
+                sound='default',
+                priority='high',
+                default_vibrate_timings=True,
+                tag=notification_tag or str(uuid.uuid4())[:8],  # Tag for notification replacement
+                notification_count=1
+            )
+        )
     ) for token in tokens]
     
     try:
@@ -4199,35 +4232,39 @@ def send_project_log_reminders():
         
         # Get all active employees with project assignments
         project_employees = frappe.db.sql("""
-            SELECT DISTINCT pm.employee, e.employee_name
-            FROM `tabProject Member` pm
-            JOIN `tabEmployee` e ON pm.employee = e.name
+            SELECT DISTINCT e.name, e.employee_name, e.user_id
+            FROM `tabEmployee` e
             WHERE e.status = 'Active' 
-            AND COALESCE(pm.active, 1) = 1
-            AND e.custom_notifications_enabled = 1
-            AND e.custom_project_reminders = 1
+            AND e.user_id IS NOT NULL
+            AND e.user_id != ''
+            AND EXISTS (
+                SELECT 1 FROM `tabProject Member` pm
+                WHERE pm.employee = e.name
+            )
         """, as_dict=True)
         
         if not project_employees:
+            frappe.log_error("No employees with project assignments found", "Project Reminder")
             return
         
-        # Get FCM tokens for these employees
-        employee_ids = [emp.employee for emp in project_employees]
+        # Get FCM tokens using Mobile Device table
         tokens = []
-        
-        for emp_id in employee_ids:
-            emp_tokens = frappe.get_all("FCM Token", 
-                filters={"employee": emp_id}, 
-                pluck="token"
-            )
-            tokens.extend(emp_tokens)
+        for emp in project_employees:
+            if emp.user_id:
+                emp_tokens = frappe.get_all("Mobile Device", 
+                    filters={"user": emp.user_id}, 
+                    pluck="fcm_token"
+                )
+                tokens.extend([t for t in emp_tokens if t])  # Filter out None/empty tokens
         
         if tokens:
             title = "Project Log Reminder"
             message = f"Time to log your project activities! Don't forget to record what you've accomplished this hour."
             
             response = send_fcm_notification(tokens, title, message)
-            frappe.log_error(f"Project reminder sent to {len(tokens)} devices at {current_time}", "Project Reminder")
+            frappe.log_error(f"✅ Project reminder sent to {len(tokens)} devices at {current_time}", "Project Reminder")
+        else:
+            frappe.log_error(f"No FCM tokens found for {len(project_employees)} project employees", "Project Reminder")
             
     except Exception as e:
         frappe.log_error(f"Project Log Reminder Error: {str(e)}", "Notification Scheduler")

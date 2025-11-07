@@ -269,17 +269,14 @@ scheduler_events = {
 		"hrms.hr.utils.allocate_earned_leaves",
 	],
 	"cron": {
-        "0 10 * * *": ["hrms.api.send_checkin_reminder"],  # 10 AM daily
-        # "* 19 * * *": ["hrms.api.send_checkout_reminder"],  # 7 PM daily
-        # "*/5 * * * *": ["hrms.api.process_scheduled_notifications"],  # Every 5 minutes
-        "30 9 * * 1-5": [
-			"hrms.api.send_checkin_reminder"
+		"30 9 * * 1-5": [
+			"hrms.api.send_checkin_reminder"  # 9:30 AM Monday-Friday
 		],
 		"30 18 * * 1-5": [
-			"hrms.api.send_checkout_reminder"
+			"hrms.api.send_checkout_reminder"  # 6:30 PM Monday-Friday
 		],
 		"0 10-19 * * 1-5": [
-			"hrms.api.send_project_log_reminders"
+			"hrms.api.send_project_log_reminders"  # Hourly 10 AM-7 PM Monday-Friday
 		]
 	},
 	"weekly": ["hrms.controllers.employee_reminders.send_reminders_in_advance_weekly"],
