@@ -1,3 +1,4 @@
+#Actual file name /home/gcp_user/frappe-bench-v15/apps/hrms/hrms/api/__init__.py
 import frappe
 from frappe import _
 from frappe.model import get_permitted_fields
@@ -62,6 +63,17 @@ def get_current_employee_info() -> dict:
 		as_dict=True,
 	)
 	return employee
+
+
+def get_employee_by_user():
+	"""Helper function to get employee ID for current user."""
+	current_user = frappe.session.user
+	employee_id = frappe.db.get_value(
+		"Employee",
+		{"user_id": current_user, "status": "Active"},
+		"name"
+	)
+	return employee_id
 
 
 @frappe.whitelist()
@@ -3807,14 +3819,16 @@ def create_notification(title, message, target_type, target_employees=None, depa
         if not target_emp_list:
             frappe.throw(_("No target employees found"))
         
-        # Get FCM tokens for target employees
+        # Get FCM tokens for target employees using Mobile Device table
         tokens = []
         for emp_id in target_emp_list:
-            emp_tokens = frappe.get_all("FCM Token", 
-                filters={"employee": emp_id}, 
-                pluck="token"
-            )
-            tokens.extend(emp_tokens)
+            user_id = frappe.get_value("Employee", emp_id, "user_id")
+            if user_id:
+                emp_tokens = frappe.get_all("Mobile Device", 
+                    filters={"user": user_id}, 
+                    pluck="fcm_token"
+                )
+                tokens.extend([t for t in emp_tokens if t])
         
         # Send FCM notification
         if tokens:
@@ -3859,6 +3873,29 @@ def submit_wfh_request(request_type, from_date, to_date, reason):
         if not employee:
             frappe.throw(_("Employee record not found"), frappe.PermissionError)
         
+        # Convert dates
+        from_date = getdate(from_date)
+        to_date = getdate(to_date)
+        
+        # Check for overlapping requests (same employee, overlapping dates, pending/approved)
+        overlapping = frappe.db.sql("""
+            SELECT name, from_date, to_date, status
+            FROM `tabWork From Home Request`
+            WHERE employee = %s
+            AND status IN ('Pending', 'Approved')
+            AND (
+                (from_date <= %s AND to_date >= %s) OR
+                (from_date <= %s AND to_date >= %s) OR
+                (from_date >= %s AND to_date <= %s)
+            )
+        """, (employee, from_date, from_date, to_date, to_date, from_date, to_date), as_dict=True)
+        
+        if overlapping:
+            frappe.throw(_(
+                "You already have a WFH request for overlapping dates: "
+                f"{overlapping[0].from_date} to {overlapping[0].to_date} ({overlapping[0].status})"
+            ))
+        
         # Create WFH request document
         wfh_request = frappe.get_doc({
             "doctype": "Work From Home Request",
@@ -3870,7 +3907,7 @@ def submit_wfh_request(request_type, from_date, to_date, reason):
             "status": "Pending"
         })
         
-        wfh_request.insert()
+        wfh_request.insert(ignore_permissions=True)
         frappe.db.commit()
         
         # Notify admins/HR managers
@@ -3884,16 +3921,14 @@ def submit_wfh_request(request_type, from_date, to_date, reason):
         
         admin_users = list(set(admin_users))  # Remove duplicates
         
-        # Get admin FCM tokens
+        # Get admin FCM tokens from Mobile Device table
         admin_tokens = []
         for user in admin_users:
-            emp_id = frappe.get_value("Employee", {"user_id": user}, "name")
-            if emp_id:
-                tokens = frappe.get_all("FCM Token", 
-                    filters={"employee": emp_id}, 
-                    pluck="token"
-                )
-                admin_tokens.extend(tokens)
+            tokens = frappe.get_all("Mobile Device", 
+                filters={"user": user}, 
+                pluck="fcm_token"
+            )
+            admin_tokens.extend([t for t in tokens if t])  # Filter out None/empty
         
         # Send notification to admins
         if admin_tokens:
@@ -3910,10 +3945,58 @@ def submit_wfh_request(request_type, from_date, to_date, reason):
             "name": wfh_request.name
         }
         
+    except frappe.DuplicateEntryError:
+        frappe.log_error("Duplicate WFH request entry detected", "WFH Request Error")
+        frappe.throw(_("A WFH request with similar details already exists. Please try again."))
     except Exception as e:
-        frappe.log_error(f"Submit WFH Request Error: {str(e)}")
-        frappe.throw(_("Failed to submit WFH request: {0}").format(str(e)))
+        error_msg = str(e)[:100]
+        frappe.log_error(f"WFH Error: {error_msg}", "WFH Request")
+        frappe.throw(_("Failed to submit WFH request. Please try again or contact support."))
 
+@frappe.whitelist()
+def delete_wfh_request(request_id):
+    """Delete a WFH request (only for pending requests by the owner)."""
+    try:
+        if not request_id:
+            frappe.throw(_("Request ID is required"))
+        
+        if not frappe.db.exists("Work From Home Request", request_id):
+            frappe.throw(_("WFH request not found"))
+        
+        # Get the WFH request
+        wfh_request = frappe.get_doc("Work From Home Request", request_id)
+        
+        # Get current user's employee ID
+        current_user = frappe.session.user
+        employee_id = frappe.db.get_value(
+            "Employee",
+            {"user_id": current_user, "status": "Active"},
+            "name"
+        )
+        
+        # Check if user is the owner or has admin permissions
+        is_admin = any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"])
+        is_owner = (employee_id == wfh_request.employee)
+        
+        if not (is_owner or is_admin):
+            frappe.throw(_("You do not have permission to delete this request"), frappe.PermissionError)
+        
+        # Only allow deletion of pending requests
+        if wfh_request.status != "Pending":
+            frappe.throw(_("Only pending requests can be deleted"))
+        
+        # Delete the request
+        frappe.delete_doc("Work From Home Request", request_id, ignore_permissions=True)
+        frappe.db.commit()
+        
+        return {
+            "status": "success",
+            "message": "WFH request deleted successfully"
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Delete WFH Request Error: {str(e)}")
+        frappe.throw(_("Failed to delete WFH request: {0}").format(str(e)))
 
 @frappe.whitelist()
 def get_wfh_requests():
@@ -4061,6 +4144,66 @@ def enable_wfh_for_employee():
         frappe.throw(_("Failed to enable WFH: {0}").format(str(e)))
 
 
+@frappe.whitelist()
+def delete_wfh_request():
+    """Delete a Work From Home request (only if status is Pending and user is the creator)."""
+    try:
+        request_id = frappe.form_dict.get('request_id')
+        
+        if not request_id:
+            frappe.throw(_("Request ID is required"))
+        
+        # Get the WFH request
+        wfh_request = frappe.get_doc("Work From Home Request", request_id)
+        
+        # Get employee record for current user
+        employee = get_employee_by_user()
+        
+        # Security checks
+        if wfh_request.employee != employee:
+            frappe.throw(_("You can only delete your own WFH requests"))
+            
+        if wfh_request.status != "Pending":
+            frappe.throw(_("Only pending requests can be deleted"))
+        
+        # Delete the request
+        frappe.delete_doc("Work From Home Request", request_id)
+        frappe.db.commit()
+        
+        return {
+            "success": True,
+            "message": "WFH request deleted successfully"
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Delete WFH Request Error: {str(e)}")
+        frappe.throw(_("Failed to delete request: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_all_wfh_requests_admin():
+    """Get all Work From Home requests across all statuses for admin users."""
+    try:
+        # Check if user has admin permissions
+        if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
+            frappe.throw(_("You do not have permission to view all WFH requests"), frappe.PermissionError)
+        
+        # Fetch all requests (no status filter)
+        requests = frappe.get_all("Work From Home Request",
+            fields=[
+                "name", "employee", "employee_name", "from_date", "to_date", 
+                "reason", "status", "approved_by", "creation", "modified"
+            ],
+            order_by="creation desc"
+        )
+        
+        return requests
+        
+    except Exception as e:
+        frappe.log_error(f"Get All WFH Requests Admin Error: {str(e)}")
+        return []
+
+
 
 
 @frappe.whitelist(allow_guest=False)
@@ -4074,17 +4217,21 @@ def approve_wfh_request(request_id):
         wfh_request.status = "Approved"
         wfh_request.approved_by = frappe.session.user
         wfh_request.approval_date = now_datetime()
-        wfh_request.save()
+        wfh_request.save(ignore_permissions=True)
         
         # Enable WFH for employee during the approved period
         employee = wfh_request.employee
         frappe.db.set_value("Employee", employee, "custom_wfh_enabled", 1)
         
-        # Notify employee
-        emp_tokens = frappe.get_all("FCM Token", 
-            filters={"employee": employee}, 
-            pluck="token"
-        )
+        # Notify employee using Mobile Device table
+        user_id = frappe.get_value("Employee", employee, "user_id")
+        emp_tokens = []
+        if user_id:
+            emp_tokens = frappe.get_all("Mobile Device", 
+                filters={"user": user_id}, 
+                pluck="fcm_token"
+            )
+            emp_tokens = [t for t in emp_tokens if t]
         
         if emp_tokens:
             emp_name = frappe.get_value("Employee", employee, "employee_name")
@@ -4116,14 +4263,18 @@ def reject_wfh_request(request_id):
         wfh_request.status = "Rejected"
         wfh_request.approved_by = frappe.session.user
         wfh_request.approval_date = now_datetime()
-        wfh_request.save()
+        wfh_request.save(ignore_permissions=True)
         
-        # Notify employee
+        # Notify employee using Mobile Device table
         employee = wfh_request.employee
-        emp_tokens = frappe.get_all("FCM Token", 
-            filters={"employee": employee}, 
-            pluck="token"
-        )
+        user_id = frappe.get_value("Employee", employee, "user_id")
+        emp_tokens = []
+        if user_id:
+            emp_tokens = frappe.get_all("Mobile Device", 
+                filters={"user": user_id}, 
+                pluck="fcm_token"
+            )
+            emp_tokens = [t for t in emp_tokens if t]
         
         if emp_tokens:
             title = "WFH Request Rejected"

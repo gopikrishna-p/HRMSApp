@@ -8,6 +8,7 @@ import {
     RefreshControl,
     Alert,
     ActivityIndicator,
+    Modal,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { colors } from '../../theme/colors';
@@ -25,29 +26,66 @@ try {
 const WFHApprovalsScreen = ({ navigation }) => {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [requests, setRequests] = useState([]);
+    const [pendingRequests, setPendingRequests] = useState([]);
+    const [historyRequests, setHistoryRequests] = useState([]);
+    const [allHistoryRequests, setAllHistoryRequests] = useState([]); // Unfiltered history
     const [processingRequest, setProcessingRequest] = useState(null);
+    const [activeTab, setActiveTab] = useState('pending'); // 'pending', 'history'
+    const [selectedDateFilter, setSelectedDateFilter] = useState('all'); // 'all', 'today', 'week', 'month'
+    const [showDateFilterModal, setShowDateFilterModal] = useState(false);
 
     useEffect(() => {
-        loadPendingRequests();
+        loadRequests();
     }, []);
 
-    const loadPendingRequests = async (isRefresh = false) => {
+    const loadRequests = async (isRefresh = false) => {
         try {
             isRefresh ? setRefreshing(true) : setLoading(true);
-            const response = await ApiService.getPendingWFHRequests();
             
-            if (response.success && response.data?.message) {
-                setRequests(response.data.message);
-            } else {
-                showToast({
-                    type: 'error',
-                    text1: 'Error',
-                    text2: 'Failed to load WFH requests',
-                });
+            console.log('📥 Loading WFH requests...');
+            
+            // Load pending requests
+            const pendingResponse = await ApiService.getPendingWFHRequests();
+            console.log('📋 Pending requests response:', pendingResponse);
+            
+            let pendingData = [];
+            if (pendingResponse.success) {
+                if (pendingResponse.data?.message && Array.isArray(pendingResponse.data.message)) {
+                    pendingData = pendingResponse.data.message;
+                } else if (Array.isArray(pendingResponse.data)) {
+                    pendingData = pendingResponse.data;
+                }
             }
+            
+            console.log('✅ Loaded pending requests:', pendingData.length);
+            setPendingRequests(pendingData);
+            
+            // Load all requests for history (approved/rejected)
+            const allResponse = await ApiService.getAllWFHRequestsForAdmin();
+            console.log('📋 All requests response:', allResponse);
+            
+            let historyData = [];
+            if (allResponse.success) {
+                let allData = [];
+                if (allResponse.data?.message && Array.isArray(allResponse.data.message)) {
+                    allData = allResponse.data.message;
+                } else if (Array.isArray(allResponse.data)) {
+                    allData = allResponse.data;
+                }
+                
+                // Filter to only approved and rejected
+                historyData = allData.filter(req => 
+                    req.status?.toLowerCase() === 'approved' || 
+                    req.status?.toLowerCase() === 'rejected'
+                );
+            }
+            
+            console.log('✅ Loaded history requests:', historyData.length);
+            setAllHistoryRequests(historyData); // Store all history
+            applyDateFilter(historyData, selectedDateFilter); // Apply current filter
+            
         } catch (error) {
-            console.error('Error loading pending WFH requests:', error);
+            console.error('❌ Error loading WFH requests:', error);
             showToast({
                 type: 'error',
                 text1: 'Error',
@@ -56,6 +94,71 @@ const WFHApprovalsScreen = ({ navigation }) => {
         } finally {
             isRefresh ? setRefreshing(false) : setLoading(false);
         }
+    };
+
+    const applyDateFilter = (data, filter) => {
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        
+        let filtered = data;
+        
+        if (filter === 'today') {
+            filtered = data.filter(req => {
+                const modifiedDate = new Date(req.modified);
+                const reqDate = new Date(modifiedDate.getFullYear(), modifiedDate.getMonth(), modifiedDate.getDate());
+                return reqDate.getTime() === today.getTime();
+            });
+        } else if (filter === 'week') {
+            const weekAgo = new Date(today);
+            weekAgo.setDate(weekAgo.getDate() - 7);
+            filtered = data.filter(req => {
+                const modifiedDate = new Date(req.modified);
+                return modifiedDate >= weekAgo;
+            });
+        } else if (filter === 'month') {
+            const monthAgo = new Date(today);
+            monthAgo.setMonth(monthAgo.getMonth() - 1);
+            filtered = data.filter(req => {
+                const modifiedDate = new Date(req.modified);
+                return modifiedDate >= monthAgo;
+            });
+        }
+        
+        setHistoryRequests(filtered);
+    };
+
+    const handleDateFilterChange = (filter) => {
+        setSelectedDateFilter(filter);
+        applyDateFilter(allHistoryRequests, filter);
+        setShowDateFilterModal(false);
+    };
+
+    const getDateFilterLabel = () => {
+        switch (selectedDateFilter) {
+            case 'today':
+                return 'Today';
+            case 'week':
+                return 'Last 7 Days';
+            case 'month':
+                return 'Last Month';
+            default:
+                return 'All Time';
+        }
+    };
+
+    const getFilteredRequests = () => {
+        if (activeTab === 'pending') {
+            return pendingRequests;
+        } else {
+            return historyRequests;
+        }
+    };
+
+    const getTabCounts = () => {
+        return {
+            pending: pendingRequests.length,
+            history: historyRequests.length,
+        };
     };
 
     const handleApproveRequest = async (request) => {
@@ -92,14 +195,21 @@ const WFHApprovalsScreen = ({ navigation }) => {
         try {
             setProcessingRequest(requestId);
             
+            console.log(`📤 Processing ${action} for request:`, requestId);
             let response;
             if (action === 'approve') {
                 response = await ApiService.approveWFHRequest(requestId);
             } else {
                 response = await ApiService.rejectWFHRequest(requestId);
             }
+            console.log(`📥 ${action} response:`, response);
 
-            if (response.success) {
+            // Handle nested response format:
+            // { success: true, data: { message: { success: true, message: '...' } } }
+            const backendData = response.data?.message || response.data || {};
+            const isSuccess = response.success && (backendData.success === true || backendData.status === 'success');
+            
+            if (isSuccess) {
                 // Send notification to employee
                 if (NotificationService) {
                     try {
@@ -109,45 +219,51 @@ const WFHApprovalsScreen = ({ navigation }) => {
                             action === 'approve' ? 'Your WFH request has been approved' : 'Your WFH request has been rejected'
                         );
                     } catch (error) {
-                        console.warn('Failed to send notification:', error);
+                        console.warn('⚠️ Failed to send notification:', error);
                     }
                 }
 
-                // Remove from list
-                setRequests(requests.filter(req => req.name !== requestId));
+                // Remove from list and reload to get updated data
+                await loadRequests(true);
                 
                 showToast({
                     type: 'success',
                     text1: action === 'approve' ? 'Approved' : 'Rejected',
-                    text2: `WFH request has been ${action === 'approve' ? 'approved' : 'rejected'}`,
+                    text2: backendData.message || `WFH request has been ${action === 'approve' ? 'approved' : 'rejected'}`,
                 });
 
                 // If approved, automatically enable WFH for employee
                 if (action === 'approve') {
                     try {
-                        await ApiService.enableWFHForEmployee(requestData.employee);
-                        showToast({
-                            type: 'info',
-                            text1: 'WFH Enabled',
-                            text2: `WFH has been automatically enabled for ${requestData.employee_name}`,
-                        });
+                        console.log('🔧 Auto-enabling WFH for employee:', requestData.employee);
+                        const enableResponse = await ApiService.enableWFHForEmployee(requestData.employee);
+                        console.log('✅ Enable WFH response:', enableResponse);
+                        
+                        const enableData = enableResponse.data?.message || enableResponse.data || {};
+                        if (enableResponse.success && (enableData.success === true || enableData.status === 'success')) {
+                            showToast({
+                                type: 'info',
+                                text1: 'WFH Enabled',
+                                text2: enableData.message || `WFH has been enabled for ${requestData.employee_name}`,
+                            });
+                        }
                     } catch (error) {
-                        console.warn('Failed to auto-enable WFH:', error);
+                        console.warn('⚠️ Failed to auto-enable WFH:', error);
                     }
                 }
             } else {
                 showToast({
                     type: 'error',
                     text1: 'Error',
-                    text2: response.message || `Failed to ${action} request`,
+                    text2: backendData.message || response.message || `Failed to ${action} request`,
                 });
             }
         } catch (error) {
-            console.error(`Error ${action}ing request:`, error);
+            console.error(`❌ Error ${action}ing request:`, error);
             showToast({
                 type: 'error',
                 text1: 'Error',
-                text2: `Failed to ${action} request`,
+                text2: error.message || `Failed to ${action} request`,
             });
         } finally {
             setProcessingRequest(null);
@@ -175,25 +291,59 @@ const WFHApprovalsScreen = ({ navigation }) => {
         }
     };
 
+    const getStatusColor = (status) => {
+        switch (status?.toLowerCase()) {
+            case 'approved':
+                return '#10B981';
+            case 'rejected':
+                return '#EF4444';
+            case 'pending':
+            default:
+                return '#F59E0B';
+        }
+    };
+
+    const getStatusIcon = (status) => {
+        switch (status?.toLowerCase()) {
+            case 'approved':
+                return 'check-circle';
+            case 'rejected':
+                return 'times-circle';
+            case 'pending':
+            default:
+                return 'clock';
+        }
+    };
+
     const renderRequestItem = ({ item }) => {
         const { icon, color } = getRequestTypeIcon(item.from_date, item.to_date);
         const isProcessing = processingRequest === item.name;
+        const isPending = item.status?.toLowerCase() === 'pending';
+        const statusColor = getStatusColor(item.status);
+        const statusIcon = getStatusIcon(item.status);
 
         return (
             <View style={styles.requestCard}>
+                {/* Header Row */}
                 <View style={styles.requestHeader}>
                     <View style={styles.employeeInfo}>
-                        <Icon name="user" size={16} color={colors.textSecondary} />
-                        <Text style={styles.employeeName}>{item.employee_name}</Text>
+                        <View style={[styles.typeIndicator, { backgroundColor: color }]}>
+                            <Icon name={icon} size={10} color="white" />
+                        </View>
+                        <Text style={styles.employeeName} numberOfLines={1}>{item.employee_name}</Text>
                     </View>
-                    <View style={[styles.typeIndicator, { backgroundColor: color }]}>
-                        <Icon name={icon} size={12} color="white" />
-                    </View>
+                    {!isPending && (
+                        <View style={[styles.statusBadge, { backgroundColor: statusColor }]}>
+                            <Icon name={statusIcon} size={9} color="white" />
+                            <Text style={styles.statusText}>{item.status}</Text>
+                        </View>
+                    )}
                 </View>
 
+                {/* Date and Details Row */}
                 <View style={styles.requestDetails}>
-                    <View style={styles.dateInfo}>
-                        <Icon name="calendar" size={14} color={colors.textSecondary} />
+                    <View style={styles.infoRow}>
+                        <Icon name="calendar" size={12} color={colors.textSecondary} />
                         <Text style={styles.dateText}>
                             {item.from_date === item.to_date
                                 ? formatDate(item.from_date)
@@ -203,66 +353,66 @@ const WFHApprovalsScreen = ({ navigation }) => {
                     </View>
                     
                     {item.reason && (
-                        <View style={styles.reasonInfo}>
-                            <Icon name="comment" size={14} color={colors.textSecondary} />
-                            <Text style={styles.reasonText} numberOfLines={2}>
+                        <View style={styles.infoRow}>
+                            <Icon name="comment" size={12} color={colors.textSecondary} />
+                            <Text style={styles.reasonText} numberOfLines={1}>
                                 {item.reason}
                             </Text>
                         </View>
                     )}
-                    
-                    <View style={styles.timestampInfo}>
-                        <Icon name="clock" size={14} color={colors.textSecondary} />
-                        <Text style={styles.timestampText}>
-                            Requested on {formatDate(item.creation)}
-                        </Text>
+                </View>
+
+                {isPending && (
+                    <View style={styles.actionButtons}>
+                        <TouchableOpacity
+                            style={[styles.actionButton, styles.rejectButton]}
+                            onPress={() => handleRejectRequest(item)}
+                            disabled={isProcessing}
+                        >
+                            {isProcessing ? (
+                                <ActivityIndicator size="small" color="white" />
+                            ) : (
+                                <>
+                                    <Icon name="times" size={16} color="white" />
+                                    <Text style={styles.actionButtonText}>Reject</Text>
+                                </>
+                            )}
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[styles.actionButton, styles.approveButton]}
+                            onPress={() => handleApproveRequest(item)}
+                            disabled={isProcessing}
+                        >
+                            {isProcessing ? (
+                                <ActivityIndicator size="small" color="white" />
+                            ) : (
+                                <>
+                                    <Icon name="check" size={16} color="white" />
+                                    <Text style={styles.actionButtonText}>Approve</Text>
+                                </>
+                            )}
+                        </TouchableOpacity>
                     </View>
-                </View>
-
-                <View style={styles.actionButtons}>
-                    <TouchableOpacity
-                        style={[styles.actionButton, styles.rejectButton]}
-                        onPress={() => handleRejectRequest(item)}
-                        disabled={isProcessing}
-                    >
-                        {isProcessing ? (
-                            <ActivityIndicator size="small" color="white" />
-                        ) : (
-                            <>
-                                <Icon name="times" size={16} color="white" />
-                                <Text style={styles.actionButtonText}>Reject</Text>
-                            </>
-                        )}
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={[styles.actionButton, styles.approveButton]}
-                        onPress={() => handleApproveRequest(item)}
-                        disabled={isProcessing}
-                    >
-                        {isProcessing ? (
-                            <ActivityIndicator size="small" color="white" />
-                        ) : (
-                            <>
-                                <Icon name="check" size={16} color="white" />
-                                <Text style={styles.actionButtonText}>Approve</Text>
-                            </>
-                        )}
-                    </TouchableOpacity>
-                </View>
+                )}
             </View>
         );
     };
 
-    const renderEmptyState = () => (
-        <View style={styles.emptyState}>
-            <Icon name="clipboard-check" size={64} color={colors.textSecondary} />
-            <Text style={styles.emptyTitle}>No Pending Requests</Text>
-            <Text style={styles.emptySubtitle}>
-                All WFH requests have been reviewed
-            </Text>
-        </View>
-    );
+    const renderEmptyState = () => {
+        const message = activeTab === 'pending' ? 'No pending WFH requests' : 'No request history yet';
+        const subtitle = activeTab === 'pending' 
+            ? 'All WFH requests have been reviewed' 
+            : 'Approved and rejected requests will appear here';
+        
+        return (
+            <View style={styles.emptyState}>
+                <Icon name="clipboard-check" size={64} color={colors.textSecondary} />
+                <Text style={styles.emptyTitle}>{message}</Text>
+                <Text style={styles.emptySubtitle}>{subtitle}</Text>
+            </View>
+        );
+    };
 
     if (loading) {
         return (
@@ -275,22 +425,161 @@ const WFHApprovalsScreen = ({ navigation }) => {
 
     return (
         <View style={styles.container}>
-            <View style={styles.header}>
-                <Text style={styles.title}>WFH Approvals</Text>
-                <Text style={styles.subtitle}>
-                    {requests.length} pending request{requests.length !== 1 ? 's' : ''}
-                </Text>
+            {/* Tab Navigation */}
+            <View style={styles.tabContainer}>
+                <TouchableOpacity
+                    style={[styles.tab, activeTab === 'pending' && styles.tabActive]}
+                    onPress={() => setActiveTab('pending')}
+                >
+                    <Icon
+                        name="clock"
+                        size={16}
+                        color={activeTab === 'pending' ? colors.primary : colors.textSecondary}
+                    />
+                    <Text style={[styles.tabText, activeTab === 'pending' && styles.tabTextActive]}>
+                        Pending
+                    </Text>
+                    {getTabCounts().pending > 0 && (
+                        <View style={styles.badge}>
+                            <Text style={styles.badgeText}>{getTabCounts().pending}</Text>
+                        </View>
+                    )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={[styles.tab, activeTab === 'history' && styles.tabActive]}
+                    onPress={() => setActiveTab('history')}
+                >
+                    <Icon
+                        name="history"
+                        size={16}
+                        color={activeTab === 'history' ? colors.primary : colors.textSecondary}
+                    />
+                    <Text style={[styles.tabText, activeTab === 'history' && styles.tabTextActive]}>
+                        History
+                    </Text>
+                </TouchableOpacity>
             </View>
 
+            {/* Date Filter for History Tab */}
+            {activeTab === 'history' && (
+                <View style={styles.filterContainer}>
+                    <TouchableOpacity 
+                        style={styles.filterButton}
+                        onPress={() => setShowDateFilterModal(true)}
+                    >
+                        <Icon name="filter" size={14} color={colors.primary} />
+                        <Text style={styles.filterButtonText}>{getDateFilterLabel()}</Text>
+                        <Icon name="chevron-down" size={12} color={colors.primary} />
+                    </TouchableOpacity>
+                    <Text style={styles.filterResultText}>
+                        {historyRequests.length} {historyRequests.length === 1 ? 'request' : 'requests'}
+                    </Text>
+                </View>
+            )}
+
+            {/* Date Filter Modal */}
+            <Modal
+                visible={showDateFilterModal}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={() => setShowDateFilterModal(false)}
+            >
+                <TouchableOpacity 
+                    style={styles.modalOverlay}
+                    activeOpacity={1}
+                    onPress={() => setShowDateFilterModal(false)}
+                >
+                    <View style={styles.modalContent}>
+                        <Text style={styles.modalTitle}>Filter by Date</Text>
+                        
+                        <TouchableOpacity
+                            style={[styles.filterOption, selectedDateFilter === 'all' && styles.filterOptionActive]}
+                            onPress={() => handleDateFilterChange('all')}
+                        >
+                            <Icon 
+                                name="calendar" 
+                                size={16} 
+                                color={selectedDateFilter === 'all' ? colors.primary : colors.textSecondary} 
+                            />
+                            <Text style={[styles.filterOptionText, selectedDateFilter === 'all' && styles.filterOptionTextActive]}>
+                                All Time
+                            </Text>
+                            {selectedDateFilter === 'all' && (
+                                <Icon name="check" size={16} color={colors.primary} />
+                            )}
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[styles.filterOption, selectedDateFilter === 'today' && styles.filterOptionActive]}
+                            onPress={() => handleDateFilterChange('today')}
+                        >
+                            <Icon 
+                                name="calendar-day" 
+                                size={16} 
+                                color={selectedDateFilter === 'today' ? colors.primary : colors.textSecondary} 
+                            />
+                            <Text style={[styles.filterOptionText, selectedDateFilter === 'today' && styles.filterOptionTextActive]}>
+                                Today
+                            </Text>
+                            {selectedDateFilter === 'today' && (
+                                <Icon name="check" size={16} color={colors.primary} />
+                            )}
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[styles.filterOption, selectedDateFilter === 'week' && styles.filterOptionActive]}
+                            onPress={() => handleDateFilterChange('week')}
+                        >
+                            <Icon 
+                                name="calendar-week" 
+                                size={16} 
+                                color={selectedDateFilter === 'week' ? colors.primary : colors.textSecondary} 
+                            />
+                            <Text style={[styles.filterOptionText, selectedDateFilter === 'week' && styles.filterOptionTextActive]}>
+                                Last 7 Days
+                            </Text>
+                            {selectedDateFilter === 'week' && (
+                                <Icon name="check" size={16} color={colors.primary} />
+                            )}
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[styles.filterOption, selectedDateFilter === 'month' && styles.filterOptionActive]}
+                            onPress={() => handleDateFilterChange('month')}
+                        >
+                            <Icon 
+                                name="calendar-alt" 
+                                size={16} 
+                                color={selectedDateFilter === 'month' ? colors.primary : colors.textSecondary} 
+                            />
+                            <Text style={[styles.filterOptionText, selectedDateFilter === 'month' && styles.filterOptionTextActive]}>
+                                Last Month
+                            </Text>
+                            {selectedDateFilter === 'month' && (
+                                <Icon name="check" size={16} color={colors.primary} />
+                            )}
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.modalCancelButton}
+                            onPress={() => setShowDateFilterModal(false)}
+                        >
+                            <Text style={styles.modalCancelText}>Cancel</Text>
+                        </TouchableOpacity>
+                    </View>
+                </TouchableOpacity>
+            </Modal>
+
             <FlatList
-                data={requests}
+                data={getFilteredRequests()}
                 renderItem={renderRequestItem}
                 keyExtractor={(item) => item.name}
-                contentContainerStyle={requests.length === 0 ? styles.emptyContainer : styles.listContainer}
+                contentContainerStyle={getFilteredRequests().length === 0 ? styles.emptyContainer : styles.listContainer}
                 refreshControl={
                     <RefreshControl
                         refreshing={refreshing}
-                        onRefresh={() => loadPendingRequests(true)}
+                        onRefresh={() => loadRequests(true)}
                         colors={[colors.primary]}
                     />
                 }
@@ -316,6 +605,50 @@ const styles = StyleSheet.create({
         marginTop: 16,
         fontSize: 16,
         color: colors.textSecondary,
+    },
+    tabContainer: {
+        flexDirection: 'row',
+        backgroundColor: colors.surface,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.border,
+    },
+    tab: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 16,
+        paddingHorizontal: 12,
+        borderBottomWidth: 2,
+        borderBottomColor: 'transparent',
+        gap: 6,
+    },
+    tabActive: {
+        borderBottomColor: colors.primary,
+    },
+    tabText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: colors.textSecondary,
+    },
+    tabTextActive: {
+        color: colors.primary,
+        fontWeight: '600',
+    },
+    badge: {
+        backgroundColor: colors.primary,
+        borderRadius: 10,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        minWidth: 20,
+        height: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    badgeText: {
+        color: 'white',
+        fontSize: 11,
+        fontWeight: '600',
     },
     header: {
         padding: 20,
@@ -359,92 +692,93 @@ const styles = StyleSheet.create({
     },
     requestCard: {
         backgroundColor: colors.surface,
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 12,
-        borderLeftWidth: 4,
+        borderRadius: 10,
+        padding: 12,
+        marginBottom: 10,
+        borderLeftWidth: 3,
         borderLeftColor: colors.primary,
         shadowColor: '#000',
         shadowOffset: {
             width: 0,
-            height: 2,
+            height: 1,
         },
-        shadowOpacity: 0.1,
-        shadowRadius: 3.84,
-        elevation: 5,
+        shadowOpacity: 0.08,
+        shadowRadius: 2,
+        elevation: 2,
     },
     requestHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 12,
+        marginBottom: 8,
     },
     employeeInfo: {
         flexDirection: 'row',
         alignItems: 'center',
         flex: 1,
+        gap: 8,
     },
     employeeName: {
-        fontSize: 16,
+        fontSize: 15,
         fontWeight: '600',
         color: colors.textPrimary,
-        marginLeft: 8,
+        flex: 1,
     },
     typeIndicator: {
-        width: 28,
-        height: 28,
-        borderRadius: 14,
+        width: 22,
+        height: 22,
+        borderRadius: 11,
         justifyContent: 'center',
         alignItems: 'center',
     },
-    requestDetails: {
-        marginBottom: 16,
-    },
-    dateInfo: {
+    statusBadge: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 8,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 10,
+        gap: 3,
+    },
+    statusText: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: '600',
+        textTransform: 'capitalize',
+    },
+    requestDetails: {
+        gap: 6,
+    },
+    infoRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
     },
     dateText: {
-        fontSize: 14,
+        fontSize: 13,
         color: colors.textPrimary,
-        marginLeft: 8,
         fontWeight: '500',
-    },
-    reasonInfo: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        marginBottom: 8,
-    },
-    reasonText: {
-        fontSize: 14,
-        color: colors.textSecondary,
-        marginLeft: 8,
         flex: 1,
     },
-    timestampInfo: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    timestampText: {
+    reasonText: {
         fontSize: 12,
         color: colors.textSecondary,
-        marginLeft: 8,
+        flex: 1,
     },
     actionButtons: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: 10,
+        marginTop: 10,
     },
     actionButton: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 12,
-        paddingHorizontal: 16,
+        paddingVertical: 10,
+        paddingHorizontal: 14,
         borderRadius: 8,
-        minHeight: 44,
+        minHeight: 40,
     },
     rejectButton: {
         backgroundColor: '#EF4444',
@@ -454,9 +788,106 @@ const styles = StyleSheet.create({
     },
     actionButtonText: {
         color: 'white',
-        fontSize: 14,
+        fontSize: 13,
         fontWeight: '600',
-        marginLeft: 8,
+        marginLeft: 6,
+    },
+    filterContainer: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        backgroundColor: colors.surface,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.border,
+    },
+    filterButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        backgroundColor: colors.background,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: colors.primary,
+        gap: 6,
+    },
+    filterButtonText: {
+        fontSize: 13,
+        color: colors.primary,
+        fontWeight: '500',
+    },
+    filterResultText: {
+        fontSize: 12,
+        color: colors.textSecondary,
+        fontWeight: '500',
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    modalContent: {
+        backgroundColor: colors.surface,
+        borderRadius: 16,
+        padding: 20,
+        width: '100%',
+        maxWidth: 400,
+        shadowColor: '#000',
+        shadowOffset: {
+            width: 0,
+            height: 4,
+        },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 10,
+    },
+    modalTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: colors.textPrimary,
+        marginBottom: 16,
+        textAlign: 'center',
+    },
+    filterOption: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 14,
+        paddingHorizontal: 16,
+        borderRadius: 10,
+        marginBottom: 8,
+        backgroundColor: colors.background,
+        gap: 12,
+    },
+    filterOptionActive: {
+        backgroundColor: colors.primary + '15',
+        borderWidth: 1,
+        borderColor: colors.primary,
+    },
+    filterOptionText: {
+        fontSize: 15,
+        color: colors.textPrimary,
+        flex: 1,
+        fontWeight: '500',
+    },
+    filterOptionTextActive: {
+        color: colors.primary,
+        fontWeight: '600',
+    },
+    modalCancelButton: {
+        marginTop: 12,
+        paddingVertical: 12,
+        alignItems: 'center',
+        borderRadius: 10,
+        backgroundColor: colors.background,
+    },
+    modalCancelText: {
+        fontSize: 15,
+        color: colors.textSecondary,
+        fontWeight: '600',
     },
 });
 

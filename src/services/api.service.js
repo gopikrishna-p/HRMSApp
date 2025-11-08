@@ -164,14 +164,6 @@ class ApiService {
         return this.post(m('send_wfh_notification'), requestData);
     }
 
-    approveWFHRequest(requestId) {
-        return this.post(m('approve_wfh_request'), { request_id: requestId });
-    }
-
-    rejectWFHRequest(requestId) {
-        return this.post(m('reject_wfh_request'), { request_id: requestId });
-    }
-
     getNotificationSettings() {
         return this.get(m('get_notification_settings'));
     }
@@ -199,8 +191,19 @@ class ApiService {
         return this.get(m('get_pending_wfh_requests'));
     }
 
+    getAllWFHRequestsForAdmin() {
+        // Get all WFH requests for admin (pending, approved, rejected)
+        return this.get(m('get_all_wfh_requests_admin'));
+    }
+
     submitWFHRequest(requestData) {
         return this.post(m('submit_wfh_request'), requestData);
+    }
+
+    deleteWFHRequest(requestId) {
+        return this.post(m('delete_wfh_request'), { 
+            request_id: requestId 
+        });
     }
 
     approveWFHRequest(requestId) {
