@@ -4,7 +4,6 @@ import {
     Text,
     StyleSheet,
     ActivityIndicator,
-    FlatList,
     TouchableOpacity,
     TextInput,
     StatusBar,
@@ -16,6 +15,7 @@ import {
     Linking,
     PermissionsAndroid,
     BackHandler,
+    RefreshControl,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -766,231 +766,175 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
     };
 
     // ===========================================
-    // FLATLIST RENDER FUNCTIONS
-    // ===========================================
-    const renderListHeader = () => (
-        <>
-            {/* Header Section */}
-            <View style={styles.headerSection}>
-                <View style={styles.headerTop}>
-                    <TouchableOpacity
-                        onPress={handleGoBack}
-                        style={styles.backButton}
-                    >
-                        <Icon name="arrow-left" size={20} color="#374151" />
-                    </TouchableOpacity>
-                    <View style={styles.headerTitleContainer}>
-                        <Text style={styles.headerTitle}>Attendance Analytics</Text>
-                        <Text style={styles.headerSubtitle}>
-                            View and export attendance records
-                        </Text>
-                    </View>
-                </View>
-            </View>
-
-            {/* Search Bar */}
-            <View style={styles.section}>
-                <View style={styles.searchContainer}>
-                    <Icon name="search" size={16} color="#9CA3AF" style={styles.searchIcon} />
-                    <TextInput
-                        style={styles.searchInput}
-                        placeholder="Search employees..."
-                        value={searchQuery}
-                        onChangeText={setSearchQuery}
-                        placeholderTextColor="#9CA3AF"
-                    />
-                    {searchQuery ? (
-                        <TouchableOpacity onPress={() => setSearchQuery('')}>
-                            <Icon name="times-circle" size={16} color="#9CA3AF" />
-                        </TouchableOpacity>
-                    ) : null}
-                </View>
-            </View>
-
-            {/* Employee Selection */}
-            <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Select Employee</Text>
-                {loading ? (
-                    <ActivityIndicator size="small" color="#6366F1" />
-                ) : (
-                    <View style={styles.pickerContainer}>
-                        <Picker
-                            selectedValue={selectedEmployee}
-                            onValueChange={setSelectedEmployee}
-                            style={styles.picker}
-                        >
-                            <Picker.Item label="-- Select Employee --" value="" />
-                            {filteredEmployees.map((emp) => (
-                                <Picker.Item
-                                    key={emp.name}
-                                    label={`${emp.employee_name || emp.name} ${emp.designation ? `(${emp.designation})` : ''}`}
-                                    value={emp.name}
-                                />
-                            ))}
-                        </Picker>
-                    </View>
-                )}
-            </View>
-
-            {/* Date Range Section */}
-            <View style={styles.section}>
-                <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>Date Range</Text>
-                    {(dateRange.startDate || dateRange.endDate) && (
-                        <TouchableOpacity onPress={clearDateRange}>
-                            <Text style={styles.clearButton}>Clear</Text>
-                        </TouchableOpacity>
-                    )}
-                </View>
-
-                {renderDatePresets()}
-
-                <View style={styles.dateRow}>
-                    <TouchableOpacity
-                        style={styles.dateButton}
-                        onPress={() => setShowStartPicker(true)}
-                    >
-                        <Icon name="calendar" size={14} color="#6366F1" />
-                        <Text style={styles.dateButtonText}>
-                            {formatDate(dateRange.startDate)}
-                        </Text>
-                    </TouchableOpacity>
-
-                    <Icon name="arrow-right" size={14} color="#9CA3AF" />
-
-                    <TouchableOpacity
-                        style={styles.dateButton}
-                        onPress={() => setShowEndPicker(true)}
-                    >
-                        <Icon name="calendar" size={14} color="#6366F1" />
-                        <Text style={styles.dateButtonText}>
-                            {formatDate(dateRange.endDate)}
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-            </View>
-
-            {/* Summary Stats */}
-            {selectedEmployee && renderSummaryCard()}
-
-            {/* Export Section */}
-            {selectedEmployee && (dateRange.startDate && dateRange.endDate) && (
-                <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Export Reports</Text>
-                    <View style={styles.actionButtons}>
-                        <TouchableOpacity
-                            style={[styles.actionButton, { backgroundColor: '#DC2626' }]}
-                            onPress={() => handleQuickExport('pdf')}
-                            disabled={exportLoading}
-                        >
-                            <Icon name="file-pdf" size={16} color="white" />
-                            <Text style={styles.actionButtonText}>Quick PDF</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={[styles.actionButton, { backgroundColor: '#16A34A' }]}
-                            onPress={() => handleQuickExport('excel')}
-                            disabled={exportLoading}
-                        >
-                            <Icon name="file-excel" size={16} color="white" />
-                            <Text style={styles.actionButtonText}>Quick Excel</Text>
-                        </TouchableOpacity>
-                    </View>
-
-                    <TouchableOpacity
-                        style={[styles.actionButton, { backgroundColor: '#6366F1', marginTop: 12 }]}
-                        onPress={() => setShowExportModal(true)}
-                        disabled={exportLoading}
-                    >
-                        <Icon name="cog" size={16} color="white" />
-                        <Text style={styles.actionButtonText}>Advanced Export</Text>
-                    </TouchableOpacity>
-
-                    {exportLoading && (
-                        <View style={styles.exportingContainer}>
-                            <ActivityIndicator size="small" color="#6366F1" />
-                            <Text style={styles.exportingText}>Generating export...</Text>
-                        </View>
-                    )}
-
-                    <Text style={styles.exportNote}>
-                        Files will be saved to Downloads folder
-                    </Text>
-                </View>
-            )}
-
-            {/* Attendance List Header */}
-            {selectedEmployee && (
-                <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>
-                        Attendance Records
-                        {attendance.length > 0 && ` (${attendance.length})`}
-                    </Text>
-                </View>
-            )}
-        </>
-    );
-
-    const renderListFooter = () => {
-        if (loadingAttendance) {
-            return (
-                <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color="#6366F1" />
-                    <Text style={styles.loadingText}>Loading attendance...</Text>
-                </View>
-            );
-        }
-
-        if (!selectedEmployee) {
-            return (
-                <View style={styles.emptyState}>
-                    <Icon name="user-friends" size={48} color="#9CA3AF" />
-                    <Text style={styles.emptyStateTitle}>Select an Employee</Text>
-                    <Text style={styles.emptyStateText}>
-                        Choose an employee from the dropdown above to view their attendance records
-                    </Text>
-                </View>
-            );
-        }
-
-        if (selectedEmployee && attendance.length === 0 && !loadingAttendance) {
-            return (
-                <View style={styles.emptyState}>
-                    <Icon name="calendar-times" size={48} color="#9CA3AF" />
-                    <Text style={styles.emptyStateTitle}>No Records Found</Text>
-                    <Text style={styles.emptyStateText}>
-                        No attendance records found for selected period
-                    </Text>
-                </View>
-            );
-        }
-
-        return null;
-    };
-
-    // ===========================================
     // MAIN RENDER
     // ===========================================
     return (
         <View style={styles.container}>
             <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
-            <FlatList
-                data={selectedEmployee && !loadingAttendance ? attendance : []}
-                renderItem={({ item }) => <AttendanceList attendance={[item]} />}
-                keyExtractor={(item, index) => item.name || item.employee || index.toString()}
-                ListHeaderComponent={renderListHeader}
-                ListFooterComponent={renderListFooter}
-                refreshing={refreshing}
-                onRefresh={onRefresh}
+            <ScrollView
                 contentContainerStyle={styles.flatListContent}
                 showsVerticalScrollIndicator={false}
-                removeClippedSubviews={true}
-                maxToRenderPerBatch={10}
-                updateCellsBatchingPeriod={50}
-                initialNumToRender={10}
-                windowSize={10}
-            />
+                refreshControl={
+                    <RefreshControl
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                    />
+                }
+            >
+                {/* Employee Selection */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Select Employee</Text>
+                    {loading ? (
+                        <ActivityIndicator size="small" color="#6366F1" />
+                    ) : (
+                        <View style={styles.pickerContainer}>
+                            <Picker
+                                selectedValue={selectedEmployee}
+                                onValueChange={setSelectedEmployee}
+                                style={styles.picker}
+                            >
+                                <Picker.Item label="-- Select Employee --" value="" />
+                                {filteredEmployees.map((emp) => (
+                                    <Picker.Item
+                                        key={emp.name}
+                                        label={`${emp.employee_name || emp.name} ${emp.designation ? `(${emp.designation})` : ''}`}
+                                        value={emp.name}
+                                    />
+                                ))}
+                            </Picker>
+                        </View>
+                    )}
+                </View>
+
+                {/* Date Range Section */}
+                <View style={styles.section}>
+                    <View style={styles.sectionHeader}>
+                        <Text style={styles.sectionTitle}>Date Range</Text>
+                        {(dateRange.startDate || dateRange.endDate) && (
+                            <TouchableOpacity onPress={clearDateRange}>
+                                <Text style={styles.clearButton}>Clear</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+
+                    {renderDatePresets()}
+
+                    <View style={styles.dateRow}>
+                        <TouchableOpacity
+                            style={styles.dateButton}
+                            onPress={() => setShowStartPicker(true)}
+                        >
+                            <Icon name="calendar" size={14} color="#6366F1" />
+                            <Text style={styles.dateButtonText}>
+                                {formatDate(dateRange.startDate)}
+                            </Text>
+                        </TouchableOpacity>
+
+                        <Icon name="arrow-right" size={14} color="#9CA3AF" />
+
+                        <TouchableOpacity
+                            style={styles.dateButton}
+                            onPress={() => setShowEndPicker(true)}
+                        >
+                            <Icon name="calendar" size={14} color="#6366F1" />
+                            <Text style={styles.dateButtonText}>
+                                {formatDate(dateRange.endDate)}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
+                {/* Summary Stats */}
+                {selectedEmployee && renderSummaryCard()}
+
+                {/* Export Section */}
+                {selectedEmployee && (dateRange.startDate && dateRange.endDate) && (
+                    <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>Export Reports</Text>
+                        <View style={styles.actionButtons}>
+                            <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: '#DC2626' }]}
+                                onPress={() => handleQuickExport('pdf')}
+                                disabled={exportLoading}
+                            >
+                                <Icon name="file-pdf" size={16} color="white" />
+                                <Text style={styles.actionButtonText}>Quick PDF</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: '#16A34A' }]}
+                                onPress={() => handleQuickExport('excel')}
+                                disabled={exportLoading}
+                            >
+                                <Icon name="file-excel" size={16} color="white" />
+                                <Text style={styles.actionButtonText}>Quick Excel</Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        <TouchableOpacity
+                            style={[styles.actionButton, { backgroundColor: '#6366F1', marginTop: 12 }]}
+                            onPress={() => setShowExportModal(true)}
+                            disabled={exportLoading}
+                        >
+                            <Icon name="cog" size={16} color="white" />
+                            <Text style={styles.actionButtonText}>Advanced Export</Text>
+                        </TouchableOpacity>
+
+                        {exportLoading && (
+                            <View style={styles.exportingContainer}>
+                                <ActivityIndicator size="small" color="#6366F1" />
+                                <Text style={styles.exportingText}>Generating export...</Text>
+                            </View>
+                        )}
+
+                        <Text style={styles.exportNote}>
+                            Files will be saved to Downloads folder
+                        </Text>
+                    </View>
+                )}
+
+                {/* Attendance List Header */}
+                {selectedEmployee && (
+                    <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>
+                            Attendance Records
+                            {attendance.length > 0 && ` (${attendance.length})`}
+                        </Text>
+                    </View>
+                )}
+
+                {/* Attendance Records or Empty State */}
+                {loadingAttendance ? (
+                    <View style={styles.loadingContainer}>
+                        <ActivityIndicator size="large" color="#6366F1" />
+                        <Text style={styles.loadingText}>Loading attendance...</Text>
+                    </View>
+                ) : !selectedEmployee ? (
+                    <View style={styles.emptyState}>
+                        <Icon name="user-friends" size={48} color="#9CA3AF" />
+                        <Text style={styles.emptyStateTitle}>Select an Employee</Text>
+                        <Text style={styles.emptyStateText}>
+                            Choose an employee from the dropdown above to view their attendance records
+                        </Text>
+                    </View>
+                ) : selectedEmployee && attendance.length === 0 ? (
+                    <View style={styles.emptyState}>
+                        <Icon name="calendar-times" size={48} color="#9CA3AF" />
+                        <Text style={styles.emptyStateTitle}>No Records Found</Text>
+                        <Text style={styles.emptyStateText}>
+                            No attendance records found for selected period
+                        </Text>
+                    </View>
+                ) : (
+                    attendance.map((item, index) => (
+                        <AttendanceList 
+                            key={item.name || item.employee || index.toString()} 
+                            attendance={[item]} 
+                        />
+                    ))
+                )}
+            </ScrollView>
 
             {/* Date Pickers */}
             {showStartPicker && (
