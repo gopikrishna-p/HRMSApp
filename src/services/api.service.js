@@ -427,27 +427,177 @@ class ApiService {
     }
 
     /* -------------------------
-     * LEAVE APPLICATIONS
+     * LEAVE MANAGEMENT - COMPREHENSIVE APIs
+     * Based on hrms.api leave management documentation
      * -----------------------*/
     
+    // ===== EMPLOYEE LEAVE APIs =====
+    
     /**
-     * Submit a new leave application using existing backend API
-     * @param {Object} applicationData - {leave_type, from_date, to_date, reason}
-     * @returns {Promise} Response with application ID
+     * Submit a new leave application (Enhanced)
+     * Uses: submit_leave_application from line ~613 in backend
+     * @param {Object} leaveData - Leave application data
+     * @returns {Promise} Response with application details and updated balance
      */
-    submitLeaveApplication(applicationData) {
-        // Get current user's employee first, then use existing create_leave_application API
-        return this.getUserEmployee().then(employee => {
-            return this.post(m('create_leave_application'), {
-                employee: employee,
-                leave_type: applicationData.leave_type,
-                from_date: applicationData.from_date,
-                to_date: applicationData.to_date,
-                description: applicationData.reason,
-                half_day: 0,
-                half_day_date: null,
-                leave_approver: null // Let system determine approver
-            });
+    submitLeave(leaveData) {
+        return this.post(m('submit_leave_application'), {
+            employee: leaveData.employee,
+            leave_type: leaveData.leave_type,
+            from_date: leaveData.from_date,
+            to_date: leaveData.to_date,
+            half_day: leaveData.half_day || 0,
+            half_day_date: leaveData.half_day_date || null,
+            description: leaveData.description || '',
+            leave_approver: leaveData.leave_approver || null
+        });
+    }
+
+    /**
+     * Get employee's own leave applications with filters
+     * Uses: get_employee_leave_applications from backend
+     * @param {Object} filters - {from_date, to_date, status_filter, leave_type, limit}
+     * @returns {Promise} Response with applications list and summary
+     */
+    getMyLeaves(filters = {}) {
+        return this.get(m('get_employee_leave_applications'), {
+            employee: filters.employee || null, // Optional - defaults to current user
+            from_date: filters.from_date || null,
+            to_date: filters.to_date || null,
+            status_filter: filters.status || null, // 'Open', 'Approved', 'Rejected', 'Cancelled'
+            leave_type: filters.leave_type || null,
+            limit: filters.limit || 100
+        });
+    }
+
+    /**
+     * Cancel employee's own leave application
+     * Uses: cancel_leave_application from backend
+     * @param {string} applicationId - Leave Application ID
+     * @param {string} reason - Cancellation reason
+     * @returns {Promise} Response with updated balance
+     */
+    cancelMyLeave(applicationId, reason) {
+        return this.post(m('cancel_leave_application'), {
+            application_id: applicationId,
+            reason: reason || ''
+        });
+    }
+
+    // ===== ADMIN LEAVE APIs =====
+    
+    /**
+     * Approve leave application (Admin/Approver)
+     * Uses: approve_leave_application from backend
+     * @param {string} applicationId - Leave Application ID
+     * @param {string} remarks - Optional approval remarks
+     * @returns {Promise} Response with updated status and balance
+     */
+    approveLeave(applicationId, remarks = '') {
+        return this.post(m('approve_leave_application'), {
+            application_id: applicationId,
+            remarks: remarks
+        });
+    }
+
+    /**
+     * Reject leave application (Admin/Approver)
+     * Uses: reject_leave_application from backend
+     * @param {string} applicationId - Leave Application ID
+     * @param {string} reason - Rejection reason (required)
+     * @returns {Promise} Response with updated status
+     */
+    rejectLeave(applicationId, reason) {
+        return this.post(m('reject_leave_application'), {
+            application_id: applicationId,
+            reason: reason
+        });
+    }
+
+    /**
+     * Get all leave applications for admin with advanced filters
+     * Uses: get_admin_leave_applications from backend
+     * @param {Object} filters - {department, employee, from_date, to_date, status_filter, leave_type, limit}
+     * @returns {Promise} Response with applications and statistics
+     */
+    getAllLeaves(filters = {}) {
+        return this.get(m('get_admin_leave_applications'), {
+            department: filters.department || null,
+            employee: filters.employee || null,
+            from_date: filters.from_date || null,
+            to_date: filters.to_date || null,
+            status_filter: filters.status || null,
+            leave_type: filters.leave_type || null,
+            limit: filters.limit || 500
+        });
+    }
+
+    // ===== EXISTING/LEGACY APIs (Kept for compatibility) =====
+
+    /**
+     * Get leave balance map for employee
+     * Uses: get_leave_balance_map from backend (line ~496)
+     * @param {string} employee - Employee ID
+     * @returns {Promise} Response with leave balances by type
+     */
+    getLeaveBalances(employee) {
+        return this.get(m('get_leave_balance_map'), { 
+            employee: employee
+        });
+    }
+
+    /**
+     * Get available leave types for employee
+     * Uses: get_leave_types from backend (line ~601)
+     * @param {string} employee - Employee ID
+     * @param {string} date - Date (YYYY-MM-DD format)
+     * @returns {Promise} Response with leave types array
+     */
+    getLeaveTypes(employee, date) {
+        const targetDate = date || new Date().toISOString().split('T')[0];
+        return this.get(m('get_leave_types'), { 
+            employee: employee,
+            date: targetDate
+        });
+    }
+
+    /**
+     * Get leave approval details for employee
+     * Uses: get_leave_approval_details from backend (line ~542)
+     * @param {string} employee - Employee ID
+     * @returns {Promise} Response with approver information
+     */
+    getLeaveApprovalDetails(employee) {
+        return this.get(m('get_leave_approval_details'), {
+            employee: employee
+        });
+    }
+
+    /**
+     * Get leave applications (legacy method)
+     * Uses: get_leave_applications from backend (line ~350)
+     * @param {Object} params - {employee, approver_id, for_approval, limit}
+     * @returns {Promise} Response with applications list
+     */
+    getLeaveApplications(params = {}) {
+        return this.get(m('get_leave_applications'), { 
+            employee: params.employee || null,
+            approver_id: params.approver_id || null,
+            for_approval: params.for_approval || false,
+            limit: params.limit || null
+        });
+    }
+
+    /**
+     * Get leave history (legacy method)
+     * Uses: get_leave_history from backend (line ~400)
+     * @param {Object} params - {employee, status_filter, limit}
+     * @returns {Promise} Response with historical applications
+     */
+    getLeaveHistory(params = {}) {
+        return this.get(m('get_leave_history'), {
+            employee: params.employee || null,
+            status_filter: params.status_filter || null,
+            limit: params.limit || 500
         });
     }
 
@@ -462,83 +612,6 @@ class ApiService {
             }
             throw new Error('Employee not found for current user');
         });
-    }
-
-    /**
-     * Get employee's leave applications using existing API
-     * @returns {Promise} Response with applications list
-     */
-    getLeaveApplications() {
-        return this.getUserEmployee().then(employee => {
-            return this.get(m('get_leave_applications'), { 
-                employee: employee,
-                for_approval: false
-            });
-        });
-    }
-
-    /**
-     * Get pending leave applications for admin using existing API
-     * @param {string} filter - Filter: pending, all, approved, rejected
-     * @param {string} dateFilter - Date filter: all, today, this_week, this_month
-     * @returns {Promise} Response with applications list
-     */
-    getPendingLeaveApplications(filter = 'pending', dateFilter = 'all') {
-        // Use existing get_leave_applications API with for_approval=true
-        return this.get(m('get_leave_applications'), { 
-            employee: null, // Get all employees
-            for_approval: true
-        });
-    }
-
-    /**
-     * Process leave application (approve/reject) using existing workflow
-     * @param {Object} data - {application_id, action, rejection_reason}
-     * @returns {Promise} Response
-     */
-    processLeaveApplication(data) {
-        // Use existing apply_workflow_action API
-        const action = data.action === 'approve' ? 'Approve' : 'Reject';
-        return this.post(m('apply_workflow_action'), {
-            doctype: 'Leave Application',
-            docname: data.application_id,
-            action: action
-        });
-    }
-
-    /**
-     * Get available leave types for employee
-     * @returns {Promise} Response with leave types
-     */
-    getLeaveTypes() {
-        return this.getUserEmployee().then(employee => {
-            return this.get(m('get_leave_types'), { 
-                employee: employee,
-                date: new Date().toISOString().split('T')[0]
-            });
-        });
-    }
-
-    /**
-     * Get leave balances for employee
-     * @returns {Promise} Response with leave balances
-     */
-    getLeaveBalances() {
-        return this.getUserEmployee().then(employee => {
-            return this.get(m('get_leave_balance_map'), { 
-                employee: employee
-            });
-        });
-    }
-
-    /**
-     * Send leave application notification to admin
-     * @param {Object} applicationData - Leave application data
-     * @returns {Promise} Response
-     */
-    sendLeaveNotification(applicationData) {
-        // Use general notification system
-        return Promise.resolve({ success: true }); // Handle via local notifications
     }
 
 

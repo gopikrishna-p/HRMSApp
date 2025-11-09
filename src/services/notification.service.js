@@ -758,10 +758,15 @@ class NotificationService {
             const title = 'WFH Request Submitted';
             const body = `Your WFH request from ${requestData.from_date} to ${requestData.to_date} has been submitted for approval`;
             
-            await this.sendLocalNotification(title, body, {
-                type: 'wfh_request',
-                request_id: requestData.request_id,
-                action: 'view_request'
+            await this.showLocalNotification({
+                title,
+                body,
+                data: {
+                    type: 'wfh_request',
+                    request_id: requestData.request_id,
+                    action: 'view_request'
+                },
+                channelId: 'wfh_requests'
             });
 
             // Also send to backend for admin notification
@@ -790,11 +795,16 @@ class NotificationService {
                 ? `Your WFH request for ${date} has been approved!`
                 : `Your WFH request for ${date} has been rejected. ${adminComments}`;
             
-            await this.sendLocalNotification(title, body, {
-                type: 'wfh_response',
-                approved: isApproved,
-                date: date,
-                action: 'view_status'
+            await this.showLocalNotification({
+                title,
+                body,
+                data: {
+                    type: 'wfh_response',
+                    approved: isApproved,
+                    date: date,
+                    action: 'view_status'
+                },
+                channelId: 'wfh_requests'
             });
 
             showToast({
@@ -820,13 +830,18 @@ class NotificationService {
             const title = 'New WFH Request 📋';
             const body = `${employeeName} requested WFH from ${fromDate} to ${toDate}`;
             
-            await this.sendLocalNotification(title, body, {
-                type: 'admin_wfh_request',
-                employee_name: employeeName,
-                from_date: fromDate,
-                to_date: toDate,
-                request_id: requestId,
-                action: 'review_request'
+            await this.showLocalNotification({
+                title,
+                body,
+                data: {
+                    type: 'admin_wfh_request',
+                    employee_name: employeeName,
+                    from_date: fromDate,
+                    to_date: toDate,
+                    request_id: requestId,
+                    action: 'review_request'
+                },
+                channelId: 'wfh_requests'
             });
 
             return true;
@@ -849,10 +864,15 @@ class NotificationService {
             const title = 'Leave Application Submitted';
             const body = `Your ${applicationData.leave_type} leave application from ${applicationData.from_date} to ${applicationData.to_date} has been submitted for approval`;
             
-            await this.sendLocalNotification(title, body, {
-                type: 'leave_application',
-                application_id: applicationData.application_id,
-                action: 'view_application'
+            await this.showLocalNotification({
+                title,
+                body,
+                data: {
+                    type: 'leave_application',
+                    application_id: applicationData.application_id,
+                    action: 'view_application'
+                },
+                channelId: 'admin_notifications'
             });
 
             // Also send to backend for admin notification
@@ -882,11 +902,16 @@ class NotificationService {
                 ? `Your leave application has been approved!`
                 : `Your leave application has been rejected. ${data.rejection_reason || ''}`;
             
-            await this.sendLocalNotification(title, body, {
-                type: 'leave_response',
-                approved: isApproved,
-                application_id: data.application_id,
-                action: 'view_status'
+            await this.showLocalNotification({
+                title,
+                body,
+                data: {
+                    type: 'leave_response',
+                    approved: isApproved,
+                    application_id: data.application_id,
+                    action: 'view_status'
+                },
+                channelId: 'admin_notifications'
             });
 
             showToast({
@@ -912,10 +937,15 @@ class NotificationService {
             const title = 'New Leave Application';
             const body = `${applicationData.employee_name} has submitted a ${applicationData.leave_type} leave application`;
             
-            await this.sendLocalNotification(title, body, {
-                type: 'admin_leave_notification',
-                application_id: applicationData.application_id,
-                action: 'review_application'
+            await this.showLocalNotification({
+                title,
+                body,
+                data: {
+                    type: 'admin_leave_notification',
+                    application_id: applicationData.application_id,
+                    action: 'review_application'
+                },
+                channelId: 'admin_notifications'
             });
 
             return true;

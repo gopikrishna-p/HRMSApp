@@ -1,760 +1,954 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
     View,
     Text,
     StyleSheet,
-    FlatList,
+    ScrollView,
     TouchableOpacity,
-    ActivityIndicator,
-    StatusBar,
     Alert,
     RefreshControl,
+    TextInput,
+    Modal,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
-import Icon from 'react-native-vector-icons/FontAwesome5';
-import ApiService from '../../services/api.service';
-import showToast from '../../utils/Toast';
+import { colors } from '../../theme/colors';
+import Button from '../../components/common/Button';
+import Loading from '../../components/common/Loading';
+import apiService from '../../services/api.service';
 
-// Safely import notification service
-let NotificationService = null;
-try {
-    NotificationService = require('../../services/notification.service').default || require('../../services/notification.service');
-} catch (e) {
-    console.warn('NotificationService not available in LeaveApprovalsScreen');
-}
-
-function LeaveApprovalsScreen({ navigation }) {
+const LeaveApprovalsScreen = ({ navigation }) => {
+    // State
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
-    const [applications, setApplications] = useState([]);
-    const [processingIds, setProcessingIds] = useState(new Set());
-    const [filter, setFilter] = useState('pending'); // pending (Open), all, approved, rejected
-    const [dateFilter, setDateFilter] = useState('all'); // all, today, this_week, this_month
+    
+    // Tab state
+    const [activeTab, setActiveTab] = useState('pending'); // 'pending', 'history', 'statistics'
+    
+    // Leave applications
+    const [pendingLeaves, setPendingLeaves] = useState([]);
+    const [historyLeaves, setHistoryLeaves] = useState([]);
+    const [statistics, setStatistics] = useState(null);
+    
+    // Filters
+    const [selectedDepartment, setSelectedDepartment] = useState('');
+    const [selectedEmployee, setSelectedEmployee] = useState('');
+    const [selectedLeaveType, setSelectedLeaveType] = useState('');
+    const [historyStatusFilter, setHistoryStatusFilter] = useState('');
+    
+    // Data for filters
+    const [departments, setDepartments] = useState([]);
+    const [employees, setEmployees] = useState([]);
+    
+    // Action modal
+    const [showActionModal, setShowActionModal] = useState(false);
+    const [selectedLeave, setSelectedLeave] = useState(null);
+    const [actionType, setActionType] = useState(''); // 'approve' or 'reject'
+    const [remarks, setRemarks] = useState('');
+    const [rejectionReason, setRejectionReason] = useState('');
 
     useEffect(() => {
-        loadPendingApplications();
-    }, [filter, dateFilter]);
+        loadInitialData();
+    }, []);
 
-    const loadPendingApplications = async () => {
+    const loadInitialData = async () => {
         setLoading(true);
         try {
-            console.log('Loading leave applications with filter:', filter, 'dateFilter:', dateFilter);
-            
-            // Use the correct API call for getting leave applications
-            const response = await ApiService.getLeaveApplications(null, true, true); // employee=null, for_approval=true, include_balances=true
-            console.log('Leave applications response:', response);
-            
-            let applications = [];
-            
-            // Handle response format
-            if (response && response.data && response.data.message) {
-                applications = response.data.message;
-            } else if (response && response.message) {
-                applications = response.message;
-            } else if (response && Array.isArray(response)) {
-                applications = response;
-            }
-            
-            // Filter applications based on filter selection
-            if (filter === 'pending') {
-                applications = applications.filter(app => app.status === 'Open');
-            } else if (filter === 'approved') {
-                applications = applications.filter(app => app.status === 'Approved');
-            } else if (filter === 'rejected') {
-                applications = applications.filter(app => app.status === 'Rejected');
-            }
-            // 'all' shows everything
-            
-            // Apply date filter if needed (using from_date since posting_date is not available)
-            if (dateFilter !== 'all') {
-                const today = new Date();
-                const filterDate = new Date();
-                
-                if (dateFilter === 'today') {
-                    filterDate.setHours(0, 0, 0, 0);
-                    applications = applications.filter(app => {
-                        const appDate = new Date(app.from_date);
-                        appDate.setHours(0, 0, 0, 0);
-                        return appDate.getTime() === filterDate.getTime();
-                    });
-                } else if (dateFilter === 'this_week') {
-                    const startOfWeek = new Date(today.setDate(today.getDate() - today.getDay()));
-                    applications = applications.filter(app => {
-                        const appDate = new Date(app.from_date);
-                        return appDate >= startOfWeek;
-                    });
-                } else if (dateFilter === 'this_month') {
-                    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-                    applications = applications.filter(app => {
-                        const appDate = new Date(app.from_date);
-                        return appDate >= startOfMonth;
-                    });
-                }
-            }
-            
-            setApplications(applications);
-            console.log('Filtered applications:', applications.length);
-            
+            await Promise.all([
+                loadDepartments(),
+                loadEmployees(),
+                fetchPendingLeaves(),
+            ]);
         } catch (error) {
-            console.error('Error loading leave applications:', error);
-            showToast({
-                type: 'error',
-                text1: 'Error',
-                text2: 'Failed to load leave applications',
-            });
-            setApplications([]);
+            console.error('Error loading initial data:', error);
+            Alert.alert('Error', 'Failed to load leave approvals data');
         } finally {
             setLoading(false);
         }
     };
 
-    const onRefresh = async () => {
-        setRefreshing(true);
-        await loadPendingApplications();
-        setRefreshing(false);
-    };
-
-    const processApplication = async (applicationId, action, rejectionReason = null) => {
-        setProcessingIds(prev => new Set(prev.add(applicationId)));
-        
+    const loadDepartments = async () => {
         try {
-            console.log('Processing leave application:', { applicationId, action, rejectionReason });
-            
-            const response = await ApiService.processLeaveApplication({
-                application_id: applicationId,
-                action: action,
-                rejection_reason: rejectionReason
-            });
-
-            console.log('Process leave application response:', response);
-
-            // Handle the nested response format
-            const result = response?.data?.message || response;
-            
-            if (result?.status === 'success' || response?.success) {
-                // Send notification to employee
-                if (NotificationService) {
-                    try {
-                        await NotificationService.sendLeaveApprovalNotification({
-                            application_id: applicationId,
-                            action: action,
-                            rejection_reason: rejectionReason
-                        });
-                    } catch (error) {
-                        console.warn('Failed to send leave approval notification:', error);
-                    }
-                }
-
-                showToast({
-                    type: 'success',
-                    text1: 'Success',
-                    text2: `Leave application ${action}d successfully`,
-                });
-
-                // Reload applications
-                loadPendingApplications();
+            const response = await apiService.getDepartments();
+            if (response.success && response.data) {
+                // Handle different response structures
+                const deptData = response.data.message || response.data;
+                setDepartments(Array.isArray(deptData) ? deptData : []);
             } else {
-                throw new Error(result?.message || 'Unknown error occurred');
+                setDepartments([]);
             }
         } catch (error) {
-            console.error(`Error ${action}ing leave application:`, error);
-            showToast({
-                type: 'error',
-                text1: 'Error',
-                text2: error?.message || `Failed to ${action} leave application`,
-            });
+            console.error('Error loading departments:', error);
+            setDepartments([]);
+        }
+    };
+
+    const loadEmployees = async () => {
+        try {
+            const response = await apiService.getAllEmployees();
+            if (response.success && response.data?.message) {
+                const empData = response.data.message;
+                setEmployees(Array.isArray(empData) ? empData : []);
+            } else {
+                setEmployees([]);
+            }
+        } catch (error) {
+            console.error('Error loading employees:', error);
+            setEmployees([]);
+        }
+    };
+
+    const fetchPendingLeaves = async () => {
+        try {
+            const filters = {
+                status: 'Open',
+                department: selectedDepartment || null,
+                employee: selectedEmployee || null,
+                leave_type: selectedLeaveType || null,
+            };
+
+            const response = await apiService.getAllLeaves(filters);
+            
+            if (response.success && response.data?.message) {
+                const result = response.data.message;
+                setPendingLeaves(Array.isArray(result.applications) ? result.applications : []);
+                setStatistics(result.statistics || null);
+            } else {
+                setPendingLeaves([]);
+            }
+        } catch (error) {
+            console.error('Error fetching pending leaves:', error);
+            Alert.alert('Error', 'Failed to load pending leaves');
+            setPendingLeaves([]);
+        }
+    };
+
+    const fetchHistoryLeaves = async () => {
+        try {
+            const filters = {
+                status: historyStatusFilter || null,
+                department: selectedDepartment || null,
+                employee: selectedEmployee || null,
+                leave_type: selectedLeaveType || null,
+            };
+
+            const response = await apiService.getAllLeaves(filters);
+            
+            if (response.success && response.data?.message) {
+                const result = response.data.message;
+                // Filter history to exclude pending
+                const applications = Array.isArray(result.applications) ? result.applications : [];
+                const history = applications.filter(
+                    app => ['Approved', 'Rejected', 'Cancelled'].includes(app.status)
+                );
+                setHistoryLeaves(history);
+                setStatistics(result.statistics || null);
+            } else {
+                setHistoryLeaves([]);
+            }
+        } catch (error) {
+            console.error('Error fetching history:', error);
+            Alert.alert('Error', 'Failed to load leave history');
+            setHistoryLeaves([]);
+        }
+    };
+
+    const onRefresh = useCallback(async () => {
+        setRefreshing(true);
+        try {
+            if (activeTab === 'pending') {
+                await fetchPendingLeaves();
+            } else if (activeTab === 'history') {
+                await fetchHistoryLeaves();
+            }
+        } catch (error) {
+            console.error('Error refreshing:', error);
         } finally {
-            setProcessingIds(prev => {
-                const newSet = new Set(prev);
-                newSet.delete(applicationId);
-                return newSet;
-            });
+            setRefreshing(false);
+        }
+    }, [activeTab, selectedDepartment, selectedEmployee, selectedLeaveType, historyStatusFilter]);
+
+    useEffect(() => {
+        if (activeTab === 'pending') {
+            fetchPendingLeaves();
+        } else if (activeTab === 'history') {
+            fetchHistoryLeaves();
+        }
+    }, [activeTab, selectedDepartment, selectedEmployee, selectedLeaveType, historyStatusFilter]);
+
+    const openActionModal = (leave, action) => {
+        setSelectedLeave(leave);
+        setActionType(action);
+        setRemarks('');
+        setRejectionReason('');
+        setShowActionModal(true);
+    };
+
+    const handleApprove = async () => {
+        if (!selectedLeave) return;
+
+        setLoading(true);
+        setShowActionModal(false);
+        
+        try {
+            const response = await apiService.approveLeave(
+                selectedLeave.name,
+                remarks.trim()
+            );
+
+            if (response.success) {
+                Alert.alert('Success', 'Leave application approved successfully');
+                fetchPendingLeaves();
+                setRemarks('');
+            } else {
+                Alert.alert('Error', response.message || 'Failed to approve leave');
+            }
+        } catch (error) {
+            console.error('Error approving leave:', error);
+            Alert.alert('Error', error.message || 'Failed to approve leave');
+        } finally {
+            setLoading(false);
+            setSelectedLeave(null);
         }
     };
 
-    const handleApproveApplication = (application) => {
-        Alert.alert(
-            'Approve Leave Application',
-            `Are you sure you want to approve ${application.employee_name}'s ${application.leave_type} leave from ${formatDate(new Date(application.from_date))} to ${formatDate(new Date(application.to_date))}?`,
-            [
-                { text: 'Cancel', style: 'cancel' },
-                { 
-                    text: 'Approve', 
-                    style: 'default',
-                    onPress: () => processApplication(application.name, 'approve')
-                }
-            ]
-        );
-    };
+    const handleReject = async () => {
+        if (!selectedLeave) return;
 
-    const handleRejectApplication = (application) => {
-        Alert.prompt(
-            'Reject Leave Application',
-            `Please provide a reason for rejecting ${application.employee_name}'s leave application:`,
-            [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                    text: 'Reject',
-                    style: 'destructive',
-                    onPress: (reason) => {
-                        if (reason && reason.trim()) {
-                            processApplication(application.name, 'reject', reason.trim());
-                        } else {
-                            showToast({
-                                type: 'warning',
-                                text1: 'Missing Information',
-                                text2: 'Please provide a rejection reason',
-                            });
-                        }
-                    }
-                }
-            ],
-            'plain-text',
-            '',
-            'Enter rejection reason...'
-        );
-    };
+        if (!rejectionReason.trim()) {
+            Alert.alert('Validation Error', 'Rejection reason is required');
+            return;
+        }
 
-    const formatDate = (date) => {
-        return date.toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-        });
-    };
+        setLoading(true);
+        setShowActionModal(false);
+        
+        try {
+            const response = await apiService.rejectLeave(
+                selectedLeave.name,
+                rejectionReason.trim()
+            );
 
-    const getLeaveTypeIcon = (type) => {
-        switch (type?.toLowerCase()) {
-            case 'sick':
-                return 'thermometer-half';
-            case 'emergency':
-                return 'exclamation-triangle';
-            case 'maternity':
-            case 'paternity':
-                return 'baby';
-            case 'earned':
-                return 'star';
-            default:
-                return 'calendar-day';
+            if (response.success) {
+                Alert.alert('Success', 'Leave application rejected');
+                fetchPendingLeaves();
+                setRejectionReason('');
+            } else {
+                Alert.alert('Error', response.message || 'Failed to reject leave');
+            }
+        } catch (error) {
+            console.error('Error rejecting leave:', error);
+            Alert.alert('Error', error.message || 'Failed to reject leave');
+        } finally {
+            setLoading(false);
+            setSelectedLeave(null);
         }
     };
 
-    const getStatusColor = (status) => {
-        switch (status?.toLowerCase()) {
-            case 'approved':
-                return '#10B981';
-            case 'rejected':
-                return '#EF4444';
-            case 'pending':
-            case 'open':
-                return '#F59E0B';
-            default:
-                return '#6B7280';
-        }
-    };
-
-    const renderApplicationItem = ({ item }) => {
-        const isProcessing = processingIds.has(item.name);
-        const isPending = item.status === 'Open';
-        const leaveTypeIcon = getLeaveTypeIcon(item.leave_type);
-        const statusColor = getStatusColor(item.status);
-
-        return (
-            <View style={styles.applicationCard}>
-                <View style={styles.applicationHeader}>
-                    <View style={styles.employeeInfo}>
-                        <View style={styles.employeeNameRow}>
-                            <Icon name="user" size={14} color="#6366F1" />
-                            <Text style={styles.employeeName}>{item.employee_name}</Text>
-                        </View>
-                    </View>
-                    <View style={[
-                        styles.statusBadge,
-                        { 
-                            backgroundColor: statusColor + '15',
-                            borderColor: statusColor,
-                            borderWidth: 1
-                        }
-                    ]}>
-                        <Text style={[styles.statusText, { color: statusColor }]}>
-                            {item.status}
-                        </Text>
-                    </View>
-                </View>
-
-                <View style={styles.leaveDetails}>
-                    <View style={styles.leaveTypeRow}>
-                        <Icon name={leaveTypeIcon} size={16} color="#6366F1" />
-                        <Text style={styles.leaveTypeText}>
-                            {item.leave_type?.charAt(0).toUpperCase() + item.leave_type?.slice(1)} Leave
-                        </Text>
-                    </View>
-                    
-                    <View style={styles.datesRow}>
-                        <View style={styles.dateInfo}>
-                            <Icon name="calendar-alt" size={12} color="#6B7280" />
-                            <Text style={styles.dateText}>
-                                {formatDate(new Date(item.from_date))} - {formatDate(new Date(item.to_date))}
-                            </Text>
-                        </View>
-                        <View style={styles.daysInfo}>
-                            <Icon name="clock" size={12} color="#6B7280" />
-                            <Text style={styles.daysText}>
-                                {item.total_leave_days} day{item.total_leave_days > 1 ? 's' : ''}
-                            </Text>
-                        </View>
-                    </View>
-                </View>
-
-                {item.description && (
-                    <View style={styles.reasonSection}>
-                        <Text style={styles.reasonLabel}>Reason:</Text>
-                        <Text style={styles.reasonText}>{item.description}</Text>
-                    </View>
-                )}
-
-                <View style={styles.metaInfo}>
-                    <View style={styles.metaRow}>
-                        <Icon name="user" size={10} color="#9CA3AF" />
-                        <Text style={styles.metaText}>
-                            Employee: {item.employee}
-                        </Text>
-                    </View>
-                    
-                    <View style={styles.metaRow}>
-                        <Icon name="calendar" size={10} color="#9CA3AF" />
-                        <Text style={styles.metaText}>
-                            Application ID: {item.name}
-                        </Text>
-                    </View>
-                </View>
-
-                {isPending && (
-                    <View style={styles.actionButtons}>
-                        <TouchableOpacity
-                            style={[styles.rejectButton, isProcessing && styles.disabledButton]}
-                            onPress={() => handleRejectApplication(item)}
-                            disabled={isProcessing}
-                        >
-                            {isProcessing ? (
-                                <ActivityIndicator size="small" color="#EF4444" />
-                            ) : (
-                                <>
-                                    <Icon name="times" size={14} color="#EF4444" />
-                                    <Text style={styles.rejectButtonText}>Reject</Text>
-                                </>
-                            )}
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={[styles.approveButton, isProcessing && styles.disabledButton]}
-                            onPress={() => handleApproveApplication(item)}
-                            disabled={isProcessing}
-                        >
-                            {isProcessing ? (
-                                <ActivityIndicator size="small" color="white" />
-                            ) : (
-                                <>
-                                    <Icon name="check" size={14} color="white" />
-                                    <Text style={styles.approveButtonText}>Approve</Text>
-                                </>
-                            )}
-                        </TouchableOpacity>
-                    </View>
-                )}
-            </View>
-        );
-    };
-
-    const renderHeader = () => (
-        <View>
-            <View style={styles.headerSection}>
-                <View style={styles.headerTop}>
-                    <TouchableOpacity
-                        onPress={() => navigation.goBack()}
-                        style={styles.backButton}
+    const renderFilters = () => (
+        <View style={styles.filtersContainer}>
+            {/* Department Filter */}
+            <View style={styles.filterItem}>
+                <Text style={styles.filterLabel}>Department</Text>
+                <View style={styles.pickerContainer}>
+                    <Picker
+                        selectedValue={selectedDepartment}
+                        onValueChange={(value) => setSelectedDepartment(value)}
+                        style={styles.picker}
                     >
-                        <Icon name="arrow-left" size={20} color="#374151" />
-                    </TouchableOpacity>
-                    <View style={styles.headerTitleContainer}>
-                        <Text style={styles.headerTitle}>Leave Approvals</Text>
-                        <Text style={styles.headerSubtitle}>Review and process leave applications</Text>
-                    </View>
+                        <Picker.Item label="All Departments" value="" />
+                        {departments.map((dept) => (
+                            <Picker.Item
+                                key={dept.name}
+                                label={dept.department_name || dept.name}
+                                value={dept.name}
+                            />
+                        ))}
+                    </Picker>
                 </View>
             </View>
 
-            <View style={styles.filtersSection}>
-                <View style={styles.filterGroup}>
-                    <Text style={styles.filterLabel}>Status Filter</Text>
+            {/* Employee Filter */}
+            <View style={styles.filterItem}>
+                <Text style={styles.filterLabel}>Employee</Text>
+                <View style={styles.pickerContainer}>
+                    <Picker
+                        selectedValue={selectedEmployee}
+                        onValueChange={(value) => setSelectedEmployee(value)}
+                        style={styles.picker}
+                    >
+                        <Picker.Item label="All Employees" value="" />
+                        {employees.map((emp) => (
+                            <Picker.Item
+                                key={emp.name}
+                                label={emp.employee_name}
+                                value={emp.name}
+                            />
+                        ))}
+                    </Picker>
+                </View>
+            </View>
+
+            {/* Status Filter (for history tab only) */}
+            {activeTab === 'history' && (
+                <View style={styles.filterItem}>
+                    <Text style={styles.filterLabel}>Status</Text>
                     <View style={styles.pickerContainer}>
                         <Picker
-                            selectedValue={filter}
-                            onValueChange={setFilter}
+                            selectedValue={historyStatusFilter}
+                            onValueChange={(value) => setHistoryStatusFilter(value)}
                             style={styles.picker}
                         >
-                            <Picker.Item label="Pending Applications" value="pending" />
-                            <Picker.Item label="All Applications" value="all" />
-                            <Picker.Item label="Approved Only" value="approved" />
-                            <Picker.Item label="Rejected Only" value="rejected" />
+                            <Picker.Item label="All Statuses" value="" />
+                            <Picker.Item label="Approved" value="Approved" />
+                            <Picker.Item label="Rejected" value="Rejected" />
+                            <Picker.Item label="Cancelled" value="Cancelled" />
                         </Picker>
                     </View>
                 </View>
+            )}
 
-                <View style={styles.filterGroup}>
-                    <Text style={styles.filterLabel}>Date Filter</Text>
-                    <View style={styles.pickerContainer}>
-                        <Picker
-                            selectedValue={dateFilter}
-                            onValueChange={setDateFilter}
-                            style={styles.picker}
-                        >
-                            <Picker.Item label="All Dates" value="all" />
-                            <Picker.Item label="Today" value="today" />
-                            <Picker.Item label="This Week" value="this_week" />
-                            <Picker.Item label="This Month" value="this_month" />
-                        </Picker>
-                    </View>
-                </View>
-            </View>
-
-            <View style={styles.statsSection}>
-                <View style={styles.statsCard}>
-                    <Icon name="clock" size={16} color="#F59E0B" />
-                    <Text style={styles.statsNumber}>{applications.filter(app => app.status === 'Open').length}</Text>
-                    <Text style={styles.statsLabel}>Pending</Text>
-                </View>
-                <View style={styles.statsCard}>
-                    <Icon name="check-circle" size={16} color="#10B981" />
-                    <Text style={styles.statsNumber}>{applications.filter(app => app.status === 'Approved').length}</Text>
-                    <Text style={styles.statsLabel}>Approved</Text>
-                </View>
-                <View style={styles.statsCard}>
-                    <Icon name="times-circle" size={16} color="#EF4444" />
-                    <Text style={styles.statsNumber}>{applications.filter(app => app.status === 'Rejected').length}</Text>
-                    <Text style={styles.statsLabel}>Rejected</Text>
-                </View>
-            </View>
+            {/* Clear Filters Button */}
+            {(selectedDepartment || selectedEmployee || historyStatusFilter) && (
+                <TouchableOpacity
+                    style={styles.clearFiltersButton}
+                    onPress={() => {
+                        setSelectedDepartment('');
+                        setSelectedEmployee('');
+                        setHistoryStatusFilter('');
+                    }}
+                >
+                    <Text style={styles.clearFiltersText}>Clear Filters</Text>
+                </TouchableOpacity>
+            )}
         </View>
     );
+
+    const renderLeaveCard = (leave, showActions = false) => (
+        <View key={leave.name} style={styles.leaveCard}>
+            <View style={styles.leaveCardHeader}>
+                <View style={styles.leaveCardHeaderLeft}>
+                    <Text style={styles.employeeName}>{leave.employee_name}</Text>
+                    <Text style={styles.leaveType}>{leave.leave_type}</Text>
+                </View>
+                <View
+                    style={[
+                        styles.statusBadge,
+                        styles[`status${leave.status.replace(/\s/g, '')}`]
+                    ]}
+                >
+                    <Text style={styles.statusText}>{leave.status}</Text>
+                </View>
+            </View>
+
+            <View style={styles.leaveDetails}>
+                <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Date:</Text>
+                    <Text style={styles.detailValue}>
+                        {new Date(leave.from_date).toLocaleDateString()} -{' '}
+                        {new Date(leave.to_date).toLocaleDateString()}
+                    </Text>
+                </View>
+
+                <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Days:</Text>
+                    <Text style={styles.detailValue}>
+                        {leave.total_leave_days} day(s)
+                        {leave.half_day ? ' (Half Day)' : ''}
+                    </Text>
+                </View>
+
+                {leave.department && (
+                    <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Department:</Text>
+                        <Text style={styles.detailValue}>{leave.department}</Text>
+                    </View>
+                )}
+
+                {leave.description && (
+                    <View style={styles.descriptionContainer}>
+                        <Text style={styles.detailLabel}>Reason:</Text>
+                        <Text style={styles.description}>{leave.description}</Text>
+                    </View>
+                )}
+
+                {leave.leave_approver_name && (
+                    <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Approver:</Text>
+                        <Text style={styles.detailValue}>{leave.leave_approver_name}</Text>
+                    </View>
+                )}
+
+                <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Applied:</Text>
+                    <Text style={styles.detailValue}>
+                        {new Date(leave.creation).toLocaleDateString()}
+                    </Text>
+                </View>
+            </View>
+
+            {showActions && (
+                <View style={styles.actionButtons}>
+                    <TouchableOpacity
+                        style={[styles.actionButton, styles.approveButton]}
+                        onPress={() => openActionModal(leave, 'approve')}
+                    >
+                        <Text style={styles.actionButtonText}>Approve</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.actionButton, styles.rejectButton]}
+                        onPress={() => openActionModal(leave, 'reject')}
+                    >
+                        <Text style={styles.actionButtonText}>Reject</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+        </View>
+    );
+
+    const renderPendingTab = () => (
+        <ScrollView
+            style={styles.tabContent}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+            {renderFilters()}
+            
+            {pendingLeaves.length === 0 ? (
+                <View style={styles.emptyState}>
+                    <Text style={styles.emptyText}>No pending leave applications</Text>
+                </View>
+            ) : (
+                <View style={styles.leavesList}>
+                    {pendingLeaves.map(leave => renderLeaveCard(leave, true))}
+                </View>
+            )}
+        </ScrollView>
+    );
+
+    const renderHistoryTab = () => (
+        <ScrollView
+            style={styles.tabContent}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+            {renderFilters()}
+            
+            {historyLeaves.length === 0 ? (
+                <View style={styles.emptyState}>
+                    <Text style={styles.emptyText}>No leave history found</Text>
+                </View>
+            ) : (
+                <View style={styles.leavesList}>
+                    {historyLeaves.map(leave => renderLeaveCard(leave, false))}
+                </View>
+            )}
+        </ScrollView>
+    );
+
+    const renderStatisticsTab = () => {
+        if (!statistics) {
+            return (
+                <View style={styles.emptyState}>
+                    <Text style={styles.emptyText}>No statistics available</Text>
+                </View>
+            );
+        }
+
+        return (
+            <ScrollView
+                style={styles.tabContent}
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            >
+                <View style={styles.statsContainer}>
+                    {/* Overall Statistics */}
+                    <View style={styles.statsSection}>
+                        <Text style={styles.statsSectionTitle}>Overall Statistics</Text>
+                        <View style={styles.statsGrid}>
+                            <View style={styles.statCard}>
+                                <Text style={styles.statValue}>{statistics.total_applications}</Text>
+                                <Text style={styles.statLabel}>Total Applications</Text>
+                            </View>
+                            <View style={styles.statCard}>
+                                <Text style={styles.statValue}>{statistics.total_days || 0}</Text>
+                                <Text style={styles.statLabel}>Total Days</Text>
+                            </View>
+                        </View>
+                    </View>
+
+                    {/* By Status */}
+                    {statistics.by_status && Object.keys(statistics.by_status).length > 0 && (
+                        <View style={styles.statsSection}>
+                            <Text style={styles.statsSectionTitle}>By Status</Text>
+                            {Object.entries(statistics.by_status).map(([status, count]) => (
+                                <View key={status} style={styles.statsRow}>
+                                    <Text style={styles.statsRowLabel}>{status}</Text>
+                                    <Text style={styles.statsRowValue}>{count}</Text>
+                                </View>
+                            ))}
+                        </View>
+                    )}
+
+                    {/* By Leave Type */}
+                    {statistics.by_leave_type && Object.keys(statistics.by_leave_type).length > 0 && (
+                        <View style={styles.statsSection}>
+                            <Text style={styles.statsSectionTitle}>By Leave Type</Text>
+                            {Object.entries(statistics.by_leave_type).map(([type, count]) => (
+                                <View key={type} style={styles.statsRow}>
+                                    <Text style={styles.statsRowLabel}>{type}</Text>
+                                    <Text style={styles.statsRowValue}>{count}</Text>
+                                </View>
+                            ))}
+                        </View>
+                    )}
+
+                    {/* By Department */}
+                    {statistics.by_department && Object.keys(statistics.by_department).length > 0 && (
+                        <View style={styles.statsSection}>
+                            <Text style={styles.statsSectionTitle}>By Department</Text>
+                            {Object.entries(statistics.by_department).map(([dept, count]) => (
+                                <View key={dept} style={styles.statsRow}>
+                                    <Text style={styles.statsRowLabel}>{dept}</Text>
+                                    <Text style={styles.statsRowValue}>{count}</Text>
+                                </View>
+                            ))}
+                        </View>
+                    )}
+                </View>
+            </ScrollView>
+        );
+    };
+
+    const renderActionModal = () => (
+        <Modal
+            visible={showActionModal}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowActionModal(false)}
+        >
+            <View style={styles.modalOverlay}>
+                <View style={styles.modalContent}>
+                    <Text style={styles.modalTitle}>
+                        {actionType === 'approve' ? 'Approve Leave' : 'Reject Leave'}
+                    </Text>
+
+                    {selectedLeave && (
+                        <View style={styles.modalLeaveInfo}>
+                            <Text style={styles.modalInfoText}>
+                                Employee: {selectedLeave.employee_name}
+                            </Text>
+                            <Text style={styles.modalInfoText}>
+                                Leave Type: {selectedLeave.leave_type}
+                            </Text>
+                            <Text style={styles.modalInfoText}>
+                                Days: {selectedLeave.total_leave_days}
+                            </Text>
+                        </View>
+                    )}
+
+                    {actionType === 'approve' ? (
+                        <View style={styles.inputGroup}>
+                            <Text style={styles.inputLabel}>Remarks (Optional)</Text>
+                            <TextInput
+                                style={styles.textInput}
+                                placeholder="Enter approval remarks..."
+                                value={remarks}
+                                onChangeText={setRemarks}
+                                multiline
+                                numberOfLines={3}
+                            />
+                        </View>
+                    ) : (
+                        <View style={styles.inputGroup}>
+                            <Text style={styles.inputLabel}>Rejection Reason *</Text>
+                            <TextInput
+                                style={styles.textInput}
+                                placeholder="Enter rejection reason..."
+                                value={rejectionReason}
+                                onChangeText={setRejectionReason}
+                                multiline
+                                numberOfLines={3}
+                            />
+                        </View>
+                    )}
+
+                    <View style={styles.modalButtons}>
+                        <TouchableOpacity
+                            style={[styles.modalButton, styles.modalCancelButton]}
+                            onPress={() => setShowActionModal(false)}
+                        >
+                            <Text style={styles.modalCancelButtonText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[
+                                styles.modalButton,
+                                actionType === 'approve' ? styles.modalApproveButton : styles.modalRejectButton
+                            ]}
+                            onPress={actionType === 'approve' ? handleApprove : handleReject}
+                        >
+                            <Text style={styles.modalActionButtonText}>
+                                {actionType === 'approve' ? 'Approve' : 'Reject'}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </View>
+        </Modal>
+    );
+
+    if (loading && !refreshing) {
+        return <Loading message="Loading leave approvals..." />;
+    }
 
     return (
         <View style={styles.container}>
-            <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-            
-            <FlatList
-                data={applications}
-                renderItem={renderApplicationItem}
-                keyExtractor={(item) => item.name}
-                ListHeaderComponent={renderHeader}
-                contentContainerStyle={styles.scrollContainer}
-                showsVerticalScrollIndicator={false}
-                refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-                }
-                ListEmptyComponent={
-                    <View style={styles.emptyState}>
-                        <Icon name="clipboard-list" size={48} color="#9CA3AF" />
-                        <Text style={styles.emptyStateTitle}>No Applications Found</Text>
-                        <Text style={styles.emptyStateText}>
-                            {filter === 'pending' 
-                                ? 'No pending leave applications at the moment'
-                                : 'No leave applications match your current filters'
-                            }
-                        </Text>
-                    </View>
-                }
-            />
+            {/* Tab Navigation */}
+            <View style={styles.tabContainer}>
+                <TouchableOpacity
+                    style={[styles.tab, activeTab === 'pending' && styles.tabActive]}
+                    onPress={() => setActiveTab('pending')}
+                >
+                    <Text style={[styles.tabText, activeTab === 'pending' && styles.tabTextActive]}>
+                        Pending ({pendingLeaves.length})
+                    </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.tab, activeTab === 'history' && styles.tabActive]}
+                    onPress={() => setActiveTab('history')}
+                >
+                    <Text style={[styles.tabText, activeTab === 'history' && styles.tabTextActive]}>
+                        History
+                    </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.tab, activeTab === 'statistics' && styles.tabActive]}
+                    onPress={() => setActiveTab('statistics')}
+                >
+                    <Text style={[styles.tabText, activeTab === 'statistics' && styles.tabTextActive]}>
+                        Statistics
+                    </Text>
+                </TouchableOpacity>
+            </View>
+
+            {/* Tab Content */}
+            {activeTab === 'pending' && renderPendingTab()}
+            {activeTab === 'history' && renderHistoryTab()}
+            {activeTab === 'statistics' && renderStatisticsTab()}
+
+            {/* Action Modal */}
+            {renderActionModal()}
         </View>
     );
-}
+};
 
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#F3F4F6',
+        backgroundColor: colors.background,
     },
-    scrollContainer: {
-        paddingBottom: 20,
+    tabContainer: {
+        flexDirection: 'row',
+        backgroundColor: colors.white,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.border,
     },
-    headerSection: {
-        backgroundColor: '#FFFFFF',
+    tab: {
+        flex: 1,
         paddingVertical: 16,
-        paddingHorizontal: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 3,
-    },
-    headerTop: {
-        flexDirection: 'row',
         alignItems: 'center',
+        borderBottomWidth: 2,
+        borderBottomColor: 'transparent',
     },
-    backButton: {
-        padding: 8,
-        marginRight: 12,
+    tabActive: {
+        borderBottomColor: colors.primary,
     },
-    headerTitleContainer: {
+    tabText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: colors.textSecondary,
+    },
+    tabTextActive: {
+        color: colors.primary,
+        fontWeight: '600',
+    },
+    tabContent: {
         flex: 1,
     },
-    headerTitle: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: '#111827',
-    },
-    headerSubtitle: {
-        fontSize: 12,
-        color: '#6B7280',
-        marginTop: 2,
-    },
-    filtersSection: {
-        backgroundColor: '#FFFFFF',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+    filtersContainer: {
+        backgroundColor: colors.white,
+        padding: 16,
         borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
-        flexDirection: 'row',
-        gap: 12,
+        borderBottomColor: colors.border,
     },
-    filterGroup: {
-        flex: 1,
+    filterItem: {
+        marginBottom: 12,
     },
     filterLabel: {
-        fontSize: 12,
+        fontSize: 13,
         fontWeight: '600',
-        color: '#374151',
-        marginBottom: 4,
+        color: colors.textPrimary,
+        marginBottom: 6,
     },
     pickerContainer: {
         borderWidth: 1,
-        borderColor: '#E5E7EB',
-        borderRadius: 6,
-        backgroundColor: '#F9FAFB',
-        overflow: 'hidden',
+        borderColor: colors.border,
+        borderRadius: 8,
+        backgroundColor: colors.white,
     },
     picker: {
-        height: 40,
-        fontSize: 12,
+        height: 45,
     },
-    statsSection: {
-        backgroundColor: '#FFFFFF',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-    },
-    statsCard: {
+    clearFiltersButton: {
+        marginTop: 8,
+        padding: 10,
+        backgroundColor: colors.lightGray,
+        borderRadius: 8,
         alignItems: 'center',
-        padding: 8,
-        gap: 4,
     },
-    statsNumber: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: '#374151',
+    clearFiltersText: {
+        fontSize: 14,
+        color: colors.primary,
+        fontWeight: '600',
     },
-    statsLabel: {
-        fontSize: 12,
-        color: '#6B7280',
-        fontWeight: '500',
+    leavesList: {
+        padding: 16,
     },
-    applicationCard: {
-        backgroundColor: '#FFFFFF',
-        marginHorizontal: 16,
-        marginVertical: 6,
+    emptyState: {
+        padding: 40,
+        alignItems: 'center',
+    },
+    emptyText: {
+        fontSize: 16,
+        color: colors.textSecondary,
+    },
+    leaveCard: {
+        backgroundColor: colors.white,
         borderRadius: 12,
         padding: 16,
-        elevation: 1,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: colors.border,
     },
-    applicationHeader: {
+    leaveCardHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'flex-start',
         marginBottom: 12,
     },
-    employeeInfo: {
+    leaveCardHeaderLeft: {
         flex: 1,
-    },
-    employeeNameRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        marginBottom: 4,
+        marginRight: 12,
     },
     employeeName: {
         fontSize: 16,
         fontWeight: '600',
-        color: '#374151',
+        color: colors.textPrimary,
+        marginBottom: 4,
     },
-    departmentText: {
-        fontSize: 12,
-        color: '#6B7280',
-        marginLeft: 22,
+    leaveType: {
+        fontSize: 14,
+        color: colors.textSecondary,
     },
     statusBadge: {
-        paddingHorizontal: 8,
-        paddingVertical: 4,
+        paddingHorizontal: 12,
+        paddingVertical: 6,
         borderRadius: 12,
+    },
+    statusOpen: {
+        backgroundColor: '#FFF3CD',
+    },
+    statusApproved: {
+        backgroundColor: '#D4EDDA',
+    },
+    statusRejected: {
+        backgroundColor: '#F8D7DA',
+    },
+    statusCancelled: {
+        backgroundColor: '#E2E3E5',
     },
     statusText: {
         fontSize: 12,
         fontWeight: '600',
-        textTransform: 'capitalize',
     },
     leaveDetails: {
         marginBottom: 12,
     },
-    leaveTypeRow: {
+    detailRow: {
         flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        marginBottom: 8,
+        marginBottom: 6,
     },
-    leaveTypeText: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#374151',
-    },
-    datesRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    dateInfo: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-    },
-    dateText: {
+    detailLabel: {
         fontSize: 13,
-        color: '#6B7280',
-        fontWeight: '500',
-    },
-    daysInfo: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-    },
-    daysText: {
-        fontSize: 13,
-        color: '#6B7280',
-        fontWeight: '500',
-    },
-    reasonSection: {
-        backgroundColor: '#F9FAFB',
-        padding: 12,
-        borderRadius: 8,
-        marginBottom: 12,
-    },
-    reasonLabel: {
-        fontSize: 12,
+        color: colors.textSecondary,
         fontWeight: '600',
-        color: '#374151',
-        marginBottom: 4,
+        width: 90,
     },
-    reasonText: {
-        fontSize: 14,
-        color: '#6B7280',
-        lineHeight: 18,
+    detailValue: {
+        fontSize: 13,
+        color: colors.textPrimary,
+        flex: 1,
     },
-    metaInfo: {
-        paddingTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: '#E5E7EB',
-        gap: 4,
-        marginBottom: 12,
+    descriptionContainer: {
+        marginTop: 8,
     },
-    metaRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-    },
-    metaText: {
-        fontSize: 11,
-        color: '#9CA3AF',
+    description: {
+        fontSize: 13,
+        color: colors.textSecondary,
+        fontStyle: 'italic',
+        marginTop: 4,
     },
     actionButtons: {
         flexDirection: 'row',
-        gap: 10,
-        marginTop: 8,
+        gap: 12,
+        marginTop: 12,
+    },
+    actionButton: {
+        flex: 1,
+        padding: 12,
+        borderRadius: 8,
+        alignItems: 'center',
     },
     approveButton: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#10B981',
-        paddingVertical: 12,
-        borderRadius: 8,
-        gap: 6,
-    },
-    approveButtonText: {
-        color: 'white',
-        fontSize: 14,
-        fontWeight: '600',
+        backgroundColor: colors.success,
     },
     rejectButton: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#FFFFFF',
-        paddingVertical: 12,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: '#EF4444',
-        gap: 6,
+        backgroundColor: colors.error,
     },
-    rejectButtonText: {
-        color: '#EF4444',
+    actionButtonText: {
+        color: colors.white,
         fontSize: 14,
         fontWeight: '600',
     },
-    disabledButton: {
-        opacity: 0.6,
+    statsContainer: {
+        padding: 16,
     },
-    rejectionReasonBox: {
+    statsSection: {
+        backgroundColor: colors.white,
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 16,
+        borderWidth: 1,
+        borderColor: colors.border,
+    },
+    statsSectionTitle: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: colors.textPrimary,
+        marginBottom: 12,
+    },
+    statsGrid: {
         flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: 8,
-        marginTop: 12,
-        padding: 12,
-        backgroundColor: '#FEF2F2',
-        borderRadius: 8,
-        borderLeftWidth: 3,
-        borderLeftColor: '#EF4444',
+        gap: 12,
     },
-    rejectionReasonText: {
-        fontSize: 12,
-        color: '#7F1D1D',
-        lineHeight: 16,
+    statCard: {
         flex: 1,
-    },
-    emptyState: {
+        backgroundColor: colors.lightBlue,
+        padding: 16,
+        borderRadius: 8,
         alignItems: 'center',
-        padding: 40,
-        marginTop: 40,
     },
-    emptyStateTitle: {
+    statValue: {
+        fontSize: 24,
+        fontWeight: 'bold',
+        color: colors.primary,
+        marginBottom: 4,
+    },
+    statLabel: {
+        fontSize: 12,
+        color: colors.textSecondary,
+        textAlign: 'center',
+    },
+    statsRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        paddingVertical: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.border,
+    },
+    statsRowLabel: {
+        fontSize: 14,
+        color: colors.textPrimary,
+    },
+    statsRowValue: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: colors.primary,
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    modalContent: {
+        backgroundColor: colors.white,
+        borderRadius: 16,
+        padding: 20,
+        width: '100%',
+        maxWidth: 400,
+    },
+    modalTitle: {
         fontSize: 18,
         fontWeight: '600',
-        color: '#374151',
-        marginTop: 16,
+        color: colors.textPrimary,
+        marginBottom: 16,
+    },
+    modalLeaveInfo: {
+        backgroundColor: colors.lightGray,
+        padding: 12,
+        borderRadius: 8,
+        marginBottom: 16,
+    },
+    modalInfoText: {
+        fontSize: 13,
+        color: colors.textPrimary,
+        marginBottom: 4,
+    },
+    inputGroup: {
+        marginBottom: 16,
+    },
+    inputLabel: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: colors.textPrimary,
         marginBottom: 8,
     },
-    emptyStateText: {
+    textInput: {
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: 8,
+        padding: 12,
         fontSize: 14,
-        color: '#6B7280',
-        textAlign: 'center',
-        lineHeight: 20,
+        color: colors.textPrimary,
+        backgroundColor: colors.white,
+        textAlignVertical: 'top',
+    },
+    modalButtons: {
+        flexDirection: 'row',
+        gap: 12,
+    },
+    modalButton: {
+        flex: 1,
+        padding: 14,
+        borderRadius: 8,
+        alignItems: 'center',
+    },
+    modalCancelButton: {
+        backgroundColor: colors.lightGray,
+    },
+    modalApproveButton: {
+        backgroundColor: colors.success,
+    },
+    modalRejectButton: {
+        backgroundColor: colors.error,
+    },
+    modalCancelButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: colors.textSecondary,
+    },
+    modalActionButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: colors.white,
     },
 });
 

@@ -280,7 +280,12 @@ def get_filters(
 			if approver_id:
 				filters[approver_field_map[doctype]] = approver_id
 	else:
-		filters.docstatus = ("!=", 2)
+		# For employee view: show submitted documents (docstatus=1) for Leave Application
+		# Submitted documents can have status: Open, Approved, Rejected, Cancelled
+		if doctype == "Leave Application":
+			filters.docstatus = 1  # Only submitted leave applications
+		else:
+			filters.docstatus = ("!=", 2)  # For other doctypes, show draft and submitted
 		filters.employee = employee
 
 	return filters
@@ -349,6 +354,10 @@ def get_leave_applications(
 	for_approval: bool = False,
 	limit: int | None = None,
 ) -> list[dict]:
+	# For admin approval view, get current employee to exclude their applications
+	if for_approval and not employee:
+		employee = get_employee_by_user()
+	
 	filters = get_filters("Leave Application", employee, approver_id, for_approval)
 	fields = [
 		"name",
@@ -367,6 +376,103 @@ def get_leave_applications(
 		"leave_approver",
 		"posting_date",
 		"creation",
+		"docstatus",
+	]
+
+	if workflow_state_field := get_workflow_state_field("Leave Application"):
+		fields.append(workflow_state_field)
+
+	applications = frappe.get_list(
+		"Leave Application",
+		fields=fields,
+		filters=filters,
+		order_by="posting_date desc",
+		limit=limit,
+	)
+
+	if workflow_state_field:
+		for application in applications:
+			application["workflow_state_field"] = workflow_state_field
+
+	return applications
+
+
+@frappe.whitelist()
+def get_leave_history(
+	employee: str = None,
+	status_filter: str = None,
+	limit: int | None = 500,
+) -> list[dict]:
+	"""
+	Get leave application history (approved, rejected, cancelled applications).
+	For employees: shows their own history
+	For admins: shows all history or specific employee's history
+	
+	Args:
+		employee: Employee ID (optional for admin, required for employee view)
+		status_filter: Filter by status - 'approved', 'rejected', 'cancelled', or None for all
+		limit: Maximum number of records to return
+	
+	Returns:
+		List of submitted leave applications with status Approved/Rejected/Cancelled
+	"""
+	# If no employee specified, get current user's employee ID
+	if not employee:
+		employee = get_employee_by_user()
+		if not employee:
+			frappe.throw(_("No employee record found for current user"))
+	
+	# Build filters for submitted applications only
+	filters = frappe._dict()
+	filters.docstatus = 1  # Only submitted applications
+	
+	# Filter by employee (admins can pass different employee ID, employees see only their own)
+	current_employee = get_employee_by_user()
+	user_roles = frappe.get_roles()
+	
+	# Check if user is admin/HR
+	is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+	
+	if is_admin:
+		# Admins can see all or specific employee's history
+		if employee:
+			filters.employee = employee
+		# If no employee specified, show all
+	else:
+		# Regular employees can only see their own history
+		filters.employee = current_employee
+	
+	# Apply status filter
+	if status_filter:
+		status_map = {
+			'approved': 'Approved',
+			'rejected': 'Rejected',
+			'cancelled': 'Cancelled',
+		}
+		if status_filter.lower() in status_map:
+			filters.status = status_map[status_filter.lower()]
+	else:
+		# Show all completed statuses (exclude pending "Open")
+		filters.status = ("in", ["Approved", "Rejected", "Cancelled"])
+	
+	fields = [
+		"name",
+		"posting_date",
+		"employee",
+		"employee_name",
+		"leave_type",
+		"status",
+		"from_date",
+		"to_date",
+		"half_day",
+		"half_day_date",
+		"description",
+		"total_leave_days",
+		"leave_balance",
+		"leave_approver",
+		"creation",
+		"modified",
+		"docstatus",
 	]
 
 	if workflow_state_field := get_workflow_state_field("Leave Application"):
@@ -502,6 +608,540 @@ def get_leave_types(employee: str, date: str) -> list:
 	leave_types = list(leave_details["leave_allocation"].keys()) + leave_details["lwps"]
 
 	return leave_types
+
+
+# ============================================================================
+# COMPREHENSIVE LEAVE MANAGEMENT APIs
+# ============================================================================
+
+@frappe.whitelist()
+def submit_leave_application(
+	employee: str,
+	leave_type: str,
+	from_date: str,
+	to_date: str,
+	half_day: int = 0,
+	half_day_date: str | None = None,
+	description: str | None = None,
+	leave_approver: str | None = None,
+) -> dict:
+	"""
+	Submit a new leave application for mobile app.
+	
+	Args:
+		employee: Employee ID
+		leave_type: Leave Type name
+		from_date: Start date (YYYY-MM-DD)
+		to_date: End date (YYYY-MM-DD)
+		half_day: 1 if half day, 0 otherwise
+		half_day_date: Date for half day (YYYY-MM-DD)
+		description: Reason for leave
+		leave_approver: Leave approver user ID (optional)
+	
+	Returns:
+		Dict with application details and updated leave balance
+	"""
+	try:
+		# Validate current user has employee record
+		current_employee = get_employee_by_user()
+		if not current_employee:
+			frappe.throw(_("No employee record found for current user"))
+		
+		# Employees can only apply for their own leave
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin and employee != current_employee:
+			frappe.throw(_("You can only apply leave for yourself"))
+		
+		# Get company from employee
+		company = frappe.get_value("Employee", employee, "company")
+		
+		# Create leave application
+		leave_app = frappe.get_doc({
+			"doctype": "Leave Application",
+			"employee": employee,
+			"leave_type": leave_type,
+			"from_date": getdate(from_date),
+			"to_date": getdate(to_date),
+			"half_day": cint(half_day),
+			"half_day_date": getdate(half_day_date) if half_day_date else None,
+			"description": description or "",
+			"leave_approver": leave_approver,
+			"company": company,
+			"posting_date": nowdate(),
+			"status": "Open",
+		})
+		
+		# Insert and submit
+		leave_app.insert(ignore_permissions=True)
+		leave_app.submit()
+		frappe.db.commit()
+		
+		# Get updated leave balance
+		balance = get_leave_balance_map(employee)
+		
+		# Send notification to approver
+		try:
+			send_leave_application_notification(leave_app.name, "submitted")
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Leave Notification")
+		
+		return {
+			"status": "success",
+			"message": _("Leave application submitted successfully"),
+			"application_id": leave_app.name,
+			"employee": employee,
+			"employee_name": leave_app.employee_name,
+			"leave_type": leave_type,
+			"from_date": str(leave_app.from_date),
+			"to_date": str(leave_app.to_date),
+			"total_leave_days": leave_app.total_leave_days,
+			"leave_balance": balance.get(leave_type, {}).get("remaining_leaves", 0),
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Submit Leave Error: {str(e)}\n{frappe.get_traceback()}", "Leave Application")
+		frappe.throw(_("Failed to submit leave application: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def approve_leave_application(application_id: str, remarks: str | None = None) -> dict:
+	"""
+	Approve a leave application (for admins/approvers).
+	
+	Args:
+		application_id: Leave Application ID
+		remarks: Optional approval remarks
+	
+	Returns:
+		Dict with updated application status and employee leave balance
+	"""
+	try:
+		# Get leave application
+		leave_app = frappe.get_doc("Leave Application", application_id)
+		
+		# Check permission
+		current_user = frappe.session.user
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User", "Leave Approver"})
+		is_approver = current_user == leave_app.leave_approver
+		
+		if not (is_admin or is_approver):
+			frappe.throw(_("You do not have permission to approve this leave"))
+		
+		# Check if already processed
+		if leave_app.status != "Open":
+			frappe.throw(_("This leave application has already been {0}").format(leave_app.status.lower()))
+		
+		# Approve
+		leave_app.status = "Approved"
+		if remarks:
+			leave_app.add_comment("Comment", f"Approved: {remarks}")
+		leave_app.save(ignore_permissions=True)
+		frappe.db.commit()
+		
+		# Get updated balance
+		balance = get_leave_balance_map(leave_app.employee)
+		
+		# Send notification to employee
+		try:
+			send_leave_application_notification(application_id, "approved", remarks)
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Leave Notification")
+		
+		return {
+			"status": "success",
+			"message": _("Leave application approved successfully"),
+			"application_id": application_id,
+			"employee": leave_app.employee,
+			"leave_type": leave_app.leave_type,
+			"leave_balance": balance.get(leave_app.leave_type, {}).get("remaining_leaves", 0),
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Approve Leave Error: {str(e)}\n{frappe.get_traceback()}", "Leave Approval")
+		frappe.throw(_("Failed to approve leave: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def reject_leave_application(application_id: str, reason: str) -> dict:
+	"""
+	Reject a leave application (for admins/approvers).
+	
+	Args:
+		application_id: Leave Application ID
+		reason: Rejection reason (required)
+	
+	Returns:
+		Dict with updated application status
+	"""
+	try:
+		if not reason or not reason.strip():
+			frappe.throw(_("Rejection reason is required"))
+		
+		# Get leave application
+		leave_app = frappe.get_doc("Leave Application", application_id)
+		
+		# Check permission
+		current_user = frappe.session.user
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User", "Leave Approver"})
+		is_approver = current_user == leave_app.leave_approver
+		
+		if not (is_admin or is_approver):
+			frappe.throw(_("You do not have permission to reject this leave"))
+		
+		# Check if already processed
+		if leave_app.status != "Open":
+			frappe.throw(_("This leave application has already been {0}").format(leave_app.status.lower()))
+		
+		# Reject
+		leave_app.status = "Rejected"
+		leave_app.add_comment("Comment", f"Rejected: {reason}")
+		leave_app.save(ignore_permissions=True)
+		frappe.db.commit()
+		
+		# Send notification to employee
+		try:
+			send_leave_application_notification(application_id, "rejected", reason)
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Leave Notification")
+		
+		return {
+			"status": "success",
+			"message": _("Leave application rejected"),
+			"application_id": application_id,
+			"employee": leave_app.employee,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Reject Leave Error: {str(e)}\n{frappe.get_traceback()}", "Leave Rejection")
+		frappe.throw(_("Failed to reject leave: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def cancel_leave_application(application_id: str, reason: str | None = None) -> dict:
+	"""
+	Cancel a leave application (employee can cancel their own pending/approved leaves).
+	
+	Args:
+		application_id: Leave Application ID
+		reason: Cancellation reason
+	
+	Returns:
+		Dict with cancellation status
+	"""
+	try:
+		# Get leave application
+		leave_app = frappe.get_doc("Leave Application", application_id)
+		
+		# Check permission - employee can cancel their own or admin can cancel any
+		current_employee = get_employee_by_user()
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin and leave_app.employee != current_employee:
+			frappe.throw(_("You can only cancel your own leave applications"))
+		
+		# Check if can be cancelled
+		if leave_app.status == "Cancelled":
+			frappe.throw(_("This leave application is already cancelled"))
+		
+		if leave_app.status == "Rejected":
+			frappe.throw(_("Cannot cancel a rejected leave application"))
+		
+		# Cancel
+		if leave_app.docstatus == 1:
+			leave_app.cancel()
+		else:
+			leave_app.status = "Cancelled"
+			leave_app.save(ignore_permissions=True)
+		
+		if reason:
+			leave_app.add_comment("Comment", f"Cancelled: {reason}")
+		
+		frappe.db.commit()
+		
+		# Get updated balance if approved leave was cancelled
+		balance = None
+		if leave_app.status == "Approved":
+			balance = get_leave_balance_map(leave_app.employee)
+		
+		return {
+			"status": "success",
+			"message": _("Leave application cancelled successfully"),
+			"application_id": application_id,
+			"leave_balance": balance.get(leave_app.leave_type, {}).get("remaining_leaves", 0) if balance else None,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Cancel Leave Error: {str(e)}\n{frappe.get_traceback()}", "Leave Cancellation")
+		frappe.throw(_("Failed to cancel leave: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_employee_leave_applications(
+	employee: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+	status_filter: str | None = None,
+	leave_type: str | None = None,
+	limit: int = 100,
+) -> dict:
+	"""
+	Get leave applications for an employee with filters.
+	
+	Args:
+		employee: Employee ID (if None, uses current user's employee)
+		from_date: Filter from this date
+		to_date: Filter to this date
+		status_filter: Filter by status (Open, Approved, Rejected, Cancelled)
+		leave_type: Filter by leave type
+		limit: Maximum number of records
+	
+	Returns:
+		Dict with applications list and summary
+	"""
+	try:
+		# If no employee, get current user's employee
+		if not employee:
+			employee = get_employee_by_user()
+			if not employee:
+				frappe.throw(_("No employee record found for current user"))
+		
+		# Build filters
+		filters = {"employee": employee}
+		
+		if from_date:
+			filters["from_date"] = (">=", getdate(from_date))
+		if to_date:
+			filters["to_date"] = ("<=", getdate(to_date))
+		if status_filter:
+			filters["status"] = status_filter
+		if leave_type:
+			filters["leave_type"] = leave_type
+		
+		# Get applications
+		fields = [
+			"name",
+			"employee",
+			"employee_name",
+			"leave_type",
+			"from_date",
+			"to_date",
+			"half_day",
+			"half_day_date",
+			"total_leave_days",
+			"description",
+			"status",
+			"posting_date",
+			"leave_balance",
+			"leave_approver",
+			"leave_approver_name",
+			"creation",
+			"modified",
+			"docstatus",
+		]
+		
+		applications = frappe.get_list(
+			"Leave Application",
+			fields=fields,
+			filters=filters,
+			order_by="from_date desc, creation desc",
+			limit=limit,
+		)
+		
+		# Calculate summary
+		total_days = sum(app.get("total_leave_days", 0) for app in applications)
+		status_summary = {}
+		for app in applications:
+			status = app.get("status", "Unknown")
+			status_summary[status] = status_summary.get(status, 0) + 1
+		
+		# Get current balances
+		balance = get_leave_balance_map(employee)
+		
+		return {
+			"status": "success",
+			"applications": applications,
+			"total_applications": len(applications),
+			"total_leave_days": total_days,
+			"status_summary": status_summary,
+			"leave_balances": balance,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Employee Leaves Error: {str(e)}\n{frappe.get_traceback()}", "Leave Applications")
+		return {
+			"status": "error",
+			"message": str(e),
+			"applications": [],
+		}
+
+
+@frappe.whitelist()
+def get_admin_leave_applications(
+	department: str | None = None,
+	employee: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+	status_filter: str | None = None,
+	leave_type: str | None = None,
+	limit: int = 500,
+) -> dict:
+	"""
+	Get all leave applications for admin with advanced filters.
+	
+	Args:
+		department: Filter by department
+		employee: Filter by specific employee
+		from_date: Filter from this date
+		to_date: Filter to this date
+		status_filter: Filter by status
+		leave_type: Filter by leave type
+		limit: Maximum records
+	
+	Returns:
+		Dict with applications and statistics
+	"""
+	try:
+		# Check if user is admin
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User", "Leave Approver"})
+		
+		if not is_admin:
+			frappe.throw(_("You do not have permission to view all leave applications"))
+		
+		# Build filters
+		filters = {}
+		
+		if department:
+			filters["department"] = department
+		if employee:
+			filters["employee"] = employee
+		if from_date:
+			filters["from_date"] = (">=", getdate(from_date))
+		if to_date:
+			filters["to_date"] = ("<=", getdate(to_date))
+		if status_filter:
+			filters["status"] = status_filter
+		if leave_type:
+			filters["leave_type"] = leave_type
+		
+		# Get applications
+		fields = [
+			"name",
+			"employee",
+			"employee_name",
+			"department",
+			"leave_type",
+			"from_date",
+			"to_date",
+			"half_day",
+			"half_day_date",
+			"total_leave_days",
+			"description",
+			"status",
+			"posting_date",
+			"leave_balance",
+			"leave_approver",
+			"leave_approver_name",
+			"creation",
+			"modified",
+			"docstatus",
+		]
+		
+		applications = frappe.get_list(
+			"Leave Application",
+			fields=fields,
+			filters=filters,
+			order_by="posting_date desc, creation desc",
+			limit=limit,
+		)
+		
+		# Calculate statistics
+		stats = {
+			"total_applications": len(applications),
+			"total_days": sum(app.get("total_leave_days", 0) for app in applications),
+			"by_status": {},
+			"by_leave_type": {},
+			"by_department": {},
+		}
+		
+		for app in applications:
+			# By status
+			status = app.get("status", "Unknown")
+			stats["by_status"][status] = stats["by_status"].get(status, 0) + 1
+			
+			# By leave type
+			ltype = app.get("leave_type", "Unknown")
+			stats["by_leave_type"][ltype] = stats["by_leave_type"].get(ltype, 0) + 1
+			
+			# By department
+			dept = app.get("department", "Unknown")
+			stats["by_department"][dept] = stats["by_department"].get(dept, 0) + 1
+		
+		return {
+			"status": "success",
+			"applications": applications,
+			"statistics": stats,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Admin Leaves Error: {str(e)}\n{frappe.get_traceback()}", "Admin Leave Applications")
+		return {
+			"status": "error",
+			"message": str(e),
+			"applications": [],
+		}
+
+
+def send_leave_application_notification(application_id: str, action: str, remarks: str | None = None):
+	"""Send FCM notification for leave application status."""
+	try:
+		leave_app = frappe.get_doc("Leave Application", application_id)
+		user_id = frappe.get_value("Employee", leave_app.employee, "user_id")
+		
+		if not user_id:
+			return
+		
+		# Get FCM token
+		tokens = frappe.get_all("Mobile Device", 
+			filters={"user": user_id}, 
+			pluck="fcm_token"
+		)
+		tokens = [t for t in tokens if t]
+		
+		if not tokens:
+			return
+		
+		# Build notification
+		if action == "submitted":
+			title = "Leave Application Submitted"
+			body = f"Your leave application for {leave_app.total_leave_days} day(s) has been submitted successfully"
+		elif action == "approved":
+			title = "Leave Approved"
+			body = f"Your leave application for {leave_app.total_leave_days} day(s) has been approved"
+			if remarks:
+				body += f". {remarks}"
+		elif action == "rejected":
+			title = "Leave Rejected"
+			body = f"Your leave application for {leave_app.total_leave_days} day(s) has been rejected"
+			if remarks:
+				body += f". Reason: {remarks}"
+		else:
+			return
+		
+		# Send notification
+		send_fcm_notification(tokens, title, body, {
+			"type": "leave_application",
+			"action": action,
+			"application_id": application_id,
+		})
+		
+	except Exception as e:
+		frappe.log_error(f"Send Leave Notification Error: {str(e)}", "Leave Notification")
 
 
 # Expense Claims
@@ -2712,146 +3352,7 @@ def get_employee_count():
         frappe.throw(_("Failed to fetch employee count"))
 
 
-@frappe.whitelist()
-def get_leave_applications(employee=None, for_approval=False, include_balances=False):
-    """Get leave applications with optional filters."""
-    try:
-        filters = {}
-        if employee:
-            filters['employee'] = employee
-        if for_approval:
-            filters['status'] = 'Open'
-            filters['leave_approver'] = frappe.session.user
-
-        fields = ['name', 'employee', 'employee_name', 'leave_type', 'from_date', 'to_date', 'total_leave_days', 'status', 'description']
-        leaves = frappe.get_all('Leave Application', filters=filters, fields=fields)
-
-        if include_balances and employee:
-            leave_balances = frappe.get_all(
-                'Leave Ledger Entry',
-                filters={'employee': employee, 'is_cancelled': 0},
-                fields=['leave_type', 'SUM(leaves) as balance'],
-                group_by='leave_type'
-            )
-            balance_map = {entry.leave_type: flt(entry.balance) for entry in leave_balances}
-            return {'leaves': leaves, 'leave_balances': balance_map}
-        return leaves
-    except Exception as e:
-        frappe.log_error(frappe.get_traceback(), 'Get Leave Applications Error')
-        return {'status': 'error', 'message': str(e)}
-
-
-@frappe.whitelist()
-def apply_workflow_action(doctype, docname, action):
-    """Apply workflow action (Approve/Reject) to documents."""
-    try:
-        if not frappe.has_permission(doctype, 'write', docname):
-            frappe.throw(f'Insufficient permissions to {action.lower()} {doctype}')
-
-        doc = frappe.get_doc(doctype, docname)
-        if action not in ['Approve', 'Reject']:
-            frappe.throw(f'Invalid action: {action}')
-
-        if get_workflow_name(doctype):
-            apply_workflow(doc, action)
-        else:
-            doc.status = 'Approved' if action == 'Approve' else 'Rejected'
-            doc.db_update()
-
-        if action == 'Approve' and doctype == 'Leave Application':
-            leave_ledger = frappe.get_doc({
-                'doctype': 'Leave Ledger Entry',
-                'employee': doc.employee,
-                'leave_type': doc.leave_type,
-                'leaves': -flt(doc.total_leave_days),
-                'transaction_type': 'Leave Application',
-                'transaction_name': doc.name,
-                'is_carry_forward': 0,
-                'is_expired': 0,
-                'posting_date': nowdate()
-            })
-            leave_ledger.insert(ignore_permissions=True)
-
-        frappe.db.commit()
-
-        leave_balances = frappe.get_all(
-            'Leave Ledger Entry',
-            filters={'employee': doc.employee, 'is_cancelled': 0},
-            fields=['leave_type', 'SUM(leaves) as balance'],
-            group_by='leave_type'
-        )
-        balance_map = {entry.leave_type: flt(entry.balance) for entry in leave_balances}
-
-        return {
-            'status': 'success',
-            'message': f'Leave {action.lower()}d successfully',
-            'leave_balances': balance_map
-        }
-    except Exception as e:
-        frappe.log_error(frappe.get_traceback(), f'Apply Workflow Action Error: {action}')
-        return {'status': 'error', 'message': str(e)}
-
-
-@frappe.whitelist()
-def create_leave_application(employee, leave_type, from_date, to_date, half_day=0, half_day_date=None, description=None, leave_approver=None):
-    """Create a new leave application."""
-    try:
-        if not employee or not leave_type or not from_date or not to_date:
-            frappe.throw("Employee, leave type, from date, and to date are mandatory fields", title="Validation Error")
-        
-        if not frappe.db.exists("Employee", employee):
-            frappe.throw(f"Employee {employee} does not exist", title="Invalid Employee")
-        
-        if not frappe.db.exists("Leave Type", leave_type):
-            frappe.throw(f"Leave Type {leave_type} does not exist", title="Invalid Leave Type")
-        
-        if leave_approver and not frappe.db.exists("User", leave_approver):
-            frappe.throw(f"Leave Approver {leave_approver} does not exist", title="Invalid Approver")
-
-        from_date = getdate(from_date)
-        to_date = getdate(to_date)
-        if to_date < from_date:
-            frappe.throw("To Date cannot be before From Date", title="Invalid Date Range")
-        
-        total_leave_days = (to_date - from_date).days + 1
-        if half_day and half_day_date:
-            half_day_date = getdate(half_day_date)
-            if half_day_date < from_date or half_day_date > to_date:
-                frappe.throw("Half Day Date must be between From and To Dates", title="Invalid Half Day Date")
-            total_leave_days -= 0.5
-
-        leave_balance = frappe.get_value(
-            "Leave Ledger Entry",
-            {"employee": employee, "leave_type": leave_type, "is_cancelled": 0},
-            "SUM(leaves) as balance",
-            as_dict=True
-        )["balance"] or 0
-
-        if leave_balance < total_leave_days:
-            frappe.throw(f"Insufficient leave balance for {leave_type}. Available: {leave_balance}, Requested: {total_leave_days}", title="Insufficient Balance")
-
-        leave_application = frappe.get_doc({
-            "doctype": "Leave Application",
-            "employee": employee,
-            "leave_type": leave_type,
-            "from_date": from_date,
-            "to_date": to_date,
-            "total_leave_days": total_leave_days,
-            "half_day": half_day,
-            "half_day_date": half_day_date if half_day else None,
-            "description": description,
-            "leave_approver": leave_approver,
-            "status": "Open",
-            "posting_date": nowdate(),
-        })
-        leave_application.insert(ignore_permissions=False)
-
-        frappe.db.commit()
-        return {"status": "success", "message": "Leave application created successfully", "name": leave_application.name}
-    except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Create Leave Application Error")
-        frappe.response.http_status_code = 400
-        frappe.throw(str(e), title="Failed to create leave application")
+# OLD DUPLICATE LEAVE FUNCTIONS REMOVED - Use new comprehensive APIs starting at line ~600
 
 
 @frappe.whitelist()
