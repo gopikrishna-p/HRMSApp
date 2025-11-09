@@ -104,6 +104,7 @@ const TodayAttendanceScreen = () => {
         const isPresent = activeTab === 'present';
         const isAbsent = activeTab === 'absent';
         const isHoliday = activeTab === 'holiday';
+        const isWFH = item.status === 'Work From Home';
 
         return (
             <View key={`${item.employee_id}-${index}`} style={styles.attendanceItem}>
@@ -113,53 +114,74 @@ const TodayAttendanceScreen = () => {
                         <Text style={styles.employeeId}>ID: {item.employee_id}</Text>
                     </View>
 
-                    {isPresent && (
-                        <View
-                            style={[
-                                styles.statusBadge,
-                                { backgroundColor: checkOut ? '#10B981' : '#F59E0B' },
-                            ]}
-                        >
-                            <Text style={styles.statusText}>
-                                {checkOut ? 'Complete' : 'In Progress'}
-                            </Text>
-                        </View>
-                    )}
-                    {isAbsent && (
-                        <View style={[styles.statusBadge, { backgroundColor: '#EF4444' }]}>
-                            <Text style={styles.statusText}>Absent</Text>
-                        </View>
-                    )}
-                    {isHoliday && (
-                        <View style={[styles.statusBadge, { backgroundColor: '#6366F1' }]}>
-                            <Text style={styles.statusText}>Holiday</Text>
-                        </View>
-                    )}
-                </View>
-
-                {isPresent && (
-                    <View style={styles.timeContainer}>
-                        {checkIn && (
-                            <View style={styles.timeInfo}>
-                                <Icon name="sign-in-alt" size={12} color="#10B981" />
-                                <Text style={styles.timeText}>Check-in: {checkIn}</Text>
+                    <View style={styles.badgesContainer}>
+                        {isPresent && (
+                            <>
+                                {/* Work Type Badge */}
+                                {isWFH ? (
+                                    <View style={[styles.workTypeBadge, { backgroundColor: '#8B5CF6' }]}>
+                                        <Icon name="home" size={10} color="white" />
+                                        <Text style={styles.workTypeBadgeText}>WFH</Text>
+                                    </View>
+                                ) : (
+                                    <View style={[styles.workTypeBadge, { backgroundColor: '#3B82F6' }]}>
+                                        <Icon name="building" size={10} color="white" />
+                                        <Text style={styles.workTypeBadgeText}>Office</Text>
+                                    </View>
+                                )}
+                                
+                                {/* Status Badge */}
+                                <View
+                                    style={[
+                                        styles.statusBadge,
+                                        { backgroundColor: checkOut ? '#10B981' : '#F59E0B' },
+                                    ]}
+                                >
+                                    <Text style={styles.statusText}>
+                                        {checkOut ? 'Complete' : 'Active'}
+                                    </Text>
+                                </View>
+                            </>
+                        )}
+                        {isAbsent && (
+                            <View style={[styles.statusBadge, { backgroundColor: '#EF4444' }]}>
+                                <Text style={styles.statusText}>Absent</Text>
                             </View>
                         )}
-
-                        {checkOut ? (
-                            <View style={styles.timeInfo}>
-                                <Icon name="sign-out-alt" size={12} color="#EF4444" />
-                                <Text style={styles.timeText}>Check-out: {checkOut}</Text>
-                            </View>
-                        ) : (
-                            <View style={styles.timeInfo}>
-                                <Icon name="exclamation-circle" size={12} color="#F59E0B" />
-                                <Text style={[styles.timeText, { color: '#F59E0B' }]}>
-                                    Awaiting check-out
-                                </Text>
+                        {isHoliday && (
+                            <View style={[styles.statusBadge, { backgroundColor: '#6366F1' }]}>
+                                <Text style={styles.statusText}>Holiday</Text>
                             </View>
                         )}
                     </View>
+                </View>
+
+                {isPresent && (
+                    <>
+                        <View style={styles.divider} />
+                        <View style={styles.timeContainer}>
+                            {checkIn && (
+                                <View style={styles.timeInfo}>
+                                    <Icon name="sign-in-alt" size={12} color="#10B981" />
+                                    <Text style={styles.timeText}>Check-in: {checkIn}</Text>
+                                </View>
+                            )}
+
+                            {checkOut ? (
+                                <View style={styles.timeInfo}>
+                                    <Icon name="sign-out-alt" size={12} color="#EF4444" />
+                                    <Text style={styles.timeText}>Check-out: {checkOut}</Text>
+                                </View>
+                            ) : (
+                                <View style={styles.timeInfo}>
+                                    <Icon name="exclamation-circle" size={12} color="#F59E0B" />
+                                    <Text style={[styles.timeText, { color: '#F59E0B' }]}>
+                                        Awaiting check-out
+                                    </Text>
+                                </View>
+                            )}
+                        </View>
+                    </>
                 )}
 
                 {isHoliday && item.holiday_name && (
@@ -176,6 +198,10 @@ const TodayAttendanceScreen = () => {
     const attendanceRate = data.working_employees > 0
         ? Math.round((data.present.length / data.working_employees) * 100)
         : 0;
+    
+    // Calculate WFH and Office counts
+    const wfhCount = data.present.filter(p => p.status === 'Work From Home').length;
+    const officeCount = data.present.length - wfhCount;
 
     return (
         <View style={styles.container}>
@@ -209,16 +235,8 @@ const TodayAttendanceScreen = () => {
                 </TouchableOpacity>
             </View>
 
-            {/* Summary Stats */}
+            {/* Summary Stats - Enhanced */}
             <View style={styles.summaryContainer}>
-                <View style={styles.statCard}>
-                    <Icon name="users" size={18} color="#6366F1" />
-                    <View style={styles.statContent}>
-                        <Text style={styles.statNumber}>{data.working_employees}</Text>
-                        <Text style={styles.statLabel}>Working</Text>
-                    </View>
-                </View>
-
                 <View style={styles.statCard}>
                     <Icon name="check-circle" size={18} color="#10B981" />
                     <View style={styles.statContent}>
@@ -226,6 +244,26 @@ const TodayAttendanceScreen = () => {
                             {data.present.length}
                         </Text>
                         <Text style={styles.statLabel}>Present</Text>
+                    </View>
+                </View>
+
+                <View style={styles.statCard}>
+                    <Icon name="building" size={18} color="#3B82F6" />
+                    <View style={styles.statContent}>
+                        <Text style={[styles.statNumber, { color: '#3B82F6' }]}>
+                            {officeCount}
+                        </Text>
+                        <Text style={styles.statLabel}>Office</Text>
+                    </View>
+                </View>
+
+                <View style={styles.statCard}>
+                    <Icon name="home" size={18} color="#8B5CF6" />
+                    <View style={styles.statContent}>
+                        <Text style={[styles.statNumber, { color: '#8B5CF6' }]}>
+                            {wfhCount}
+                        </Text>
+                        <Text style={styles.statLabel}>WFH</Text>
                     </View>
                 </View>
 
@@ -238,16 +276,28 @@ const TodayAttendanceScreen = () => {
                         <Text style={styles.statLabel}>Absent</Text>
                     </View>
                 </View>
+            </View>
 
-                <View style={styles.statCard}>
-                    <Icon name="percentage" size={18} color="#8B5CF6" />
-                    <View style={styles.statContent}>
-                        <Text style={[styles.statNumber, { color: '#8B5CF6' }]}>
-                            {attendanceRate}%
-                        </Text>
-                        <Text style={styles.statLabel}>Rate</Text>
-                    </View>
+            {/* Attendance Rate Bar */}
+            <View style={styles.rateContainer}>
+                <View style={styles.rateHeader}>
+                    <Text style={styles.rateLabel}>Attendance Rate</Text>
+                    <Text style={styles.ratePercentage}>{attendanceRate}%</Text>
                 </View>
+                <View style={styles.progressBarContainer}>
+                    <View 
+                        style={[
+                            styles.progressBarFill, 
+                            { 
+                                width: `${attendanceRate}%`,
+                                backgroundColor: attendanceRate >= 80 ? '#10B981' : attendanceRate >= 60 ? '#F59E0B' : '#EF4444'
+                            }
+                        ]} 
+                    />
+                </View>
+                <Text style={styles.rateSubtext}>
+                    {data.present.length} of {data.working_employees} employees present
+                </Text>
             </View>
 
             {/* Tab Navigation */}
@@ -338,6 +388,26 @@ const TodayAttendanceScreen = () => {
                         />
                     }
                 >
+                    {/* Info Card for Present Tab */}
+                    {activeTab === 'present' && (wfhCount > 0 || officeCount > 0) && (
+                        <View style={styles.infoCard}>
+                            <View style={styles.infoRow}>
+                                <View style={styles.infoItem}>
+                                    <Icon name="building" size={14} color="#3B82F6" />
+                                    <Text style={styles.infoText}>
+                                        {officeCount} in Office
+                                    </Text>
+                                </View>
+                                <View style={styles.infoItem}>
+                                    <Icon name="home" size={14} color="#8B5CF6" />
+                                    <Text style={styles.infoText}>
+                                        {wfhCount} Work From Home
+                                    </Text>
+                                </View>
+                            </View>
+                        </View>
+                    )}
+                    
                     {activeList.map((item, index) => renderAttendanceItem(item, index))}
                 </ScrollView>
             )}
@@ -367,16 +437,21 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
         backgroundColor: 'white',
         borderBottomWidth: 1,
         borderBottomColor: '#E5E7EB',
+        elevation: 1,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
     },
     dateNavButton: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
+        width: 36,
+        height: 36,
+        borderRadius: 18,
         backgroundColor: '#F8FAFC',
         alignItems: 'center',
         justifyContent: 'center',
@@ -387,78 +462,122 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     dateLabel: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#374151',
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#111827',
     },
     recordCount: {
-        fontSize: 12,
+        fontSize: 11,
         color: '#6B7280',
         marginTop: 2,
+        fontWeight: '500',
     },
 
     summaryContainer: {
         flexDirection: 'row',
-        paddingHorizontal: 12,
-        paddingVertical: 12,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
         backgroundColor: 'white',
-        borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
-        gap: 8,
+        gap: 6,
     },
     statCard: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: '#F8FAFC',
-        padding: 10,
-        borderRadius: 10,
-        gap: 8,
+        padding: 8,
+        borderRadius: 8,
+        gap: 6,
     },
     statContent: {
         flex: 1,
     },
     statNumber: {
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: '700',
         color: '#374151',
     },
     statLabel: {
+        fontSize: 9,
+        color: '#6B7280',
+        marginTop: 1,
+        fontWeight: '500',
+    },
+
+    rateContainer: {
+        backgroundColor: 'white',
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#E5E7EB',
+    },
+    rateHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 6,
+    },
+    rateLabel: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#374151',
+    },
+    ratePercentage: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#6366F1',
+    },
+    progressBarContainer: {
+        height: 6,
+        backgroundColor: '#E5E7EB',
+        borderRadius: 3,
+        overflow: 'hidden',
+        marginBottom: 4,
+    },
+    progressBarFill: {
+        height: '100%',
+        borderRadius: 3,
+    },
+    rateSubtext: {
         fontSize: 10,
         color: '#6B7280',
-        marginTop: 2,
-        fontWeight: '500',
+        textAlign: 'center',
     },
 
     tabContainer: {
         flexDirection: 'row',
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        backgroundColor: '#EEF2FF',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        backgroundColor: 'white',
         borderBottomWidth: 1,
         borderBottomColor: '#E5E7EB',
-        gap: 8,
+        gap: 6,
     },
     tab: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 10,
-        paddingHorizontal: 12,
-        backgroundColor: 'white',
+        paddingVertical: 8,
+        paddingHorizontal: 8,
+        backgroundColor: '#F8FAFC',
         borderRadius: 8,
         borderWidth: 1,
         borderColor: '#E5E7EB',
-        gap: 6,
+        gap: 4,
     },
     tabActive: {
         backgroundColor: '#6366F1',
         borderColor: '#6366F1',
+        elevation: 1,
+        shadowColor: '#6366F1',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.3,
+        shadowRadius: 2,
     },
     tabText: {
-        fontSize: 12,
-        fontWeight: '600',
+        fontSize: 11,
+        fontWeight: '700',
         color: '#374151',
     },
     tabTextActive: {
@@ -469,74 +588,125 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     scrollContent: {
-        padding: 16,
-        paddingBottom: 24,
+        padding: 12,
+        paddingBottom: 20,
+    },
+
+    infoCard: {
+        backgroundColor: '#F0F9FF',
+        padding: 10,
+        borderRadius: 8,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#BFDBFE',
+    },
+    infoRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        gap: 8,
+    },
+    infoItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+    },
+    infoText: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: '#1E40AF',
     },
 
     attendanceItem: {
         backgroundColor: 'white',
-        marginBottom: 12,
-        padding: 16,
-        borderRadius: 12,
+        marginBottom: 10,
+        padding: 12,
+        borderRadius: 10,
         elevation: 2,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
+        shadowOpacity: 0.08,
         shadowRadius: 4,
+        borderWidth: 1,
+        borderColor: '#F3F4F6',
     },
     itemHeader: {
         flexDirection: 'row',
         alignItems: 'flex-start',
         justifyContent: 'space-between',
-        marginBottom: 8,
+        marginBottom: 6,
     },
     employeeName: {
-        fontSize: 16,
+        fontSize: 14,
         fontWeight: '600',
         color: '#111827',
     },
     employeeId: {
-        fontSize: 12,
+        fontSize: 11,
         color: '#6B7280',
-        marginTop: 2,
+        marginTop: 1,
+    },
+    badgesContainer: {
+        flexDirection: 'row',
+        gap: 4,
+        alignItems: 'center',
+    },
+    workTypeBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 6,
+        paddingVertical: 3,
+        borderRadius: 8,
+        gap: 3,
+    },
+    workTypeBadgeText: {
+        fontSize: 9,
+        color: 'white',
+        fontWeight: '600',
     },
     statusBadge: {
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 12,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 10,
     },
     statusText: {
-        fontSize: 10,
+        fontSize: 9,
         color: 'white',
         fontWeight: '600',
     },
 
     timeContainer: {
-        marginTop: 8,
+        marginTop: 3,
         gap: 6,
     },
     timeInfo: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
+        paddingVertical: 1,
     },
     timeText: {
-        fontSize: 13,
+        fontSize: 12,
         color: '#374151',
         fontWeight: '500',
+    },
+
+    divider: {
+        height: 1,
+        backgroundColor: '#E5E7EB',
+        marginVertical: 8,
     },
 
     holidayInfo: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        marginTop: 8,
-        paddingTop: 8,
+        gap: 5,
+        marginTop: 6,
+        paddingTop: 6,
         borderTopWidth: 1,
         borderTopColor: '#E5E7EB',
     },
     holidayText: {
-        fontSize: 13,
+        fontSize: 12,
         color: '#6366F1',
         fontWeight: '500',
     },
@@ -545,11 +715,11 @@ const styles = StyleSheet.create({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        paddingVertical: 40,
+        paddingVertical: 30,
     },
     loadingText: {
-        marginTop: 12,
-        fontSize: 16,
+        marginTop: 10,
+        fontSize: 14,
         color: '#6B7280',
     },
 
@@ -557,19 +727,19 @@ const styles = StyleSheet.create({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        paddingVertical: 60,
+        paddingVertical: 50,
     },
     emptyTitle: {
-        fontSize: 20,
+        fontSize: 18,
         fontWeight: '600',
         color: '#6B7280',
-        marginTop: 16,
+        marginTop: 12,
     },
     emptyText: {
-        fontSize: 14,
+        fontSize: 13,
         color: '#9CA3AF',
         textAlign: 'center',
-        marginTop: 8,
+        marginTop: 6,
         paddingHorizontal: 32,
     },
 });

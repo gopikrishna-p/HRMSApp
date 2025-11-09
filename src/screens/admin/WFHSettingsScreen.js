@@ -127,7 +127,7 @@ const WFHSettingsScreen = () => {
                         <View style={styles.wfhLabel}>
                             <Icon
                                 name="home"
-                                size={14}
+                                size={12}
                                 color={isEligible ? '#6366F1' : '#9CA3AF'}
                             />
                             <Text
@@ -171,7 +171,7 @@ const WFHSettingsScreen = () => {
             <View style={styles.headerContainer}>
                 <View style={styles.statsRow}>
                     <View style={styles.statItem}>
-                        <Icon name="users" size={16} color="#6366F1" />
+                        <Icon name="users" size={14} color="#6366F1" />
                         <View style={styles.statContent}>
                             <Text style={styles.statNumber}>{stats.total}</Text>
                             <Text style={styles.statLabel}>Total</Text>
@@ -179,7 +179,7 @@ const WFHSettingsScreen = () => {
                     </View>
 
                     <View style={styles.statItem}>
-                        <Icon name="check-circle" size={16} color="#10B981" />
+                        <Icon name="check-circle" size={14} color="#10B981" />
                         <View style={styles.statContent}>
                             <Text style={[styles.statNumber, { color: '#10B981' }]}>
                                 {stats.active}
@@ -189,7 +189,7 @@ const WFHSettingsScreen = () => {
                     </View>
 
                     <View style={styles.statItem}>
-                        <Icon name="home" size={16} color="#6366F1" />
+                        <Icon name="home" size={14} color="#6366F1" />
                         <View style={styles.statContent}>
                             <Text style={[styles.statNumber, { color: '#6366F1' }]}>
                                 {stats.eligible}
@@ -199,7 +199,7 @@ const WFHSettingsScreen = () => {
                     </View>
 
                     <View style={styles.statItem}>
-                        <Icon name="user-check" size={16} color="#8B5CF6" />
+                        <Icon name="user-check" size={14} color="#8B5CF6" />
                         <View style={styles.statContent}>
                             <Text style={[styles.statNumber, { color: '#8B5CF6' }]}>
                                 {stats.eligibleActive}
@@ -334,43 +334,50 @@ const styles = StyleSheet.create({
 
     headerContainer: {
         backgroundColor: 'white',
-        paddingTop: 12,
+        paddingTop: 10,
         borderBottomWidth: 1,
         borderBottomColor: '#E5E7EB',
+        elevation: 1,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
     },
     statsRow: {
         flexDirection: 'row',
-        gap: 8,
-        paddingHorizontal: 16,
-        marginBottom: 12,
+        gap: 6,
+        paddingHorizontal: 12,
+        marginBottom: 10,
     },
     statItem: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: '#F8FAFC',
-        padding: 10,
-        borderRadius: 10,
-        gap: 8,
+        padding: 8,
+        borderRadius: 8,
+        gap: 6,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
     },
     statContent: {
         flex: 1,
     },
     statNumber: {
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: '700',
         color: '#374151',
     },
     statLabel: {
         fontSize: 9,
         color: '#6B7280',
-        marginTop: 2,
+        marginTop: 1,
         fontWeight: '500',
     },
 
     searchContainer: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
         backgroundColor: 'white',
         borderBottomWidth: 1,
         borderBottomColor: '#E5E7EB',
@@ -378,19 +385,20 @@ const styles = StyleSheet.create({
     searchBar: {
         backgroundColor: '#F8FAFC',
         elevation: 0,
+        height: 42,
     },
 
     filterContainer: {
         flexDirection: 'row',
-        paddingHorizontal: 16,
-        paddingBottom: 12,
-        gap: 8,
+        paddingHorizontal: 12,
+        paddingBottom: 10,
+        gap: 6,
     },
     filterTab: {
         flex: 1,
-        paddingVertical: 8,
-        paddingHorizontal: 8,
-        backgroundColor: 'white',
+        paddingVertical: 6,
+        paddingHorizontal: 6,
+        backgroundColor: '#F8FAFC',
         borderRadius: 8,
         borderWidth: 1,
         borderColor: '#E5E7EB',
@@ -403,54 +411,55 @@ const styles = StyleSheet.create({
     filterText: {
         fontSize: 11,
         fontWeight: '600',
-        color: '#374151',
+        color: '#6B7280',
     },
     filterTextActive: {
         color: 'white',
     },
 
     listContent: {
-        padding: 16,
-        paddingBottom: 24,
+        padding: 12,
+        paddingBottom: 20,
     },
 
     employeeItem: {
         backgroundColor: 'white',
-        marginBottom: 12,
-        borderRadius: 12,
+        marginBottom: 10,
+        borderRadius: 10,
         elevation: 2,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
+        shadowOpacity: 0.08,
         shadowRadius: 4,
-        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: '#F3F4F6',
     },
     employeeInfo: {
-        padding: 16,
+        padding: 12,
     },
     employeeHeader: {
         flexDirection: 'row',
         alignItems: 'flex-start',
         justifyContent: 'space-between',
-        marginBottom: 12,
+        marginBottom: 10,
     },
     employeeName: {
-        fontSize: 16,
+        fontSize: 14,
         fontWeight: '600',
         color: '#111827',
     },
     employeeId: {
-        fontSize: 12,
+        fontSize: 11,
         color: '#6B7280',
-        marginTop: 2,
+        marginTop: 1,
     },
     statusBadge: {
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 12,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 8,
     },
     statusText: {
-        fontSize: 10,
+        fontSize: 9,
         color: 'white',
         fontWeight: '600',
     },
@@ -459,36 +468,38 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingVertical: 12,
-        paddingHorizontal: 12,
+        paddingVertical: 10,
+        paddingHorizontal: 10,
         backgroundColor: '#F8FAFC',
         borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
     },
     wfhLabel: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: 6,
         flex: 1,
     },
     wfhText: {
-        fontSize: 14,
+        fontSize: 12,
         fontWeight: '600',
     },
 
     infoBox: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        marginTop: 12,
-        padding: 10,
+        gap: 6,
+        marginTop: 10,
+        padding: 8,
         backgroundColor: '#FEF3C7',
-        borderRadius: 8,
+        borderRadius: 6,
         borderLeftWidth: 3,
         borderLeftColor: '#F59E0B',
     },
     infoText: {
         flex: 1,
-        fontSize: 12,
+        fontSize: 11,
         color: '#92400E',
         fontWeight: '500',
     },
@@ -497,11 +508,11 @@ const styles = StyleSheet.create({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        paddingVertical: 40,
+        paddingVertical: 30,
     },
     loadingText: {
-        marginTop: 12,
-        fontSize: 16,
+        marginTop: 10,
+        fontSize: 14,
         color: '#6B7280',
     },
 
@@ -509,19 +520,19 @@ const styles = StyleSheet.create({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        paddingVertical: 60,
+        paddingVertical: 40,
     },
     emptyTitle: {
-        fontSize: 20,
+        fontSize: 18,
         fontWeight: '600',
         color: '#6B7280',
-        marginTop: 16,
+        marginTop: 12,
     },
     emptyText: {
-        fontSize: 14,
+        fontSize: 13,
         color: '#9CA3AF',
         textAlign: 'center',
-        marginTop: 8,
+        marginTop: 6,
         paddingHorizontal: 32,
     },
 });

@@ -46,6 +46,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
     const [showDate, setShowDate] = useState(false);
 
     const ymd = useMemo(() => date.toISOString().slice(0, 10), [date]);
+    const displayDate = useMemo(() => fmtDate(date, 'dd-MM-yyyy'), [date]);
 
     const [list, setList] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -55,7 +56,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
 
     // stats + mode
     const [stats, setStats] = useState(null);
-    const [mode, setMode] = useState('pending');
+    const [mode, setMode] = useState('all');
 
     // selection for bulk ops
     const [selectMode, setSelectMode] = useState(false);
@@ -70,6 +71,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
     const [editDialog, setEditDialog] = useState({
         open: false,
         row: null,
+        mode: null, // 'in' | 'out' | 'both'
         checkIn: null,
         checkOut: null,
         showPicker: null, // 'in' | 'out'
@@ -134,40 +136,83 @@ const ManualCheckInOutScreen = ({ navigation }) => {
     }, [fetchList, fetchStats]);
 
     // ---- actions (single)
-    const doManualCheckout = async (attendance_id) => {
+    const doManualCheckout = async (attendance_id, hour = 18) => {
         const res = await ApiService.manualCheckout({ attendance_id });
         setSnack({
             visible: true,
-            msg: res.success ? 'Checkout added (6 PM)' : res.message || 'Failed to checkout',
+            msg: res.success ? `Checkout added (${hour === 18 ? '6 PM' : '7 PM'})` : res.message || 'Failed to checkout',
         });
         if (res.success) fetchList();
     };
 
-    const openEditTimes = (row) => {
+    const doQuickCheckIn = async (attendance_id, hour = 10) => {
+        const t = new Date(date);
+        t.setHours(hour, 0, 0, 0);
+        const res = await ApiService.updateAttendanceTimes({
+            attendance_id,
+            check_in_time: fmt(t),
+        });
+        setSnack({
+            visible: true,
+            msg: res.success ? `Check-in added (${hour} AM)` : res.message || 'Failed to add check-in',
+        });
+        if (res.success) fetchList();
+    };
+
+    const doQuickCheckOut = async (attendance_id, hour = 19) => {
+        const t = new Date(date);
+        t.setHours(hour, 0, 0, 0);
+        const res = await ApiService.updateAttendanceTimes({
+            attendance_id,
+            check_out_time: fmt(t),
+        });
+        setSnack({
+            visible: true,
+            msg: res.success ? `Check-out added (${hour - 12} PM)` : res.message || 'Failed to add check-out',
+        });
+        if (res.success) fetchList();
+    };
+
+    const openEditTimes = (row, mode = 'both') => {
+        const t = new Date(date);
+        const defaultCheckIn = new Date(date);
+        defaultCheckIn.setHours(10, 0, 0, 0);
+        const defaultCheckOut = new Date(date);
+        defaultCheckOut.setHours(19, 0, 0, 0);
+
         setEditDialog({
             open: true,
             row,
-            checkIn: row.in_time ? new Date(row.in_time) : null,
-            checkOut: row.out_time || row.custom_out_time_copy ? new Date(row.out_time || row.custom_out_time_copy) : null,
+            mode, // 'in', 'out', or 'both'
+            checkIn: row.in_time ? new Date(row.in_time) : defaultCheckIn,
+            checkOut: row.out_time || row.custom_out_time_copy ? new Date(row.out_time || row.custom_out_time_copy) : defaultCheckOut,
             showPicker: null,
         });
     };
 
     const doUpdateTimes = async () => {
-        const { row, checkIn, checkOut } = editDialog;
+        const { row, checkIn, checkOut, mode } = editDialog;
         if (!row) return;
+        
         const payload = {
             attendance_id: row.name,
-            check_in_time: checkIn ? fmt(checkIn) : undefined,
-            check_out_time: checkOut ? fmt(checkOut) : undefined,
         };
+        
+        // Only include the fields based on mode
+        if (mode === 'in' || mode === 'both') {
+            payload.check_in_time = checkIn ? fmt(checkIn) : undefined;
+        }
+        if (mode === 'out' || mode === 'both') {
+            payload.check_out_time = checkOut ? fmt(checkOut) : undefined;
+        }
+        
         const res = await ApiService.updateAttendanceTimes(payload);
         setSnack({
             visible: true,
             msg: res.success ? 'Times updated' : res.message || 'Failed to update',
         });
         if (res.success) {
-            setEditDialog({ open: false, row: null, checkIn: null, checkOut: null, showPicker: null });
+            setEditDialog({ open: false, row: null, mode: null, checkIn: null, checkOut: null, showPicker: null });
             fetchList();
         }
     };
@@ -296,11 +341,13 @@ const ManualCheckInOutScreen = ({ navigation }) => {
 
     // ---- UI helpers
     const getStatusColor = (item) => {
+        if (item.status === 'On Leave') return '#F59E0B';
         if (!item.in_time) return '#EF4444';
         if (!item.out_time && !item.custom_out_time_copy) return '#F59E0B';
         return '#10B981';
     };
     const getStatusText = (item) => {
+        if (item.status === 'On Leave') return 'On Leave';
         if (!item.in_time) return 'No Check-In';
         if (!item.out_time && !item.custom_out_time_copy) return 'Missing Check-Out';
         return 'Complete';
@@ -312,6 +359,8 @@ const ManualCheckInOutScreen = ({ navigation }) => {
     // ---- row render
     const renderItem = ({ item }) => {
         const checked = selected.includes(item.name);
+        const isOnLeave = item.status === 'On Leave';
+        
         return (
             <View style={styles.attendanceItem}>
                 {selectMode ? (
@@ -328,33 +377,40 @@ const ManualCheckInOutScreen = ({ navigation }) => {
                     <Text style={styles.employeeName}>{item.employee_name}</Text>
                     <Text style={styles.employeeId}>ID: {item.employee}</Text>
 
-                    <View style={styles.timeContainer}>
-                        {item.in_time ? (
-                            <View style={styles.timeInfo}>
-                                <Icon name="sign-in-alt" size={12} color="#10B981" />
-                                <Text style={styles.timeText}>In: {hhmmss(item.in_time)}</Text>
-                            </View>
-                        ) : (
-                            <View style={styles.timeInfo}>
-                                <Icon name="exclamation-circle" size={12} color="#EF4444" />
-                                <Text style={[styles.timeText, { color: '#EF4444' }]}>No check-in</Text>
-                            </View>
-                        )}
+                    {isOnLeave ? (
+                        <View style={styles.leaveContainer}>
+                            <Icon name="plane-departure" size={12} color="#F59E0B" />
+                            <Text style={styles.leaveText}>Employee is on leave today</Text>
+                        </View>
+                    ) : (
+                        <View style={styles.timeContainer}>
+                            {item.in_time ? (
+                                <View style={styles.timeInfo}>
+                                    <Icon name="sign-in-alt" size={12} color="#10B981" />
+                                    <Text style={styles.timeText}>In: {hhmmss(item.in_time)}</Text>
+                                </View>
+                            ) : (
+                                <View style={styles.timeInfo}>
+                                    <Icon name="exclamation-circle" size={12} color="#EF4444" />
+                                    <Text style={[styles.timeText, { color: '#EF4444' }]}>No check-in</Text>
+                                </View>
+                            )}
 
-                        {(item.out_time || item.custom_out_time_copy) ? (
-                            <View style={styles.timeInfo}>
-                                <Icon name="sign-out-alt" size={12} color="#EF4444" />
-                                <Text style={styles.timeText}>
-                                    Out: {hhmmss(item.out_time || item.custom_out_time_copy)}
-                                </Text>
-                            </View>
-                        ) : (
-                            <View style={styles.timeInfo}>
-                                <Icon name="exclamation-circle" size={12} color="#F59E0B" />
-                                <Text style={[styles.timeText, { color: '#F59E0B' }]}>No check-out</Text>
-                            </View>
-                        )}
-                    </View>
+                            {(item.out_time || item.custom_out_time_copy) ? (
+                                <View style={styles.timeInfo}>
+                                    <Icon name="sign-out-alt" size={12} color="#EF4444" />
+                                    <Text style={styles.timeText}>
+                                        Out: {hhmmss(item.out_time || item.custom_out_time_copy)}
+                                    </Text>
+                                </View>
+                            ) : (
+                                <View style={styles.timeInfo}>
+                                    <Icon name="exclamation-circle" size={12} color="#F59E0B" />
+                                    <Text style={[styles.timeText, { color: '#F59E0B' }]}>No check-out</Text>
+                                </View>
+                            )}
+                        </View>
+                    )}
 
                     <View style={styles.statusContainer}>
                         <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item) }]}>
@@ -372,35 +428,33 @@ const ManualCheckInOutScreen = ({ navigation }) => {
                     </View>
                 </View>
 
-                {!selectMode && (
+                {!selectMode && !isOnLeave && (
                     <View style={styles.actionButtons}>
-                        {/* Quick 6 PM checkout */}
-                        {item.in_time && !item.out_time && !item.custom_out_time_copy ? (
-                            <TouchableOpacity
-                                style={[styles.actionButton, { backgroundColor: '#6366F1' }]}
-                                onPress={() => doManualCheckout(item.name)}
-                            >
-                                <Icon name="clock" size={12} color="white" />
-                                <Text style={styles.buttonText}>6 PM</Text>
-                            </TouchableOpacity>
-                        ) : null}
-
-                        {/* Edit times */}
+                        {/* Edit Check-In */}
                         <TouchableOpacity
                             style={[styles.actionButton, { backgroundColor: '#10B981' }]}
-                            onPress={() => openEditTimes(item)}
+                            onPress={() => openEditTimes(item, 'in')}
                         >
-                            <Icon name="edit" size={12} color="white" />
-                            <Text style={styles.buttonText}>Edit</Text>
+                            <Icon name="sign-in-alt" size={10} color="white" />
+                            <Text style={styles.buttonText}>Edit In</Text>
                         </TouchableOpacity>
 
-                        {/* Delete/Cancel */}
+                        {/* Edit Check-Out */}
                         <TouchableOpacity
-                            style={[styles.actionButton, { backgroundColor: '#EF4444' }]}
-                            onPress={() => doDeleteRecord(item)}
+                            style={[styles.actionButton, { backgroundColor: '#8B5CF6' }]}
+                            onPress={() => openEditTimes(item, 'out')}
                         >
-                            <Icon name="trash" size={12} color="white" />
-                            <Text style={styles.buttonText}>Del</Text>
+                            <Icon name="sign-out-alt" size={10} color="white" />
+                            <Text style={styles.buttonText}>Edit Out</Text>
+                        </TouchableOpacity>
+
+                        {/* Edit Both */}
+                        <TouchableOpacity
+                            style={[styles.actionButton, { backgroundColor: '#3B82F6' }]}
+                            onPress={() => openEditTimes(item, 'both')}
+                        >
+                            <Icon name="edit" size={10} color="white" />
+                            <Text style={styles.buttonText}>Both</Text>
                         </TouchableOpacity>
                     </View>
                 )}
@@ -417,7 +471,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
                 </TouchableOpacity>
 
                 <TouchableOpacity style={styles.dateInfo} onPress={() => setShowDate(true)} activeOpacity={0.8}>
-                    <Text style={styles.dateLabel}>{ymd}</Text>
+                    <Text style={styles.dateLabel}>{displayDate}</Text>
                     <Text style={styles.recordCount}>{list.length} records</Text>
                 </TouchableOpacity>
 
@@ -545,7 +599,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
                     keyExtractor={(item) => item.name}
                     renderItem={renderItem}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-                    contentContainerStyle={{ paddingBottom: 24 }}
+                    contentContainerStyle={{ paddingBottom: 20, paddingTop: 8 }}
                 />
             )}
 
@@ -714,58 +768,66 @@ const ManualCheckInOutScreen = ({ navigation }) => {
             <Modal visible={editDialog.open} transparent animationType="slide">
                 <View style={styles.modalOverlay}>
                     <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>Edit Times</Text>
+                        <Text style={styles.modalTitle}>
+                            {editDialog.mode === 'in' && 'Edit Check-In Time'}
+                            {editDialog.mode === 'out' && 'Edit Check-Out Time'}
+                            {editDialog.mode === 'both' && 'Edit Times'}
+                        </Text>
                         <Text style={styles.modalSubtitle}>
                             {editDialog.row?.employee_name} • {editDialog.row?.name}
                         </Text>
 
                         <HelperText type="info" visible>
-                            Date: {ymd}
+                            Date: {ymd} • {editDialog.mode === 'in' ? 'Default: 10:00 AM' : editDialog.mode === 'out' ? 'Default: 7:00 PM' : 'Defaults: 10 AM / 7 PM'}
                         </HelperText>
 
-                        <View style={styles.timeInputContainer}>
-                            <Text style={styles.inputLabel}>Check-In (YYYY-MM-DD HH:mm:ss)</Text>
-                            <TextInput
-                                mode="outlined"
-                                value={editDialog.checkIn ? fmt(editDialog.checkIn) : ''}
-                                placeholder="YYYY-MM-DD HH:mm:ss"
-                                right={
-                                    <TextInput.Icon 
-                                        icon="clock" 
-                                        onPress={() => setEditDialog((s) => ({ ...s, showPicker: 'in' }))} 
-                                    />
-                                }
-                                onChangeText={(t) =>
-                                    setEditDialog((s) => ({ 
-                                        ...s, 
-                                        checkIn: t ? new Date(t.replace(' ', 'T')) : null 
-                                    }))
-                                }
-                                style={{ backgroundColor: 'white' }}
-                            />
-                        </View>
+                        {(editDialog.mode === 'in' || editDialog.mode === 'both') && (
+                            <View style={styles.timeInputContainer}>
+                                <Text style={styles.inputLabel}>Check-In (YYYY-MM-DD HH:mm:ss)</Text>
+                                <TextInput
+                                    mode="outlined"
+                                    value={editDialog.checkIn ? fmt(editDialog.checkIn) : ''}
+                                    placeholder="YYYY-MM-DD HH:mm:ss"
+                                    right={
+                                        <TextInput.Icon 
+                                            icon="clock" 
+                                            onPress={() => setEditDialog((s) => ({ ...s, showPicker: 'in' }))} 
+                                        />
+                                    }
+                                    onChangeText={(t) =>
+                                        setEditDialog((s) => ({ 
+                                            ...s, 
+                                            checkIn: t ? new Date(t.replace(' ', 'T')) : null 
+                                        }))
+                                    }
+                                    style={{ backgroundColor: 'white' }}
+                                />
+                            </View>
+                        )}
 
-                        <View style={styles.timeInputContainer}>
-                            <Text style={styles.inputLabel}>Check-Out (YYYY-MM-DD HH:mm:ss)</Text>
-                            <TextInput
-                                mode="outlined"
-                                value={editDialog.checkOut ? fmt(editDialog.checkOut) : ''}
-                                placeholder="YYYY-MM-DD HH:mm:ss"
-                                right={
-                                    <TextInput.Icon 
-                                        icon="clock-end" 
-                                        onPress={() => setEditDialog((s) => ({ ...s, showPicker: 'out' }))} 
-                                    />
-                                }
-                                onChangeText={(t) =>
-                                    setEditDialog((s) => ({ 
-                                        ...s, 
-                                        checkOut: t ? new Date(t.replace(' ', 'T')) : null 
-                                    }))
-                                }
-                                style={{ backgroundColor: 'white' }}
-                            />
-                        </View>
+                        {(editDialog.mode === 'out' || editDialog.mode === 'both') && (
+                            <View style={styles.timeInputContainer}>
+                                <Text style={styles.inputLabel}>Check-Out (YYYY-MM-DD HH:mm:ss)</Text>
+                                <TextInput
+                                    mode="outlined"
+                                    value={editDialog.checkOut ? fmt(editDialog.checkOut) : ''}
+                                    placeholder="YYYY-MM-DD HH:mm:ss"
+                                    right={
+                                        <TextInput.Icon 
+                                            icon="clock-end" 
+                                            onPress={() => setEditDialog((s) => ({ ...s, showPicker: 'out' }))} 
+                                        />
+                                    }
+                                    onChangeText={(t) =>
+                                        setEditDialog((s) => ({ 
+                                            ...s, 
+                                            checkOut: t ? new Date(t.replace(' ', 'T')) : null 
+                                        }))
+                                    }
+                                    style={{ backgroundColor: 'white' }}
+                                />
+                            </View>
+                        )}
 
                         {editDialog.showPicker && (
                             <View style={{ marginTop: 8 }}>
@@ -794,7 +856,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
                             <TouchableOpacity
                                 style={[styles.modalButton, styles.cancelButton]}
                                 onPress={() =>
-                                    setEditDialog({ open: false, row: null, checkIn: null, checkOut: null, showPicker: null })
+                                    setEditDialog({ open: false, row: null, mode: null, checkIn: null, checkOut: null, showPicker: null })
                                 }
                                 activeOpacity={0.8}
                             >
@@ -831,16 +893,21 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
         backgroundColor: 'white',
         borderBottomWidth: 1,
         borderBottomColor: '#E5E7EB',
+        elevation: 1,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
     },
     dateNavButton: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
+        width: 36,
+        height: 36,
+        borderRadius: 18,
         backgroundColor: '#F8FAFC',
         alignItems: 'center',
         justifyContent: 'center',
@@ -848,37 +915,37 @@ const styles = StyleSheet.create({
         borderColor: '#E5E7EB',
     },
     dateInfo: { alignItems: 'center' },
-    dateLabel: { fontSize: 16, fontWeight: '600', color: '#374151' },
-    recordCount: { fontSize: 12, color: '#6B7280', marginTop: 2 },
+    dateLabel: { fontSize: 15, fontWeight: '700', color: '#111827' },
+    recordCount: { fontSize: 11, color: '#6B7280', marginTop: 2, fontWeight: '500' },
 
     controlBar: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        backgroundColor: '#EEF2FF',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        backgroundColor: 'white',
         borderBottomWidth: 1,
         borderBottomColor: '#E5E7EB',
     },
     modeSwitch: {
         flexDirection: 'row',
-        backgroundColor: 'white',
+        backgroundColor: '#F8FAFC',
         borderRadius: 8,
         padding: 2,
         borderWidth: 1,
         borderColor: '#E5E7EB',
     },
     modeBtn: {
-        paddingHorizontal: 16,
-        paddingVertical: 6,
+        paddingHorizontal: 14,
+        paddingVertical: 5,
         borderRadius: 6,
     },
     modeBtnActive: {
         backgroundColor: '#6366F1',
     },
     modeText: {
-        fontSize: 13,
+        fontSize: 12,
         fontWeight: '600',
         color: '#6B7280',
     },
@@ -888,30 +955,30 @@ const styles = StyleSheet.create({
     actionBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: 6,
     },
     selectAllBtn: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        backgroundColor: 'white',
+        gap: 5,
+        paddingHorizontal: 8,
+        paddingVertical: 5,
+        backgroundColor: '#F8FAFC',
         borderRadius: 6,
         borderWidth: 1,
         borderColor: '#E5E7EB',
     },
     selectAllText: {
-        fontSize: 12,
+        fontSize: 11,
         fontWeight: '600',
         color: '#6366F1',
     },
     bulkBtn: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        gap: 5,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
         backgroundColor: '#6366F1',
         borderRadius: 8,
     },
@@ -919,21 +986,21 @@ const styles = StyleSheet.create({
         backgroundColor: '#8B5CF6',
     },
     bulkBtnText: {
-        fontSize: 12,
+        fontSize: 11,
         fontWeight: '700',
         color: 'white',
     },
     bulkActionBtn: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        gap: 5,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
         backgroundColor: '#10B981',
         borderRadius: 8,
     },
     bulkActionText: {
-        fontSize: 12,
+        fontSize: 11,
         fontWeight: '700',
         color: 'white',
     },
@@ -944,84 +1011,105 @@ const styles = StyleSheet.create({
     quickStats: {
         flexDirection: 'row',
         justifyContent: 'space-around',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
         backgroundColor: 'white',
         borderBottomWidth: 1,
         borderBottomColor: '#E5E7EB',
     },
     statItem: { alignItems: 'center' },
-    statNumber: { fontSize: 20, fontWeight: '700', color: '#374151' },
-    statLabel: { fontSize: 11, color: '#6B7280', marginTop: 2, fontWeight: '500' },
+    statNumber: { fontSize: 16, fontWeight: '700', color: '#374151' },
+    statLabel: { fontSize: 9, color: '#6B7280', marginTop: 1, fontWeight: '500' },
 
     attendanceItem: {
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: 'white',
-        marginHorizontal: 16,
-        marginVertical: 6,
-        padding: 16,
-        borderRadius: 12,
+        marginHorizontal: 12,
+        marginVertical: 5,
+        padding: 12,
+        borderRadius: 10,
         elevation: 2,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
+        shadowOpacity: 0.08,
         shadowRadius: 4,
+        borderWidth: 1,
+        borderColor: '#F3F4F6',
     },
     checkbox: {
-        width: 24,
-        height: 24,
-        borderRadius: 12,
+        width: 20,
+        height: 20,
+        borderRadius: 10,
         borderWidth: 2,
         borderColor: '#6366F1',
         alignItems: 'center',
         justifyContent: 'center',
-        marginRight: 12,
+        marginRight: 10,
     },
     checkboxSelected: { backgroundColor: '#6366F1' },
     employeeInfo: { flex: 1 },
-    employeeName: { fontSize: 16, fontWeight: '600', color: '#111827' },
-    employeeId: { fontSize: 12, color: '#6B7280', marginTop: 2 },
+    employeeName: { fontSize: 14, fontWeight: '600', color: '#111827' },
+    employeeId: { fontSize: 11, color: '#6B7280', marginTop: 1 },
 
-    timeContainer: { marginTop: 8, gap: 4 },
+    timeContainer: { marginTop: 6, gap: 3 },
     timeInfo: { flexDirection: 'row', alignItems: 'center' },
-    timeText: { fontSize: 12, color: '#374151', marginLeft: 6, fontWeight: '500' },
+    timeText: { fontSize: 11, color: '#374151', marginLeft: 6, fontWeight: '500' },
 
-    statusContainer: { flexDirection: 'row', marginTop: 8, gap: 6 },
-    statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
-    statusText: { fontSize: 10, color: 'white', fontWeight: '600' },
+    leaveContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 6,
+        paddingVertical: 6,
+        paddingHorizontal: 10,
+        backgroundColor: '#FEF3C7',
+        borderRadius: 6,
+        borderWidth: 1,
+        borderColor: '#FCD34D',
+    },
+    leaveText: {
+        fontSize: 11,
+        color: '#D97706',
+        marginLeft: 6,
+        fontWeight: '600',
+    },
 
-    actionButtons: { flexDirection: 'column', gap: 6 },
+    statusContainer: { flexDirection: 'row', marginTop: 6, gap: 4 },
+    statusBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8 },
+    statusText: { fontSize: 9, color: 'white', fontWeight: '600' },
+
+    actionButtons: { flexDirection: 'column', gap: 4, marginLeft: 6 },
     actionButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 8,
-        paddingVertical: 6,
+        justifyContent: 'center',
+        paddingHorizontal: 7,
+        paddingVertical: 5,
         borderRadius: 6,
-        minWidth: 70,
+        minWidth: 62,
     },
-    buttonText: { color: 'white', fontSize: 10, fontWeight: '600', marginLeft: 4 },
+    buttonText: { color: 'white', fontSize: 9, fontWeight: '600', marginLeft: 3 },
 
     loadingContainer: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        paddingVertical: 40,
+        paddingVertical: 30,
     },
-    loadingText: { marginTop: 12, fontSize: 16, color: '#6B7280' },
+    loadingText: { marginTop: 10, fontSize: 14, color: '#6B7280' },
 
     emptyContainer: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        paddingVertical: 40,
+        paddingVertical: 30,
     },
-    emptyTitle: { fontSize: 20, fontWeight: '600', color: '#6B7280', marginTop: 16 },
+    emptyTitle: { fontSize: 18, fontWeight: '600', color: '#6B7280', marginTop: 12 },
     emptyText: {
-        fontSize: 14,
+        fontSize: 13,
         color: '#9CA3AF',
         textAlign: 'center',
-        marginTop: 8,
+        marginTop: 6,
         paddingHorizontal: 32,
     },
 
@@ -1032,34 +1120,34 @@ const styles = StyleSheet.create({
     },
     menuContent: {
         backgroundColor: 'white',
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
-        padding: 24,
+        borderTopLeftRadius: 20,
+        borderTopRightRadius: 20,
+        padding: 20,
     },
     menuTitle: {
-        fontSize: 20,
+        fontSize: 18,
         fontWeight: '700',
         color: '#111827',
         textAlign: 'center',
     },
     menuSubtitle: {
-        fontSize: 14,
+        fontSize: 13,
         color: '#6B7280',
         textAlign: 'center',
-        marginTop: 4,
+        marginTop: 3,
     },
     menuItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 14,
+        paddingVertical: 12,
     },
     menuItemTitle: {
-        fontSize: 16,
+        fontSize: 15,
         fontWeight: '600',
         color: '#111827',
     },
     menuItemDesc: {
-        fontSize: 13,
+        fontSize: 12,
         color: '#6B7280',
         marginTop: 2,
     },
@@ -1072,45 +1160,45 @@ const styles = StyleSheet.create({
     },
     modalContent: {
         backgroundColor: 'white',
-        borderRadius: 16,
-        padding: 24,
+        borderRadius: 14,
+        padding: 20,
         margin: 16,
         width: '90%',
         maxWidth: 400,
     },
     modalTitle: {
-        fontSize: 20,
+        fontSize: 18,
         fontWeight: '700',
         color: '#111827',
         textAlign: 'center',
     },
     modalSubtitle: {
-        fontSize: 14,
+        fontSize: 13,
         color: '#6B7280',
         textAlign: 'center',
-        marginTop: 4,
-        marginBottom: 8,
+        marginTop: 3,
+        marginBottom: 6,
     },
-    timeInputContainer: { marginTop: 12 },
+    timeInputContainer: { marginTop: 10 },
     inputLabel: {
-        fontSize: 14,
+        fontSize: 13,
         fontWeight: '600',
         color: '#374151',
-        marginBottom: 8,
+        marginBottom: 6,
     },
 
-    modalButtons: { flexDirection: 'row', gap: 12, marginTop: 20 },
+    modalButtons: { flexDirection: 'row', gap: 10, marginTop: 16 },
     modalButton: {
         flex: 1,
-        paddingVertical: 12,
+        paddingVertical: 11,
         borderRadius: 8,
         alignItems: 'center',
         justifyContent: 'center',
     },
     cancelButton: { backgroundColor: '#F3F4F6' },
-    cancelButtonText: { color: '#6B7280', fontWeight: '600', fontSize: 15 },
+    cancelButtonText: { color: '#6B7280', fontWeight: '600', fontSize: 14 },
     confirmButton: { backgroundColor: '#6366F1' },
-    confirmButtonText: { color: 'white', fontWeight: '600', fontSize: 15 },
+    confirmButtonText: { color: 'white', fontWeight: '600', fontSize: 14 },
 });
 
 export default ManualCheckInOutScreen;

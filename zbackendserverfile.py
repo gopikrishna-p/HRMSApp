@@ -2231,7 +2231,7 @@ def send_expense_claim_notification(claim_id: str, action: str, remarks: str | N
 
 
 # ============================================================================
-# TRAVEL REQUEST APIs
+# TRAVEL REQUEST APIs - Clean Implementation for Android App
 # ============================================================================
 
 @frappe.whitelist()
@@ -2239,56 +2239,65 @@ def submit_travel_request(
 	employee: str,
 	travel_type: str,
 	purpose_of_travel: str,
-	description: str,
-	itinerary: str,  # JSON string of itinerary items
-	costings: str | None = None,  # JSON string of costing items
+	description: str | None = None,
 	travel_funding: str | None = None,
 	details_of_sponsor: str | None = None,
+	travel_proof: str | None = None,
+	cell_number: str | None = None,
+	prefered_email: str | None = None,
+	personal_id_type: str | None = None,
+	personal_id_number: str | None = None,
+	passport_number: str | None = None,
+	cost_center: str | None = None,
+	name_of_organizer: str | None = None,
+	address_of_organizer: str | None = None,
+	other_details: str | None = None,
 ) -> dict:
 	"""
-	Submit travel request for mobile app.
+	Submit a new travel request.
 	
 	Args:
 		employee: Employee ID
-		travel_type: Domestic or International
-		purpose_of_travel: Purpose of Travel ID
-		description: Description/details
-		itinerary: JSON array of itinerary items [{from_date, to_date, from_location, to_location}]
-		costings: JSON array of costing items [{expense_type, amount}]
-		travel_funding: Funding type
-		details_of_sponsor: Sponsor details
+		travel_type: Travel type ("Domestic" or "International")
+		purpose_of_travel: Purpose of Travel (Link to Purpose of Travel doctype)
+		description: Any other details
+		travel_funding: Travel funding type
+		details_of_sponsor: Details of sponsor (name, location)
+		travel_proof: Attachment - Copy of invitation/announcement
+		cell_number: Contact number
+		prefered_email: Contact email
+		personal_id_type: Identification document type
+		personal_id_number: Identification document number
+		passport_number: Passport number
+		cost_center: Cost center
+		name_of_organizer: Event organizer name
+		address_of_organizer: Event organizer address
+		other_details: Event other details
 	
 	Returns:
-		Dict with request details
+		Dict with status and travel request details
 	"""
 	try:
-		import json
-		
-		# Validate current user
+		# Validate current user has employee record
 		current_employee = get_employee_by_user()
 		if not current_employee:
 			frappe.throw(_("No employee record found for current user"))
 		
-		# Employees can only submit for themselves
+		# Check permissions - employees can only submit for themselves, admins can submit for anyone
 		user_roles = frappe.get_roles()
 		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
 		
 		if not is_admin and employee != current_employee:
 			frappe.throw(_("You can only submit travel requests for yourself"))
 		
-		# Parse itinerary
-		try:
-			itinerary_items = json.loads(itinerary) if isinstance(itinerary, str) else itinerary
-		except:
-			frappe.throw(_("Invalid itinerary format"))
+		# Validate required fields
+		if not travel_type or travel_type not in ["Domestic", "International"]:
+			frappe.throw(_("Travel type must be 'Domestic' or 'International'"))
 		
-		if not itinerary_items or len(itinerary_items) == 0:
-			frappe.throw(_("At least one itinerary item is required"))
+		if not purpose_of_travel:
+			frappe.throw(_("Purpose of travel is required"))
 		
-		# Get employee details
-		emp_doc = frappe.get_doc("Employee", employee)
-		
-		# Create travel request
+		# Create travel request document
 		travel_request = frappe.get_doc({
 			"doctype": "Travel Request",
 			"employee": employee,
@@ -2297,89 +2306,115 @@ def submit_travel_request(
 			"description": description,
 			"travel_funding": travel_funding,
 			"details_of_sponsor": details_of_sponsor,
-			"company": emp_doc.company,
-			"itinerary": [],
-			"costings": [],
+			"travel_proof": travel_proof,
+			"cell_number": cell_number,
+			"prefered_email": prefered_email,
+			"personal_id_type": personal_id_type,
+			"personal_id_number": personal_id_number,
+			"passport_number": passport_number,
+			"cost_center": cost_center,
+			"name_of_organizer": name_of_organizer,
+			"address_of_organizer": address_of_organizer,
+			"other_details": other_details,
 		})
 		
-		# Add itinerary items
-		for item in itinerary_items:
-			travel_request.append("itinerary", {
-				"from_date": item.get("from_date"),
-				"to_date": item.get("to_date"),
-				"from_location": item.get("from_location"),
-				"to_location": item.get("to_location"),
-				"lodging_required": cint(item.get("lodging_required", 0)),
-				"travel_mode": item.get("travel_mode"),
-			})
-		
-		# Add costing items if provided
-		if costings:
-			try:
-				costing_items = json.loads(costings) if isinstance(costings, str) else costings
-				for item in costing_items:
-					travel_request.append("costings", {
-						"expense_type": item.get("expense_type"),
-						"amount": float(item.get("amount", 0)),
-					})
-			except:
-				pass  # Costings are optional
-		
-		# Insert
+		# Insert the document (validation will auto-fetch employee details)
 		travel_request.insert(ignore_permissions=True)
 		frappe.db.commit()
 		
-		# Send notification to HR
+		# Send notification to HR/Admin
 		try:
 			send_travel_request_notification(travel_request.name, "submitted")
 		except Exception as notif_error:
-			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Travel Request Notification")
+			frappe.log_error(f"Notification failed: {str(notif_error)}", "Travel Request Notification")
 		
 		return {
 			"status": "success",
 			"message": _("Travel request submitted successfully"),
-			"request_id": travel_request.name,
-			"employee": employee,
-			"employee_name": travel_request.employee_name,
-			"travel_type": travel_type,
-			"purpose": purpose_of_travel,
-			"total_itinerary_items": len(itinerary_items),
+			"data": {
+				"request_id": travel_request.name,
+				"employee": employee,
+				"employee_name": travel_request.employee_name,
+				"travel_type": travel_type,
+				"purpose_of_travel": purpose_of_travel,
+				"docstatus": travel_request.docstatus,
+				"status_label": get_travel_request_status_label(travel_request.docstatus),
+				"creation": str(travel_request.creation),
+			}
 		}
 		
 	except Exception as e:
-		frappe.log_error(f"Submit Travel Request Error: {str(e)}\n{frappe.get_traceback()}", "Travel Request")
-		frappe.throw(_("Failed to submit travel request: {0}").format(str(e)))
+		frappe.log_error(f"Submit Travel Request Error: {str(e)}\n{frappe.get_traceback()}", "Travel Request Submit")
+		return {
+			"status": "error",
+			"message": str(e),
+		}
 
 
 @frappe.whitelist()
 def approve_travel_request(request_id: str, remarks: str | None = None) -> dict:
 	"""
-	Approve a travel request (for admins).
+	Approve a travel request (Admin only).
 	
 	Args:
 		request_id: Travel Request ID
-		remarks: Optional approval remarks
+		remarks: Optional approval remarks/comments
 	
 	Returns:
-		Dict with approval status
+		Dict with status and message
 	"""
 	try:
-		# Get travel request
-		request = frappe.get_doc("Travel Request", request_id)
-		
-		# Check permission
+		# Check admin permission
 		user_roles = frappe.get_roles()
 		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
 		
 		if not is_admin:
 			frappe.throw(_("You do not have permission to approve travel requests"))
 		
-		# Submit if not already submitted
-		if request.docstatus == 0:
-			request.submit()
+		# DEBUG: Log what we're approving
+		frappe.log_error(
+			f"Attempting to approve:\n"
+			f"Request ID: {request_id}\n"
+			f"User: {frappe.session.user}\n"
+			f"Is Admin: {is_admin}",
+			"Travel Request Approve Attempt"
+		)
 		
+		# Get travel request
+		travel_request = frappe.get_doc("Travel Request", request_id)
+		
+		# DEBUG: Log document details
+		frappe.log_error(
+			f"Document loaded:\n"
+			f"DocType: {travel_request.doctype}\n"
+			f"Name: {travel_request.name}\n"
+			f"Employee: {travel_request.employee}\n"
+			f"Current docstatus: {travel_request.docstatus}",
+			"Travel Request Document Details"
+		)
+		
+		# Check if already approved
+		if travel_request.docstatus == 1:
+			return {
+				"status": "info",
+				"message": _("Travel request is already approved"),
+				"data": {
+					"request_id": request_id,
+					"status_label": "Approved",
+				}
+			}
+		
+		# Check if cancelled
+		if travel_request.docstatus == 2:
+			frappe.throw(_("Cannot approve a cancelled travel request"))
+		
+		# Submit (approve) the request - ignore permissions for admin
+		travel_request.flags.ignore_permissions = True
+		travel_request.submit()
+		
+		# Add comment if remarks provided
 		if remarks:
-			request.add_comment("Comment", f"Approved: {remarks}")
+			travel_request.add_comment("Comment", f"Approved: {remarks}")
 		
 		frappe.db.commit()
 		
@@ -2387,309 +2422,432 @@ def approve_travel_request(request_id: str, remarks: str | None = None) -> dict:
 		try:
 			send_travel_request_notification(request_id, "approved", remarks)
 		except Exception as notif_error:
-			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Travel Request Notification")
+			frappe.log_error(f"Notification failed: {str(notif_error)}", "Travel Request Notification")
 		
 		return {
 			"status": "success",
 			"message": _("Travel request approved successfully"),
-			"request_id": request_id,
-			"employee": request.employee,
+			"data": {
+				"request_id": request_id,
+				"employee": travel_request.employee,
+				"employee_name": travel_request.employee_name,
+				"status_label": "Approved",
+			}
 		}
 		
 	except Exception as e:
-		frappe.log_error(f"Approve Travel Request Error: {str(e)}\n{frappe.get_traceback()}", "Travel Request Approval")
-		frappe.throw(_("Failed to approve travel request: {0}").format(str(e)))
+		frappe.log_error(f"Approve Travel Request Error: {str(e)}\n{frappe.get_traceback()}", "Travel Request Approve")
+		
+		# Return user-friendly error message
+		error_msg = str(e)
+		if "PermissionError" in str(type(e)):
+			error_msg = "Permission denied. Please ensure you have HR Manager or HR User role."
+		elif "Payable Account" in error_msg:
+			error_msg = "Configuration error: This appears to be an Expense Claim issue, not a Travel Request. Please check your document type."
+		
+		return {
+			"status": "error",
+			"message": error_msg,
+		}
 
 
 @frappe.whitelist()
 def reject_travel_request(request_id: str, reason: str) -> dict:
 	"""
-	Reject a travel request (for admins).
+	Reject a travel request (Admin only).
 	
 	Args:
 		request_id: Travel Request ID
 		reason: Rejection reason (required)
 	
 	Returns:
-		Dict with rejection status
+		Dict with status and message
 	"""
 	try:
+		# Validate reason
 		if not reason or not reason.strip():
 			frappe.throw(_("Rejection reason is required"))
 		
-		# Get travel request
-		request = frappe.get_doc("Travel Request", request_id)
-		
-		# Check permission
+		# Check admin permission
 		user_roles = frappe.get_roles()
 		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
 		
 		if not is_admin:
 			frappe.throw(_("You do not have permission to reject travel requests"))
 		
-		# Cancel if submitted
-		if request.docstatus == 1:
-			request.cancel()
-		else:
-			request.docstatus = 2
-			request.save(ignore_permissions=True)
+		# Get travel request
+		travel_request = frappe.get_doc("Travel Request", request_id)
 		
-		request.add_comment("Comment", f"Rejected: {reason}")
+		# Check if already cancelled
+		if travel_request.docstatus == 2:
+			return {
+				"status": "info",
+				"message": _("Travel request is already rejected/cancelled"),
+				"data": {
+					"request_id": request_id,
+					"status_label": "Rejected",
+				}
+			}
+		
+		# Cancel the request
+		if travel_request.docstatus == 1:
+			# Already submitted, need to cancel - ignore permissions for admin
+			travel_request.flags.ignore_permissions = True
+			travel_request.cancel()
+		else:
+			# Draft state, mark as cancelled
+			travel_request.docstatus = 2
+			travel_request.flags.ignore_permissions = True
+			travel_request.save(ignore_permissions=True)
+		
+		# Add rejection comment
+		travel_request.add_comment("Comment", f"Rejected: {reason}")
 		frappe.db.commit()
 		
 		# Send notification to employee
 		try:
 			send_travel_request_notification(request_id, "rejected", reason)
 		except Exception as notif_error:
-			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Travel Request Notification")
+			frappe.log_error(f"Notification failed: {str(notif_error)}", "Travel Request Notification")
 		
 		return {
 			"status": "success",
 			"message": _("Travel request rejected"),
-			"request_id": request_id,
-			"employee": request.employee,
+			"data": {
+				"request_id": request_id,
+				"employee": travel_request.employee,
+				"employee_name": travel_request.employee_name,
+				"status_label": "Rejected",
+				"rejection_reason": reason,
+			}
 		}
 		
 	except Exception as e:
-		frappe.log_error(f"Reject Travel Request Error: {str(e)}\n{frappe.get_traceback()}", "Travel Request Rejection")
-		frappe.throw(_("Failed to reject travel request: {0}").format(str(e)))
+		frappe.log_error(f"Reject Travel Request Error: {str(e)}\n{frappe.get_traceback()}", "Travel Request Reject")
+		return {
+			"status": "error",
+			"message": str(e),
+		}
 
 
 @frappe.whitelist()
-def get_employee_travel_requests(
+def get_travel_requests(
 	employee: str | None = None,
+	travel_type: str | None = None,
+	purpose_of_travel: str | None = None,
+	status: str | None = None,
 	from_date: str | None = None,
 	to_date: str | None = None,
-	docstatus: int | None = None,
 	limit: int = 100,
 ) -> dict:
 	"""
-	Get travel requests for an employee.
+	Get travel requests with filters.
+	For employees: returns their own requests
+	For admins: can see all requests or filter by employee
 	
 	Args:
-		employee: Employee ID (if None, uses current user's employee)
-		from_date: Filter from this date
-		to_date: Filter to this date
-		docstatus: Filter by status (0=Draft, 1=Submitted/Approved, 2=Cancelled)
+		employee: Filter by employee ID (admin only)
+		travel_type: Filter by travel type (Domestic/International)
+		purpose_of_travel: Filter by purpose
+		status: Filter by status (pending/approved/rejected)
+		from_date: Filter from creation date
+		to_date: Filter to creation date
 		limit: Maximum number of records
 	
 	Returns:
 		Dict with requests list and summary
 	"""
 	try:
-		# If no employee, get current user's employee
-		if not employee:
-			employee = get_employee_by_user()
-			if not employee:
-				frappe.throw(_("No employee record found for current user"))
-		
-		# Build filters
-		filters = {"employee": employee}
-		
-		if docstatus is not None:
-			filters["docstatus"] = docstatus
-		
-		# Get requests
-		fields = [
-			"name",
-			"employee",
-			"employee_name",
-			"travel_type",
-			"purpose_of_travel",
-			"description",
-			"travel_funding",
-			"details_of_sponsor",
-			"docstatus",
-			"creation",
-			"modified",
-		]
-		
-		requests = frappe.get_list(
-			"Travel Request",
-			fields=fields,
-			filters=filters,
-			order_by="creation desc",
-			limit=limit,
-		)
-		
-		# Get itinerary and costings for each request
-		for req in requests:
-			itinerary = frappe.get_all(
-				"Travel Itinerary",
-				filters={"parent": req.name},
-				fields=["from_date", "to_date", "from_location", "to_location", "travel_mode", "lodging_required"],
-			)
-			req["itinerary"] = itinerary
-			
-			costings = frappe.get_all(
-				"Travel Costing",
-				filters={"parent": req.name},
-				fields=["expense_type", "amount"],
-			)
-			req["costings"] = costings
-			req["total_cost"] = sum(c.get("amount", 0) for c in costings)
-		
-		# Calculate summary
-		status_summary = {
-			"pending": sum(1 for r in requests if r.docstatus == 0),
-			"approved": sum(1 for r in requests if r.docstatus == 1),
-			"cancelled": sum(1 for r in requests if r.docstatus == 2),
-		}
-		
-		return {
-			"status": "success",
-			"requests": requests,
-			"total_requests": len(requests),
-			"status_summary": status_summary,
-		}
-		
-	except Exception as e:
-		frappe.log_error(f"Get Employee Travel Requests Error: {str(e)}\n{frappe.get_traceback()}", "Travel Requests")
-		return {
-			"status": "error",
-			"message": str(e),
-			"requests": [],
-		}
-
-
-@frappe.whitelist()
-def get_admin_travel_requests(
-	employee: str | None = None,
-	travel_type: str | None = None,
-	docstatus: int | None = None,
-	limit: int = 500,
-) -> dict:
-	"""
-	Get all travel requests for admin with filters.
-	
-	Args:
-		employee: Filter by specific employee
-		travel_type: Filter by travel type (Domestic/International)
-		docstatus: Filter by status (0=Draft, 1=Approved, 2=Cancelled)
-		limit: Maximum records
-	
-	Returns:
-		Dict with requests and statistics
-	"""
-	try:
-		# Check if user is admin
+		# Get current user's employee
+		current_employee = get_employee_by_user()
 		user_roles = frappe.get_roles()
 		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
 		
-		if not is_admin:
-			frappe.throw(_("You do not have permission to view all travel requests"))
+		# DEBUG LOGGING
+		frappe.log_error(
+			f"get_travel_requests called:\n"
+			f"User: {frappe.session.user}\n"
+			f"Current Employee: {current_employee}\n"
+			f"Roles: {user_roles}\n"
+			f"Is Admin: {is_admin}\n"
+			f"Params - employee: {employee}, travel_type: {travel_type}, purpose: {purpose_of_travel}\n"
+			f"Status param: {status}, from_date: {from_date}, to_date: {to_date}, limit: {limit}",
+			"Travel Request Debug"
+		)
 		
 		# Build filters
 		filters = {}
 		
-		if employee:
+		# Non-admin users can only see their own requests
+		if not is_admin:
+			if not current_employee:
+				frappe.throw(_("No employee record found for current user"))
+			filters["employee"] = current_employee
+		elif employee:
+			# Admin can filter by specific employee
 			filters["employee"] = employee
+		
+		# Apply other filters
 		if travel_type:
 			filters["travel_type"] = travel_type
-		if docstatus is not None:
-			filters["docstatus"] = docstatus
+		if purpose_of_travel:
+			filters["purpose_of_travel"] = purpose_of_travel
 		
-		# Get requests
+		# Status filter (docstatus: 0=Draft/Pending, 1=Approved, 2=Rejected/Cancelled)
+		if status:
+			status_map = {
+				"pending": 0,
+				"approved": 1,
+				"rejected": 2,
+			}
+			if status.lower() in status_map:
+				filters["docstatus"] = status_map[status.lower()]
+			else:
+				frappe.log_error(f"Invalid status filter: {status}", "Travel Request Filter Error")
+		
+		# Date range filter
+		if from_date:
+			filters["creation"] = (">=", from_date)
+		if to_date:
+			if "creation" in filters:
+				filters["creation"] = ("between", [from_date, to_date])
+			else:
+				filters["creation"] = ("<=", to_date)
+		
+		# DEBUG: Log final filters
+		frappe.log_error(f"Final filters applied: {filters}", "Travel Request Filters")
+		
+		# Get travel requests
 		fields = [
 			"name",
 			"employee",
 			"employee_name",
+			"company",
 			"travel_type",
 			"purpose_of_travel",
-			"description",
 			"travel_funding",
 			"details_of_sponsor",
+			"description",
+			"cell_number",
+			"prefered_email",
+			"cost_center",
+			"name_of_organizer",
 			"docstatus",
 			"creation",
 			"modified",
+			"owner",
 		]
 		
+		# For admin users, ignore permissions to see all requests
+		# For employees, permissions are automatically applied
 		requests = frappe.get_list(
 			"Travel Request",
 			fields=fields,
 			filters=filters,
 			order_by="creation desc",
 			limit=limit,
+			ignore_permissions=is_admin,  # Admin can see all requests
 		)
 		
-		# Get itinerary and costings
-		for req in requests:
-			itinerary = frappe.get_all(
-				"Travel Itinerary",
-				filters={"parent": req.name},
-				fields=["from_date", "to_date", "from_location", "to_location", "travel_mode", "lodging_required"],
-			)
-			req["itinerary"] = itinerary
-			
-			costings = frappe.get_all(
-				"Travel Costing",
-				filters={"parent": req.name},
-				fields=["expense_type", "amount"],
-			)
-			req["costings"] = costings
-			req["total_cost"] = sum(c.get("amount", 0) for c in costings)
+		# DEBUG: Log query results
+		frappe.log_error(
+			f"Query returned {len(requests)} requests\n"
+			f"Request IDs: {[r.get('name') for r in requests]}\n"
+			f"Ignore permissions: {is_admin}",
+			"Travel Request Query Result"
+		)
 		
-		# Calculate statistics
-		stats = {
-			"total_requests": len(requests),
-			"total_estimated_cost": sum(r.get("total_cost", 0) for r in requests),
-			"by_status": {
-				"pending": sum(1 for r in requests if r.docstatus == 0),
-				"approved": sum(1 for r in requests if r.docstatus == 1),
-				"cancelled": sum(1 for r in requests if r.docstatus == 2),
-			},
-			"by_travel_type": {},
+		# Add status labels
+		for req in requests:
+			req["status_label"] = get_travel_request_status_label(req.docstatus)
+		
+		# Calculate summary
+		summary = {
+			"total": len(requests),
+			"pending": sum(1 for r in requests if r.docstatus == 0),
+			"approved": sum(1 for r in requests if r.docstatus == 1),
+			"rejected": sum(1 for r in requests if r.docstatus == 2),
 		}
-		
-		for req in requests:
-			ttype = req.get("travel_type", "Unknown")
-			stats["by_travel_type"][ttype] = stats["by_travel_type"].get(ttype, 0) + 1
 		
 		return {
 			"status": "success",
-			"requests": requests,
-			"statistics": stats,
+			"data": {
+				"requests": requests,
+				"summary": summary,
+			}
 		}
 		
 	except Exception as e:
-		frappe.log_error(f"Get Admin Travel Requests Error: {str(e)}\n{frappe.get_traceback()}", "Admin Travel Requests")
+		frappe.log_error(f"Get Travel Requests Error: {str(e)}\n{frappe.get_traceback()}", "Travel Request List")
 		return {
 			"status": "error",
 			"message": str(e),
-			"requests": [],
+			"data": {
+				"requests": [],
+				"summary": {},
+			}
 		}
 
 
 @frappe.whitelist()
-def get_purpose_of_travel_list() -> list[str]:
-	"""Get all purpose of travel options."""
+def get_travel_request_details(request_id: str) -> dict:
+	"""
+	Get detailed information about a specific travel request.
+	
+	Args:
+		request_id: Travel Request ID
+	
+	Returns:
+		Dict with complete travel request details
+	"""
+	try:
+		# Get current user's employee
+		current_employee = get_employee_by_user()
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		# Get travel request
+		travel_request = frappe.get_doc("Travel Request", request_id)
+		
+		# Check permission - employee can only see their own, admin can see all
+		if not is_admin and travel_request.employee != current_employee:
+			frappe.throw(_("You do not have permission to view this travel request"))
+		
+		# Get comments/activity
+		comments = frappe.get_all(
+			"Comment",
+			filters={
+				"reference_doctype": "Travel Request",
+				"reference_name": request_id,
+				"comment_type": "Comment",
+			},
+			fields=["content", "owner", "creation"],
+			order_by="creation desc",
+		)
+		
+		return {
+			"status": "success",
+			"data": {
+				"request_id": travel_request.name,
+				"employee": travel_request.employee,
+				"employee_name": travel_request.employee_name,
+				"company": travel_request.company,
+				"travel_type": travel_request.travel_type,
+				"purpose_of_travel": travel_request.purpose_of_travel,
+				"travel_funding": travel_request.travel_funding,
+				"details_of_sponsor": travel_request.details_of_sponsor,
+				"description": travel_request.description,
+				"travel_proof": travel_request.travel_proof,
+				"cell_number": travel_request.cell_number,
+				"prefered_email": travel_request.prefered_email,
+				"date_of_birth": str(travel_request.date_of_birth) if travel_request.date_of_birth else None,
+				"personal_id_type": travel_request.personal_id_type,
+				"personal_id_number": travel_request.personal_id_number,
+				"passport_number": travel_request.passport_number,
+				"cost_center": travel_request.cost_center,
+				"name_of_organizer": travel_request.name_of_organizer,
+				"address_of_organizer": travel_request.address_of_organizer,
+				"other_details": travel_request.other_details,
+				"docstatus": travel_request.docstatus,
+				"status_label": get_travel_request_status_label(travel_request.docstatus),
+				"creation": str(travel_request.creation),
+				"modified": str(travel_request.modified),
+				"owner": travel_request.owner,
+				"comments": comments,
+			}
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Travel Request Details Error: {str(e)}\n{frappe.get_traceback()}", "Travel Request Details")
+		return {
+			"status": "error",
+			"message": str(e),
+		}
+
+
+@frappe.whitelist()
+def get_purpose_of_travel_list() -> dict:
+	"""
+	Get all available purposes of travel.
+	
+	Returns:
+		Dict with list of purposes
+	"""
 	try:
 		purposes = frappe.get_all(
 			"Purpose of Travel",
-			fields=["name"],
-			order_by="name",
-			pluck="name"
+			fields=["name", "purpose_of_travel"],
+			order_by="name asc",
 		)
-		return purposes
+		
+		# Extract just the names (since autoname is field:purpose_of_travel)
+		purpose_list = [p.get("name") or p.get("purpose_of_travel") for p in purposes]
+		
+		return {
+			"status": "success",
+			"data": {
+				"purposes": purpose_list,
+				"total": len(purpose_list),
+			}
+		}
+		
 	except Exception as e:
 		frappe.log_error(f"Get Purpose of Travel Error: {str(e)}", "Purpose of Travel")
-		return []
+		return {
+			"status": "error",
+			"message": str(e),
+			"data": {
+				"purposes": [],
+				"total": 0,
+			}
+		}
+
+
+def get_travel_request_status_label(docstatus: int) -> str:
+	"""
+	Convert docstatus to readable label.
+	
+	Args:
+		docstatus: 0=Draft/Pending, 1=Approved, 2=Rejected/Cancelled
+	
+	Returns:
+		Status label string
+	"""
+	status_map = {
+		0: "Pending",
+		1: "Approved",
+		2: "Rejected",
+	}
+	return status_map.get(docstatus, "Unknown")
 
 
 def send_travel_request_notification(request_id: str, action: str, remarks: str | None = None):
-	"""Send FCM notification for travel request status."""
+	"""
+	Send FCM push notification for travel request status updates.
+	
+	Args:
+		request_id: Travel Request ID
+		action: "submitted", "approved", or "rejected"
+		remarks: Optional remarks/reason
+	"""
 	try:
-		request = frappe.get_doc("Travel Request", request_id)
+		travel_request = frappe.get_doc("Travel Request", request_id)
 		
 		if action == "submitted":
-			# Send to HR Managers/Users
-			hr_users = frappe.get_all("Has Role",
-				filters={"role": ["in", ["HR Manager", "HR User"]]},
+			# Notify HR Managers and HR Users about new request
+			hr_users = frappe.get_all(
+				"Has Role",
+				filters={"role": ["in", ["HR Manager", "HR User", "Administrator"]]},
 				pluck="parent"
 			)
 			
 			for hr_user in hr_users:
-				tokens = frappe.get_all("Mobile Device",
+				# Skip if user is the one who submitted
+				if hr_user == frappe.session.user:
+					continue
+				
+				tokens = frappe.get_all(
+					"Mobile Device",
 					filters={"user": hr_user},
 					pluck="fcm_token"
 				)
@@ -2697,7 +2855,7 @@ def send_travel_request_notification(request_id: str, action: str, remarks: str 
 				
 				if tokens:
 					title = "New Travel Request"
-					body = f"{request.employee_name} submitted {request.travel_type} travel request"
+					body = f"{travel_request.employee_name} submitted a {travel_request.travel_type} travel request"
 					
 					send_fcm_notification(tokens, title, body, {
 						"type": "travel_request",
@@ -2705,13 +2863,15 @@ def send_travel_request_notification(request_id: str, action: str, remarks: str 
 						"request_id": request_id,
 					})
 		
-		else:
-			# Send to employee
-			user_id = frappe.get_value("Employee", request.employee, "user_id")
+		elif action in ["approved", "rejected"]:
+			# Notify the employee who submitted the request
+			user_id = frappe.get_value("Employee", travel_request.employee, "user_id")
+			
 			if not user_id:
 				return
 			
-			tokens = frappe.get_all("Mobile Device",
+			tokens = frappe.get_all(
+				"Mobile Device",
 				filters={"user": user_id},
 				pluck="fcm_token"
 			)
@@ -2721,17 +2881,15 @@ def send_travel_request_notification(request_id: str, action: str, remarks: str 
 				return
 			
 			if action == "approved":
-				title = "Travel Request Approved"
-				body = f"Your {request.travel_type} travel request has been approved"
+				title = "Travel Request Approved ✓"
+				body = f"Your {travel_request.travel_type} travel request has been approved"
 				if remarks:
 					body += f". {remarks}"
-			elif action == "rejected":
+			else:  # rejected
 				title = "Travel Request Rejected"
-				body = f"Your {request.travel_type} travel request has been rejected"
+				body = f"Your {travel_request.travel_type} travel request has been rejected"
 				if remarks:
 					body += f". Reason: {remarks}"
-			else:
-				return
 			
 			send_fcm_notification(tokens, title, body, {
 				"type": "travel_request",

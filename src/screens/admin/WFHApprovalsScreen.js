@@ -328,13 +328,13 @@ const WFHApprovalsScreen = ({ navigation }) => {
                 <View style={styles.requestHeader}>
                     <View style={styles.employeeInfo}>
                         <View style={[styles.typeIndicator, { backgroundColor: color }]}>
-                            <Icon name={icon} size={10} color="white" />
+                            <Icon name={icon} size={9} color="white" />
                         </View>
                         <Text style={styles.employeeName} numberOfLines={1}>{item.employee_name}</Text>
                     </View>
                     {!isPending && (
                         <View style={[styles.statusBadge, { backgroundColor: statusColor }]}>
-                            <Icon name={statusIcon} size={9} color="white" />
+                            <Icon name={statusIcon} size={8} color="white" />
                             <Text style={styles.statusText}>{item.status}</Text>
                         </View>
                     )}
@@ -343,7 +343,7 @@ const WFHApprovalsScreen = ({ navigation }) => {
                 {/* Date and Details Row */}
                 <View style={styles.requestDetails}>
                     <View style={styles.infoRow}>
-                        <Icon name="calendar" size={12} color={colors.textSecondary} />
+                        <Icon name="calendar" size={11} color={colors.textSecondary} />
                         <Text style={styles.dateText}>
                             {item.from_date === item.to_date
                                 ? formatDate(item.from_date)
@@ -354,7 +354,7 @@ const WFHApprovalsScreen = ({ navigation }) => {
                     
                     {item.reason && (
                         <View style={styles.infoRow}>
-                            <Icon name="comment" size={12} color={colors.textSecondary} />
+                            <Icon name="comment" size={11} color={colors.textSecondary} />
                             <Text style={styles.reasonText} numberOfLines={1}>
                                 {item.reason}
                             </Text>
@@ -373,7 +373,7 @@ const WFHApprovalsScreen = ({ navigation }) => {
                                 <ActivityIndicator size="small" color="white" />
                             ) : (
                                 <>
-                                    <Icon name="times" size={16} color="white" />
+                                    <Icon name="times" size={14} color="white" />
                                     <Text style={styles.actionButtonText}>Reject</Text>
                                 </>
                             )}
@@ -388,7 +388,7 @@ const WFHApprovalsScreen = ({ navigation }) => {
                                 <ActivityIndicator size="small" color="white" />
                             ) : (
                                 <>
-                                    <Icon name="check" size={16} color="white" />
+                                    <Icon name="check" size={14} color="white" />
                                     <Text style={styles.actionButtonText}>Approve</Text>
                                 </>
                             )}
@@ -407,7 +407,7 @@ const WFHApprovalsScreen = ({ navigation }) => {
         
         return (
             <View style={styles.emptyState}>
-                <Icon name="clipboard-check" size={64} color={colors.textSecondary} />
+                <Icon name="clipboard-check" size={48} color={colors.textSecondary} />
                 <Text style={styles.emptyTitle}>{message}</Text>
                 <Text style={styles.emptySubtitle}>{subtitle}</Text>
             </View>
@@ -433,7 +433,7 @@ const WFHApprovalsScreen = ({ navigation }) => {
                 >
                     <Icon
                         name="clock"
-                        size={16}
+                        size={14}
                         color={activeTab === 'pending' ? colors.primary : colors.textSecondary}
                     />
                     <Text style={[styles.tabText, activeTab === 'pending' && styles.tabTextActive]}>
@@ -452,7 +452,7 @@ const WFHApprovalsScreen = ({ navigation }) => {
                 >
                     <Icon
                         name="history"
-                        size={16}
+                        size={14}
                         color={activeTab === 'history' ? colors.primary : colors.textSecondary}
                     />
                     <Text style={[styles.tabText, activeTab === 'history' && styles.tabTextActive]}>
@@ -602,8 +602,8 @@ const styles = StyleSheet.create({
         backgroundColor: colors.background,
     },
     loadingText: {
-        marginTop: 16,
-        fontSize: 16,
+        marginTop: 10,
+        fontSize: 14,
         color: colors.textSecondary,
     },
     tabContainer: {
@@ -611,23 +611,28 @@ const styles = StyleSheet.create({
         backgroundColor: colors.surface,
         borderBottomWidth: 1,
         borderBottomColor: colors.border,
+        elevation: 1,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
     },
     tab: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 16,
-        paddingHorizontal: 12,
+        paddingVertical: 12,
+        paddingHorizontal: 10,
         borderBottomWidth: 2,
         borderBottomColor: 'transparent',
-        gap: 6,
+        gap: 5,
     },
     tabActive: {
         borderBottomColor: colors.primary,
     },
     tabText: {
-        fontSize: 14,
+        fontSize: 13,
         fontWeight: '500',
         color: colors.textSecondary,
     },
@@ -640,14 +645,14 @@ const styles = StyleSheet.create({
         borderRadius: 10,
         paddingHorizontal: 6,
         paddingVertical: 2,
-        minWidth: 20,
-        height: 20,
+        minWidth: 18,
+        height: 18,
         alignItems: 'center',
         justifyContent: 'center',
     },
     badgeText: {
         color: 'white',
-        fontSize: 11,
+        fontSize: 10,
         fontWeight: '600',
     },
     header: {
@@ -667,7 +672,7 @@ const styles = StyleSheet.create({
         color: colors.textSecondary,
     },
     listContainer: {
-        padding: 16,
+        padding: 12,
     },
     emptyContainer: {
         flex: 1,
@@ -676,17 +681,17 @@ const styles = StyleSheet.create({
     },
     emptyState: {
         alignItems: 'center',
-        paddingVertical: 40,
+        paddingVertical: 30,
     },
     emptyTitle: {
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: '600',
         color: colors.textPrimary,
-        marginTop: 16,
-        marginBottom: 8,
+        marginTop: 12,
+        marginBottom: 6,
     },
     emptySubtitle: {
-        fontSize: 14,
+        fontSize: 13,
         color: colors.textSecondary,
         textAlign: 'center',
     },
@@ -700,11 +705,13 @@ const styles = StyleSheet.create({
         shadowColor: '#000',
         shadowOffset: {
             width: 0,
-            height: 1,
+            height: 2,
         },
         shadowOpacity: 0.08,
-        shadowRadius: 2,
+        shadowRadius: 4,
         elevation: 2,
+        borderWidth: 1,
+        borderColor: '#F3F4F6',
     },
     requestHeader: {
         flexDirection: 'row',
@@ -716,37 +723,37 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         flex: 1,
-        gap: 8,
+        gap: 6,
     },
     employeeName: {
-        fontSize: 15,
+        fontSize: 14,
         fontWeight: '600',
         color: colors.textPrimary,
         flex: 1,
     },
     typeIndicator: {
-        width: 22,
-        height: 22,
-        borderRadius: 11,
+        width: 20,
+        height: 20,
+        borderRadius: 10,
         justifyContent: 'center',
         alignItems: 'center',
     },
     statusBadge: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 8,
+        paddingHorizontal: 7,
         paddingVertical: 3,
-        borderRadius: 10,
+        borderRadius: 8,
         gap: 3,
     },
     statusText: {
         color: 'white',
-        fontSize: 10,
+        fontSize: 9,
         fontWeight: '600',
         textTransform: 'capitalize',
     },
     requestDetails: {
-        gap: 6,
+        gap: 5,
     },
     infoRow: {
         flexDirection: 'row',
@@ -754,20 +761,20 @@ const styles = StyleSheet.create({
         gap: 6,
     },
     dateText: {
-        fontSize: 13,
+        fontSize: 12,
         color: colors.textPrimary,
         fontWeight: '500',
         flex: 1,
     },
     reasonText: {
-        fontSize: 12,
+        fontSize: 11,
         color: colors.textSecondary,
         flex: 1,
     },
     actionButtons: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        gap: 10,
+        gap: 8,
         marginTop: 10,
     },
     actionButton: {
@@ -775,10 +782,10 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 10,
-        paddingHorizontal: 14,
+        paddingVertical: 8,
+        paddingHorizontal: 12,
         borderRadius: 8,
-        minHeight: 40,
+        minHeight: 36,
     },
     rejectButton: {
         backgroundColor: '#EF4444',
@@ -788,16 +795,16 @@ const styles = StyleSheet.create({
     },
     actionButtonText: {
         color: 'white',
-        fontSize: 13,
+        fontSize: 12,
         fontWeight: '600',
-        marginLeft: 6,
+        marginLeft: 5,
     },
     filterContainer: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
         backgroundColor: colors.surface,
         borderBottomWidth: 1,
         borderBottomColor: colors.border,
@@ -805,21 +812,21 @@ const styles = StyleSheet.create({
     filterButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 12,
+        paddingHorizontal: 10,
         paddingVertical: 6,
         backgroundColor: colors.background,
         borderRadius: 8,
         borderWidth: 1,
         borderColor: colors.primary,
-        gap: 6,
+        gap: 5,
     },
     filterButtonText: {
-        fontSize: 13,
+        fontSize: 12,
         color: colors.primary,
         fontWeight: '500',
     },
     filterResultText: {
-        fontSize: 12,
+        fontSize: 11,
         color: colors.textSecondary,
         fontWeight: '500',
     },
@@ -828,12 +835,12 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(0, 0, 0, 0.5)',
         justifyContent: 'center',
         alignItems: 'center',
-        padding: 20,
+        padding: 16,
     },
     modalContent: {
         backgroundColor: colors.surface,
-        borderRadius: 16,
-        padding: 20,
+        borderRadius: 14,
+        padding: 16,
         width: '100%',
         maxWidth: 400,
         shadowColor: '#000',
@@ -846,21 +853,21 @@ const styles = StyleSheet.create({
         elevation: 10,
     },
     modalTitle: {
-        fontSize: 18,
+        fontSize: 16,
         fontWeight: '700',
         color: colors.textPrimary,
-        marginBottom: 16,
+        marginBottom: 12,
         textAlign: 'center',
     },
     filterOption: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 14,
-        paddingHorizontal: 16,
-        borderRadius: 10,
-        marginBottom: 8,
+        paddingVertical: 12,
+        paddingHorizontal: 14,
+        borderRadius: 8,
+        marginBottom: 6,
         backgroundColor: colors.background,
-        gap: 12,
+        gap: 10,
     },
     filterOptionActive: {
         backgroundColor: colors.primary + '15',
@@ -868,7 +875,7 @@ const styles = StyleSheet.create({
         borderColor: colors.primary,
     },
     filterOptionText: {
-        fontSize: 15,
+        fontSize: 14,
         color: colors.textPrimary,
         flex: 1,
         fontWeight: '500',
@@ -878,14 +885,14 @@ const styles = StyleSheet.create({
         fontWeight: '600',
     },
     modalCancelButton: {
-        marginTop: 12,
-        paddingVertical: 12,
+        marginTop: 10,
+        paddingVertical: 10,
         alignItems: 'center',
-        borderRadius: 10,
+        borderRadius: 8,
         backgroundColor: colors.background,
     },
     modalCancelText: {
-        fontSize: 15,
+        fontSize: 14,
         color: colors.textSecondary,
         fontWeight: '600',
     },
