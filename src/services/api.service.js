@@ -614,7 +614,103 @@ class ApiService {
         });
     }
 
+    /* -------------------------
+     * COMPENSATORY LEAVE REQUEST APIs
+     * Based on hrms.api compensatory leave documentation (line ~1147)
+     * -----------------------*/
+    
+    /**
+     * Submit compensatory leave request for working on holidays
+     * Uses: submit_compensatory_leave_request from backend
+     * @param {Object} compLeaveData - Comp leave request data
+     * @returns {Promise} Response with request details and status
+     */
+    submitCompLeave(compLeaveData) {
+        return this.post(m('submit_compensatory_leave_request'), {
+            employee: compLeaveData.employee,
+            work_from_date: compLeaveData.work_from_date,
+            work_end_date: compLeaveData.work_end_date,
+            reason: compLeaveData.reason,
+            leave_type: compLeaveData.leave_type || null,
+            half_day: compLeaveData.half_day || 0,
+            half_day_date: compLeaveData.half_day_date || null
+        });
+    }
 
+    /**
+     * Approve compensatory leave request (Admin)
+     * Uses: approve_compensatory_leave_request from backend
+     * @param {string} requestId - Comp Leave Request ID
+     * @param {string} remarks - Optional approval remarks
+     * @returns {Promise} Response with allocated days and leave allocation
+     */
+    approveCompLeave(requestId, remarks = '') {
+        return this.post(m('approve_compensatory_leave_request'), {
+            request_id: requestId,
+            remarks: remarks
+        });
+    }
+
+    /**
+     * Reject compensatory leave request (Admin)
+     * Uses: reject_compensatory_leave_request from backend
+     * @param {string} requestId - Comp Leave Request ID
+     * @param {string} reason - Rejection reason (required)
+     * @returns {Promise} Response with rejection status
+     */
+    rejectCompLeave(requestId, reason) {
+        return this.post(m('reject_compensatory_leave_request'), {
+            request_id: requestId,
+            reason: reason
+        });
+    }
+
+    /**
+     * Cancel compensatory leave request
+     * Uses: cancel_compensatory_leave_request from backend
+     * @param {string} requestId - Comp Leave Request ID
+     * @param {string} reason - Cancellation reason
+     * @returns {Promise} Response with cancellation status
+     */
+    cancelCompLeave(requestId, reason = '') {
+        return this.post(m('cancel_compensatory_leave_request'), {
+            request_id: requestId,
+            reason: reason
+        });
+    }
+
+    /**
+     * Get employee's own compensatory leave requests with filters
+     * Uses: get_employee_compensatory_requests from backend
+     * @param {Object} filters - {employee, from_date, to_date, docstatus, limit}
+     * @returns {Promise} Response with requests list and summary
+     */
+    getMyCompLeaves(filters = {}) {
+        return this.get(m('get_employee_compensatory_requests'), {
+            employee: filters.employee || null, // Optional - defaults to current user
+            from_date: filters.from_date || null,
+            to_date: filters.to_date || null,
+            docstatus: filters.docstatus !== undefined ? filters.docstatus : null, // 0=Pending, 1=Approved, 2=Cancelled
+            limit: filters.limit || 100
+        });
+    }
+
+    /**
+     * Get all compensatory leave requests for admin with filters
+     * Uses: get_admin_compensatory_requests from backend
+     * @param {Object} filters - {department, employee, from_date, to_date, docstatus, limit}
+     * @returns {Promise} Response with requests and statistics
+     */
+    getAllCompLeaves(filters = {}) {
+        return this.get(m('get_admin_compensatory_requests'), {
+            department: filters.department || null,
+            employee: filters.employee || null,
+            from_date: filters.from_date || null,
+            to_date: filters.to_date || null,
+            docstatus: filters.docstatus !== undefined ? filters.docstatus : null,
+            limit: filters.limit || 500
+        });
+    }
 
 
     /* -------------------------

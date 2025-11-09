@@ -96,6 +96,8 @@ const AdminDashboard = ({ navigation }) => {
                 <Section title="Leave Management" icon="umbrella-beach" tint="#8B5CF6">
                     <ListItem title="Leave Approvals" subtitle="Approve/reject leave requests" leftIcon="clipboard-list" badge="8"
                         tint="#8B5CF6" onPress={() => navigation.navigate('LeaveApprovals')} />
+                    <ListItem title="Compensatory Leave Approvals" subtitle="Approve comp leave for holidays" leftIcon="calendar-plus"
+                        tint="#8B5CF6" onPress={() => navigation.navigate('CompApprovals')} />
                 </Section>
 
                 <Section title="Employee Management" icon="users-cog" tint="#EC4899">

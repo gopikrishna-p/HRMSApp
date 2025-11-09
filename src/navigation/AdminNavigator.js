@@ -17,6 +17,7 @@ import WFHApprovalsScreen from '../screens/admin/WFHApprovalsScreen';
 import AttendanceAnalyticsScreen from '../screens/admin/AttendanceAnalyticsScreen';
 import TodayEmployeeAnalyticsScreen from '../screens/admin/TodayEmployeeAnalyticsScreen';
 import LeaveApprovalsScreen from '../screens/admin/LeaveApprovalsScreen';
+import CompApprovalScreen from '../screens/admin/CompApprovalScreen';
 import CreateNotificationScreen from '../screens/admin/CreateNotificationScreen';
 
 import ProjectsOverviewScreen from '../screens/admin/ProjectsOverviewScreen';
@@ -58,6 +59,7 @@ const AdminNavigator = () => {
             <Stack.Screen name="TodayEmployeeAnalytics" component={TodayEmployeeAnalyticsScreen} options={{ title: 'Today Analytics' }} />
             <Stack.Screen name="Reports" component={ReportsScreen} options={{ title: 'Reports & Analytics' }} />
             <Stack.Screen name="LeaveApprovals" component={LeaveApprovalsScreen} options={{ title: 'Leave Approvals' }} />
+            <Stack.Screen name="CompApprovals" component={CompApprovalScreen} options={{ title: 'Compensatory Leave Approvals' }} />
             <Stack.Screen name="CreateNotification" component={CreateNotificationScreen} options={{ title: 'Create Notification' }} />
 
             <Stack.Screen name="ProjectsOverview" component={ProjectsOverviewScreen} options={{ title: 'Projects Overview' }} />
