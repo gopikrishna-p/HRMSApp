@@ -74,8 +74,6 @@
                             tint={custom.palette.success} onPress={() => navigation.navigate('HolidayList')} />
                         <ListItem title="Apply Leave" subtitle="Submit leave request" leftIcon="file-alt"
                             tint={custom.palette.success} onPress={() => navigation.navigate('LeaveApplication')} />
-                        <ListItem title="My Leaves" subtitle="View leave history" leftIcon="list-ul"
-                            tint={custom.palette.success} onPress={() => navigation.navigate('Leaves')} />
                         <ListItem title="Comp-Off Request" subtitle="Request compensatory leave" leftIcon="exchange-alt"
                             tint={custom.palette.success} onPress={() => navigation.navigate('CompensatoryLeave')} />
                     </Section>
