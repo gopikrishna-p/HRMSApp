@@ -100,6 +100,13 @@ const AdminDashboard = ({ navigation }) => {
                         tint="#8B5CF6" onPress={() => navigation.navigate('CompApprovals')} />
                 </Section>
 
+                <Section title="Expense & Travel Management" icon="money-bill-wave" tint="#10B981">
+                    <ListItem title="Expense Claim Approvals" subtitle="Review & approve expense claims" leftIcon="receipt"
+                        tint="#10B981" onPress={() => navigation.navigate('ExpenseClaimApproval')} />
+                    <ListItem title="Travel Request Approvals" subtitle="Approve/reject travel requests" leftIcon="plane"
+                        tint="#10B981" onPress={() => navigation.navigate('TravelRequestApproval')} />
+                </Section>
+
                 <Section title="Employee Management" icon="users-cog" tint="#EC4899">
                     <ListItem title="Employee Management" subtitle="Manage employee records" leftIcon="users"
                         tint="#EC4899" onPress={() => navigation.navigate('EmployeeManagement')} />

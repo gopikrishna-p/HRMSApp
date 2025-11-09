@@ -714,6 +714,205 @@ class ApiService {
 
 
     /* -------------------------
+     * EXPENSE CLAIMS
+     * -----------------------*/
+    
+    /**
+     * Submit expense claim with multiple expense items
+     * @param {string} employee - Employee ID
+     * @param {Array} expenses - Array of expense items
+     * @param {Object} options - {expense_approver, project, cost_center, remark}
+     * @returns {Promise} Response with claim details
+     */
+    submitExpenseClaim(employee, expenses, options = {}) {
+        const params = {
+            employee,
+            expenses: JSON.stringify(expenses)
+        };
+
+        // Add optional parameters as separate fields (backend expects them this way)
+        if (options.expense_approver) {
+            params.expense_approver = options.expense_approver;
+        }
+        if (options.project) {
+            params.project = options.project;
+        }
+        if (options.cost_center) {
+            params.cost_center = options.cost_center;
+        }
+        if (options.remark) {
+            params.remark = options.remark;
+        }
+
+        return this.post(m('submit_expense_claim'), params);
+    }
+
+    /**
+     * Approve expense claim (Admin/Approver)
+     * @param {string} claimId - Expense Claim ID
+     * @param {string} remarks - Optional approval remarks
+     * @returns {Promise} Response with approval status
+     */
+    approveExpenseClaim(claimId, remarks = '') {
+        return this.post(m('approve_expense_claim'), {
+            claim_id: claimId,
+            remarks
+        });
+    }
+
+    /**
+     * Reject expense claim (Admin/Approver)
+     * @param {string} claimId - Expense Claim ID
+     * @param {string} reason - Rejection reason (required)
+     * @returns {Promise} Response with rejection status
+     */
+    rejectExpenseClaim(claimId, reason) {
+        return this.post(m('reject_expense_claim'), {
+            claim_id: claimId,
+            reason
+        });
+    }
+
+    /**
+     * Get employee's expense claims with filters
+     * @param {Object} filters - {employee, from_date, to_date, approval_status, limit}
+     * @returns {Promise} Response with claims list and summary
+     */
+    getEmployeeExpenseClaims(filters = {}) {
+        return this.get(m('get_employee_expense_claims'), {
+            employee: filters.employee || null,
+            from_date: filters.from_date || null,
+            to_date: filters.to_date || null,
+            approval_status: filters.approval_status || null,
+            limit: filters.limit || 100
+        });
+    }
+
+    /**
+     * Get all expense claims for admin with advanced filters
+     * @param {Object} filters - {department, employee, from_date, to_date, approval_status, limit}
+     * @returns {Promise} Response with claims and statistics
+     */
+    getAdminExpenseClaims(filters = {}) {
+        return this.get(m('get_admin_expense_claims'), {
+            department: filters.department || null,
+            employee: filters.employee || null,
+            from_date: filters.from_date || null,
+            to_date: filters.to_date || null,
+            approval_status: filters.approval_status || null,
+            limit: filters.limit || 500
+        });
+    }
+
+    /**
+     * Get all expense claim types for dropdown
+     * @returns {Promise} Array of expense types
+     */
+    getExpenseClaimTypes() {
+        return this.get(m('get_expense_claim_types'));
+    }
+
+    /* -------------------------
+     * TRAVEL REQUESTS
+     * -----------------------*/
+
+    /**
+     * Submit travel request with itinerary
+     * @param {string} employee - Employee ID
+     * @param {string} travelType - Domestic or International
+     * @param {string} purposeOfTravel - Purpose ID
+     * @param {string} description - Description/details
+     * @param {Array} itinerary - Array of itinerary items
+     * @param {Object} options - {costings, travel_funding, details_of_sponsor}
+     * @returns {Promise} Response with request details
+     */
+    submitTravelRequest(employee, travelType, purposeOfTravel, description, itinerary, options = {}) {
+        const params = {
+            employee,
+            travel_type: travelType,
+            purpose_of_travel: purposeOfTravel,
+            description,
+            itinerary: JSON.stringify(itinerary)
+        };
+
+        // Add optional parameters as separate fields (backend expects them this way)
+        if (options.costings && options.costings.length > 0) {
+            params.costings = JSON.stringify(options.costings);
+        }
+        if (options.travel_funding) {
+            params.travel_funding = options.travel_funding;
+        }
+        if (options.details_of_sponsor) {
+            params.details_of_sponsor = options.details_of_sponsor;
+        }
+
+        return this.post(m('submit_travel_request'), params);
+    }
+
+    /**
+     * Approve travel request (Admin)
+     * @param {string} requestId - Travel Request ID
+     * @param {string} remarks - Optional approval remarks
+     * @returns {Promise} Response with approval status
+     */
+    approveTravelRequest(requestId, remarks = '') {
+        return this.post(m('approve_travel_request'), {
+            request_id: requestId,
+            remarks
+        });
+    }
+
+    /**
+     * Reject travel request (Admin)
+     * @param {string} requestId - Travel Request ID
+     * @param {string} reason - Rejection reason (required)
+     * @returns {Promise} Response with rejection status
+     */
+    rejectTravelRequest(requestId, reason) {
+        return this.post(m('reject_travel_request'), {
+            request_id: requestId,
+            reason
+        });
+    }
+
+    /**
+     * Get employee's travel requests with filters
+     * @param {Object} filters - {employee, from_date, to_date, docstatus, limit}
+     * @returns {Promise} Response with requests list and summary
+     */
+    getEmployeeTravelRequests(filters = {}) {
+        return this.get(m('get_employee_travel_requests'), {
+            employee: filters.employee || null,
+            from_date: filters.from_date || null,
+            to_date: filters.to_date || null,
+            docstatus: filters.docstatus !== undefined ? filters.docstatus : null,
+            limit: filters.limit || 100
+        });
+    }
+
+    /**
+     * Get all travel requests for admin with filters
+     * @param {Object} filters - {employee, travel_type, docstatus, limit}
+     * @returns {Promise} Response with requests and statistics
+     */
+    getAdminTravelRequests(filters = {}) {
+        return this.get(m('get_admin_travel_requests'), {
+            employee: filters.employee || null,
+            travel_type: filters.travel_type || null,
+            docstatus: filters.docstatus !== undefined ? filters.docstatus : null,
+            limit: filters.limit || 500
+        });
+    }
+
+    /**
+     * Get all purpose of travel options for dropdown
+     * @returns {Promise} Array of travel purposes
+     */
+    getPurposeOfTravelList() {
+        return this.get(m('get_purpose_of_travel_list'));
+    }
+
+    /* -------------------------
      * FILES (upload/download/attach)
      * -----------------------*/
     getAttachments({ dt, dn }) {

@@ -4,9 +4,8 @@ from frappe import _
 from frappe.model import get_permitted_fields
 from frappe.model.workflow import get_workflow_name
 from frappe.query_builder import Order
-from frappe.utils import add_days, date_diff, getdate, strip_html
+from frappe.utils import add_days, date_diff, getdate, strip_html, nowdate, cint, now_datetime
 import json
-from frappe.utils import now_datetime, getdate
 from geopy.distance import geodesic
 import firebase_admin
 from firebase_admin import credentials, messaging
@@ -1144,7 +1143,1607 @@ def send_leave_application_notification(application_id: str, action: str, remark
 		frappe.log_error(f"Send Leave Notification Error: {str(e)}", "Leave Notification")
 
 
-# Expense Claims
+# ============================================================================
+# COMPENSATORY LEAVE REQUEST APIs
+# ============================================================================
+
+@frappe.whitelist()
+def submit_compensatory_leave_request(
+	employee: str,
+	work_from_date: str,
+	work_end_date: str,
+	reason: str,
+	leave_type: str | None = None,
+	half_day: int = 0,
+	half_day_date: str | None = None,
+) -> dict:
+	"""
+	Submit compensatory leave request for working on holidays.
+	
+	Args:
+		employee: Employee ID
+		work_from_date: Date worked from (YYYY-MM-DD)
+		work_end_date: Date worked till (YYYY-MM-DD)
+		reason: Reason for working on holiday
+		leave_type: Leave Type for compensation (optional)
+		half_day: 1 if half day, 0 otherwise
+		half_day_date: Date for half day (YYYY-MM-DD)
+	
+	Returns:
+		Dict with request details and status
+	"""
+	try:
+		# Validate current user has employee record
+		current_employee = get_employee_by_user()
+		if not current_employee:
+			frappe.throw(_("No employee record found for current user"))
+		
+		# Employees can only apply for themselves
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin and employee != current_employee:
+			frappe.throw(_("You can only apply compensatory leave for yourself"))
+		
+		# Validate reason
+		if not reason or not reason.strip():
+			frappe.throw(_("Reason is mandatory"))
+		
+		# Get company from employee
+		company = frappe.get_value("Employee", employee, "company")
+		
+		# Create compensatory leave request
+		comp_leave = frappe.get_doc({
+			"doctype": "Compensatory Leave Request",
+			"employee": employee,
+			"work_from_date": getdate(work_from_date),
+			"work_end_date": getdate(work_end_date),
+			"reason": reason,
+			"leave_type": leave_type,
+			"half_day": cint(half_day),
+			"half_day_date": getdate(half_day_date) if half_day_date else None,
+		})
+		
+		# Insert and submit
+		comp_leave.insert(ignore_permissions=True)
+		
+		# Try to submit (requires HR Manager/User role)
+		try:
+			if is_admin or "HR Manager" in user_roles or "HR User" in user_roles:
+				comp_leave.submit()
+				status_msg = "submitted and approved"
+				doc_status = 1
+			else:
+				status_msg = "submitted for approval"
+				doc_status = 0
+		except Exception as submit_error:
+			frappe.log_error(f"Auto-submit failed: {str(submit_error)}", "Comp Leave Submit")
+			status_msg = "submitted for approval"
+			doc_status = 0
+		
+		frappe.db.commit()
+		
+		# Calculate days
+		from frappe.utils import date_diff
+		date_difference = date_diff(work_end_date, work_from_date) + 1
+		if half_day:
+			date_difference -= 0.5
+		
+		# Send notification to HR
+		try:
+			send_comp_leave_notification(comp_leave.name, "submitted")
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Comp Leave Notification")
+		
+		return {
+			"status": "success",
+			"message": _("Compensatory leave request {0}").format(status_msg),
+			"request_id": comp_leave.name,
+			"employee": employee,
+			"employee_name": comp_leave.employee_name,
+			"work_from_date": str(comp_leave.work_from_date),
+			"work_end_date": str(comp_leave.work_end_date),
+			"compensatory_days": date_difference,
+			"docstatus": doc_status,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Submit Comp Leave Error: {str(e)}\n{frappe.get_traceback()}", "Compensatory Leave")
+		frappe.throw(_("Failed to submit compensatory leave request: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def approve_compensatory_leave_request(request_id: str, remarks: str | None = None) -> dict:
+	"""
+	Approve a compensatory leave request (for admins).
+	
+	Args:
+		request_id: Compensatory Leave Request ID
+		remarks: Optional approval remarks
+	
+	Returns:
+		Dict with approval status and allocated leave days
+	"""
+	try:
+		# Get comp leave request
+		comp_leave = frappe.get_doc("Compensatory Leave Request", request_id)
+		
+		# Check permission
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin:
+			frappe.throw(_("You do not have permission to approve compensatory leave requests"))
+		
+		# Check if already submitted
+		if comp_leave.docstatus == 1:
+			frappe.throw(_("This compensatory leave request has already been approved"))
+		
+		if comp_leave.docstatus == 2:
+			frappe.throw(_("This compensatory leave request has been cancelled"))
+		
+		# Submit (approve)
+		comp_leave.submit()
+		
+		if remarks:
+			comp_leave.add_comment("Comment", f"Approved: {remarks}")
+		
+		frappe.db.commit()
+		
+		# Calculate days allocated
+		from frappe.utils import date_diff
+		date_difference = date_diff(comp_leave.work_end_date, comp_leave.work_from_date) + 1
+		if comp_leave.half_day:
+			date_difference -= 0.5
+		
+		# Send notification to employee
+		try:
+			send_comp_leave_notification(request_id, "approved", remarks)
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Comp Leave Notification")
+		
+		return {
+			"status": "success",
+			"message": _("Compensatory leave request approved successfully"),
+			"request_id": request_id,
+			"employee": comp_leave.employee,
+			"leave_type": comp_leave.leave_type,
+			"days_allocated": date_difference,
+			"leave_allocation": comp_leave.leave_allocation,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Approve Comp Leave Error: {str(e)}\n{frappe.get_traceback()}", "Comp Leave Approval")
+		frappe.throw(_("Failed to approve compensatory leave: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def reject_compensatory_leave_request(request_id: str, reason: str) -> dict:
+	"""
+	Reject a compensatory leave request (for admins).
+	
+	Args:
+		request_id: Compensatory Leave Request ID
+		reason: Rejection reason (required)
+	
+	Returns:
+		Dict with rejection status
+	"""
+	try:
+		if not reason or not reason.strip():
+			frappe.throw(_("Rejection reason is required"))
+		
+		# Get comp leave request
+		comp_leave = frappe.get_doc("Compensatory Leave Request", request_id)
+		
+		# Check permission
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin:
+			frappe.throw(_("You do not have permission to reject compensatory leave requests"))
+		
+		# Check if already processed
+		if comp_leave.docstatus == 1:
+			frappe.throw(_("Cannot reject an already approved compensatory leave request"))
+		
+		if comp_leave.docstatus == 2:
+			frappe.throw(_("This compensatory leave request has already been cancelled"))
+		
+		# Cancel (reject)
+		comp_leave.cancel()
+		comp_leave.add_comment("Comment", f"Rejected: {reason}")
+		frappe.db.commit()
+		
+		# Send notification to employee
+		try:
+			send_comp_leave_notification(request_id, "rejected", reason)
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Comp Leave Notification")
+		
+		return {
+			"status": "success",
+			"message": _("Compensatory leave request rejected"),
+			"request_id": request_id,
+			"employee": comp_leave.employee,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Reject Comp Leave Error: {str(e)}\n{frappe.get_traceback()}", "Comp Leave Rejection")
+		frappe.throw(_("Failed to reject compensatory leave: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def cancel_compensatory_leave_request(request_id: str, reason: str | None = None) -> dict:
+	"""
+	Cancel a compensatory leave request.
+	
+	Args:
+		request_id: Compensatory Leave Request ID
+		reason: Cancellation reason
+	
+	Returns:
+		Dict with cancellation status
+	"""
+	try:
+		# Get comp leave request
+		comp_leave = frappe.get_doc("Compensatory Leave Request", request_id)
+		
+		# Check permission
+		current_employee = get_employee_by_user()
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin and comp_leave.employee != current_employee:
+			frappe.throw(_("You can only cancel your own compensatory leave requests"))
+		
+		# Check if already cancelled
+		if comp_leave.docstatus == 2:
+			frappe.throw(_("This compensatory leave request is already cancelled"))
+		
+		# Cancel
+		if comp_leave.docstatus == 1:
+			comp_leave.cancel()
+		else:
+			comp_leave.docstatus = 2
+			comp_leave.save(ignore_permissions=True)
+		
+		if reason:
+			comp_leave.add_comment("Comment", f"Cancelled: {reason}")
+		
+		frappe.db.commit()
+		
+		return {
+			"status": "success",
+			"message": _("Compensatory leave request cancelled successfully"),
+			"request_id": request_id,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Cancel Comp Leave Error: {str(e)}\n{frappe.get_traceback()}", "Comp Leave Cancellation")
+		frappe.throw(_("Failed to cancel compensatory leave: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_employee_compensatory_requests(
+	employee: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+	docstatus: int | None = None,
+	limit: int = 100,
+) -> dict:
+	"""
+	Get compensatory leave requests for an employee.
+	
+	Args:
+		employee: Employee ID (if None, uses current user's employee)
+		from_date: Filter from this date
+		to_date: Filter to this date
+		docstatus: Filter by status (0=Draft, 1=Submitted/Approved, 2=Cancelled)
+		limit: Maximum number of records
+	
+	Returns:
+		Dict with requests list and summary
+	"""
+	try:
+		# If no employee, get current user's employee
+		if not employee:
+			employee = get_employee_by_user()
+			if not employee:
+				frappe.throw(_("No employee record found for current user"))
+		
+		# Build filters
+		filters = {"employee": employee}
+		
+		if from_date:
+			filters["work_from_date"] = (">=", getdate(from_date))
+		if to_date:
+			filters["work_end_date"] = ("<=", getdate(to_date))
+		if docstatus is not None:
+			filters["docstatus"] = docstatus
+		
+		# Get requests
+		fields = [
+			"name",
+			"employee",
+			"employee_name",
+			"department",
+			"work_from_date",
+			"work_end_date",
+			"half_day",
+			"half_day_date",
+			"reason",
+			"leave_type",
+			"leave_allocation",
+			"docstatus",
+			"creation",
+			"modified",
+		]
+		
+		requests = frappe.get_list(
+			"Compensatory Leave Request",
+			fields=fields,
+			filters=filters,
+			order_by="work_from_date desc, creation desc",
+			limit=limit,
+		)
+		
+		# Calculate summary
+		from frappe.utils import date_diff
+		total_days = 0
+		for req in requests:
+			days = date_diff(req.work_end_date, req.work_from_date) + 1
+			if req.half_day:
+				days -= 0.5
+			req["compensatory_days"] = days
+			total_days += days
+		
+		status_summary = {
+			"pending": sum(1 for r in requests if r.docstatus == 0),
+			"approved": sum(1 for r in requests if r.docstatus == 1),
+			"cancelled": sum(1 for r in requests if r.docstatus == 2),
+		}
+		
+		return {
+			"status": "success",
+			"requests": requests,
+			"total_requests": len(requests),
+			"total_compensatory_days": total_days,
+			"status_summary": status_summary,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Employee Comp Leaves Error: {str(e)}\n{frappe.get_traceback()}", "Comp Leave Requests")
+		return {
+			"status": "error",
+			"message": str(e),
+			"requests": [],
+		}
+
+
+@frappe.whitelist()
+def get_admin_compensatory_requests(
+	department: str | None = None,
+	employee: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+	docstatus: int | None = None,
+	limit: int = 500,
+) -> dict:
+	"""
+	Get all compensatory leave requests for admin with filters.
+	
+	Args:
+		department: Filter by department
+		employee: Filter by specific employee
+		from_date: Filter from this date
+		to_date: Filter to this date
+		docstatus: Filter by status (0=Draft, 1=Approved, 2=Cancelled)
+		limit: Maximum records
+	
+	Returns:
+		Dict with requests and statistics
+	"""
+	try:
+		# Check if user is admin
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin:
+			frappe.throw(_("You do not have permission to view all compensatory leave requests"))
+		
+		# Build filters
+		filters = {}
+		
+		if department:
+			filters["department"] = department
+		if employee:
+			filters["employee"] = employee
+		if from_date:
+			filters["work_from_date"] = (">=", getdate(from_date))
+		if to_date:
+			filters["work_end_date"] = ("<=", getdate(to_date))
+		if docstatus is not None:
+			filters["docstatus"] = docstatus
+		
+		# Get requests
+		fields = [
+			"name",
+			"employee",
+			"employee_name",
+			"department",
+			"work_from_date",
+			"work_end_date",
+			"half_day",
+			"half_day_date",
+			"reason",
+			"leave_type",
+			"leave_allocation",
+			"docstatus",
+			"creation",
+			"modified",
+		]
+		
+		requests = frappe.get_list(
+			"Compensatory Leave Request",
+			fields=fields,
+			filters=filters,
+			order_by="creation desc",
+			limit=limit,
+		)
+		
+		# Calculate statistics
+		from frappe.utils import date_diff
+		stats = {
+			"total_requests": len(requests),
+			"total_days": 0,
+			"by_status": {
+				"pending": 0,
+				"approved": 0,
+				"cancelled": 0,
+			},
+			"by_department": {},
+			"by_leave_type": {},
+		}
+		
+		for req in requests:
+			# Calculate days
+			days = date_diff(req.work_end_date, req.work_from_date) + 1
+			if req.half_day:
+				days -= 0.5
+			req["compensatory_days"] = days
+			stats["total_days"] += days
+			
+			# By status
+			if req.docstatus == 0:
+				stats["by_status"]["pending"] += 1
+			elif req.docstatus == 1:
+				stats["by_status"]["approved"] += 1
+			elif req.docstatus == 2:
+				stats["by_status"]["cancelled"] += 1
+			
+			# By department
+			dept = req.department or "Unknown"
+			stats["by_department"][dept] = stats["by_department"].get(dept, 0) + 1
+			
+			# By leave type
+			ltype = req.leave_type or "Not Specified"
+			stats["by_leave_type"][ltype] = stats["by_leave_type"].get(ltype, 0) + 1
+		
+		return {
+			"status": "success",
+			"requests": requests,
+			"statistics": stats,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Admin Comp Leaves Error: {str(e)}\n{frappe.get_traceback()}", "Admin Comp Leave Requests")
+		return {
+			"status": "error",
+			"message": str(e),
+			"requests": [],
+		}
+
+
+def send_comp_leave_notification(request_id: str, action: str, remarks: str | None = None):
+	"""Send FCM notification for compensatory leave request status."""
+	try:
+		comp_leave = frappe.get_doc("Compensatory Leave Request", request_id)
+		
+		# Calculate days
+		from frappe.utils import date_diff
+		days = date_diff(comp_leave.work_end_date, comp_leave.work_from_date) + 1
+		if comp_leave.half_day:
+			days -= 0.5
+		
+		if action == "submitted":
+			# Send to HR Manager/User
+			hr_users = frappe.get_all("Has Role",
+				filters={"role": ["in", ["HR Manager", "HR User"]]},
+				pluck="parent"
+			)
+			
+			for hr_user in hr_users:
+				tokens = frappe.get_all("Mobile Device",
+					filters={"user": hr_user},
+					pluck="fcm_token"
+				)
+				tokens = [t for t in tokens if t]
+				
+				if tokens:
+					title = "New Compensatory Leave Request"
+					body = f"{comp_leave.employee_name} requested {days} day(s) comp leave for working on holiday"
+					
+					send_fcm_notification(tokens, title, body, {
+						"type": "compensatory_leave_request",
+						"action": "submitted",
+						"request_id": request_id,
+					})
+		
+		else:
+			# Send to employee
+			user_id = frappe.get_value("Employee", comp_leave.employee, "user_id")
+			if not user_id:
+				return
+			
+			tokens = frappe.get_all("Mobile Device",
+				filters={"user": user_id},
+				pluck="fcm_token"
+			)
+			tokens = [t for t in tokens if t]
+			
+			if not tokens:
+				return
+			
+			if action == "approved":
+				title = "Compensatory Leave Approved"
+				body = f"Your comp leave request for {days} day(s) has been approved"
+				if remarks:
+					body += f". {remarks}"
+			elif action == "rejected":
+				title = "Compensatory Leave Rejected"
+				body = f"Your comp leave request for {days} day(s) has been rejected"
+				if remarks:
+					body += f". Reason: {remarks}"
+			else:
+				return
+			
+			send_fcm_notification(tokens, title, body, {
+				"type": "compensatory_leave_request",
+				"action": action,
+				"request_id": request_id,
+			})
+		
+	except Exception as e:
+		frappe.log_error(f"Send Comp Leave Notification Error: {str(e)}", "Comp Leave Notification")
+
+
+# ============================================================================
+# EXPENSE CLAIM APIs
+# ============================================================================
+
+@frappe.whitelist()
+def submit_expense_claim(
+	employee: str,
+	expenses: str,  # JSON string of expense items
+	expense_approver: str | None = None,
+	project: str | None = None,
+	cost_center: str | None = None,
+	remark: str | None = None,
+) -> dict:
+	"""
+	Submit expense claim for mobile app.
+	
+	Args:
+		employee: Employee ID
+		expenses: JSON array of expense items [{expense_type, amount, description, expense_date, sanctioned_amount}]
+		expense_approver: Approver user ID
+		project: Project ID
+		cost_center: Cost Center
+		remark: Additional remarks
+	
+	Returns:
+		Dict with claim details and status
+	"""
+	try:
+		import json
+		
+		# Validate current user
+		current_employee = get_employee_by_user()
+		if not current_employee:
+			frappe.throw(_("No employee record found for current user"))
+		
+		# Employees can only submit for themselves
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User", "Expense Approver"})
+		
+		if not is_admin and employee != current_employee:
+			frappe.throw(_("You can only submit expense claims for yourself"))
+		
+		# Parse expenses
+		try:
+			expense_items = json.loads(expenses) if isinstance(expenses, str) else expenses
+		except:
+			frappe.throw(_("Invalid expense items format"))
+		
+		if not expense_items or len(expense_items) == 0:
+			frappe.throw(_("At least one expense item is required"))
+		
+		# Get employee details
+		emp_doc = frappe.get_doc("Employee", employee)
+		company = emp_doc.company
+		
+		# Create expense claim
+		expense_claim = frappe.get_doc({
+			"doctype": "Expense Claim",
+			"naming_series": "HR-EXP-.YYYY.-",
+			"employee": employee,
+			"expense_approver": expense_approver or emp_doc.expense_approver,
+			"company": company,
+			"posting_date": nowdate(),
+			"approval_status": "Draft",
+			"project": project,
+			"cost_center": cost_center,
+			"remark": remark,
+			"expenses": []
+		})
+		
+		# Add expense items
+		total_amount = 0
+		for item in expense_items:
+			expense_claim.append("expenses", {
+				"expense_type": item.get("expense_type"),
+				"expense_date": item.get("expense_date") or nowdate(),
+				"description": item.get("description"),
+				"amount": float(item.get("amount", 0)),
+				"sanctioned_amount": float(item.get("sanctioned_amount") or item.get("amount", 0)),
+			})
+			total_amount += float(item.get("amount", 0))
+		
+		# Insert
+		expense_claim.insert(ignore_permissions=True)
+		frappe.db.commit()
+		
+		# Send notification to approver
+		try:
+			send_expense_claim_notification(expense_claim.name, "submitted")
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Expense Claim Notification")
+		
+		return {
+			"status": "success",
+			"message": _("Expense claim submitted successfully"),
+			"claim_id": expense_claim.name,
+			"employee": employee,
+			"employee_name": expense_claim.employee_name,
+			"total_claimed_amount": total_amount,
+			"total_expenses": len(expense_items),
+			"approval_status": "Draft",
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Submit Expense Claim Error: {str(e)}\n{frappe.get_traceback()}", "Expense Claim")
+		frappe.throw(_("Failed to submit expense claim: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def approve_expense_claim(claim_id: str, remarks: str | None = None) -> dict:
+	"""
+	Approve an expense claim (for admins/approvers).
+	
+	Args:
+		claim_id: Expense Claim ID
+		remarks: Optional approval remarks
+	
+	Returns:
+		Dict with approval status
+	"""
+	try:
+		# Get expense claim
+		claim = frappe.get_doc("Expense Claim", claim_id)
+		
+		# Check permission
+		current_user = frappe.session.user
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User", "Expense Approver"})
+		is_approver = current_user == claim.expense_approver
+		
+		if not (is_admin or is_approver):
+			frappe.throw(_("You do not have permission to approve this expense claim"))
+		
+		# Check if already processed
+		if claim.approval_status == "Approved":
+			frappe.throw(_("This expense claim has already been approved"))
+		
+		if claim.approval_status == "Rejected":
+			frappe.throw(_("Cannot approve a rejected expense claim"))
+		
+		# Approve
+		claim.approval_status = "Approved"
+		claim.status = "Approved"
+		
+		if remarks:
+			claim.add_comment("Comment", f"Approved: {remarks}")
+		
+		claim.save(ignore_permissions=True)
+		frappe.db.commit()
+		
+		# Send notification to employee
+		try:
+			send_expense_claim_notification(claim_id, "approved", remarks)
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Expense Claim Notification")
+		
+		return {
+			"status": "success",
+			"message": _("Expense claim approved successfully"),
+			"claim_id": claim_id,
+			"employee": claim.employee,
+			"total_claimed_amount": claim.total_claimed_amount,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Approve Expense Claim Error: {str(e)}\n{frappe.get_traceback()}", "Expense Claim Approval")
+		frappe.throw(_("Failed to approve expense claim: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def reject_expense_claim(claim_id: str, reason: str) -> dict:
+	"""
+	Reject an expense claim (for admins/approvers).
+	
+	Args:
+		claim_id: Expense Claim ID
+		reason: Rejection reason (required)
+	
+	Returns:
+		Dict with rejection status
+	"""
+	try:
+		if not reason or not reason.strip():
+			frappe.throw(_("Rejection reason is required"))
+		
+		# Get expense claim
+		claim = frappe.get_doc("Expense Claim", claim_id)
+		
+		# Check permission
+		current_user = frappe.session.user
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User", "Expense Approver"})
+		is_approver = current_user == claim.expense_approver
+		
+		if not (is_admin or is_approver):
+			frappe.throw(_("You do not have permission to reject this expense claim"))
+		
+		# Check if already processed
+		if claim.approval_status == "Rejected":
+			frappe.throw(_("This expense claim has already been rejected"))
+		
+		if claim.approval_status == "Approved":
+			frappe.throw(_("Cannot reject an approved expense claim"))
+		
+		# Reject
+		claim.approval_status = "Rejected"
+		claim.status = "Rejected"
+		claim.add_comment("Comment", f"Rejected: {reason}")
+		claim.save(ignore_permissions=True)
+		frappe.db.commit()
+		
+		# Send notification to employee
+		try:
+			send_expense_claim_notification(claim_id, "rejected", reason)
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Expense Claim Notification")
+		
+		return {
+			"status": "success",
+			"message": _("Expense claim rejected"),
+			"claim_id": claim_id,
+			"employee": claim.employee,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Reject Expense Claim Error: {str(e)}\n{frappe.get_traceback()}", "Expense Claim Rejection")
+		frappe.throw(_("Failed to reject expense claim: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_employee_expense_claims(
+	employee: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+	approval_status: str | None = None,
+	limit: int = 100,
+) -> dict:
+	"""
+	Get expense claims for an employee with filters.
+	
+	Args:
+		employee: Employee ID (if None, uses current user's employee)
+		from_date: Filter from this date
+		to_date: Filter to this date
+		approval_status: Filter by status (Draft, Approved, Rejected)
+		limit: Maximum number of records
+	
+	Returns:
+		Dict with claims list and summary
+	"""
+	try:
+		# If no employee, get current user's employee
+		if not employee:
+			employee = get_employee_by_user()
+			if not employee:
+				frappe.throw(_("No employee record found for current user"))
+		
+		# Build filters
+		filters = {"employee": employee}
+		
+		if from_date:
+			filters["posting_date"] = (">=", getdate(from_date))
+		if to_date:
+			filters["posting_date"] = ("<=", getdate(to_date))
+		if approval_status:
+			filters["approval_status"] = approval_status
+		
+		# Get claims
+		fields = [
+			"name",
+			"employee",
+			"employee_name",
+			"posting_date",
+			"approval_status",
+			"status",
+			"expense_approver",
+			"total_claimed_amount",
+			"total_sanctioned_amount",
+			"total_amount_reimbursed",
+			"is_paid",
+			"project",
+			"cost_center",
+			"remark",
+			"creation",
+			"modified",
+		]
+		
+		claims = frappe.get_list(
+			"Expense Claim",
+			fields=fields,
+			filters=filters,
+			order_by="posting_date desc, creation desc",
+			limit=limit,
+		)
+		
+		# Get expense details for each claim
+		for claim in claims:
+			expenses = frappe.get_all(
+				"Expense Claim Detail",
+				filters={"parent": claim.name},
+				fields=["expense_type", "expense_date", "description", "amount", "sanctioned_amount"],
+			)
+			claim["expenses"] = expenses
+			claim["total_expenses"] = len(expenses)
+		
+		# Calculate summary
+		total_claimed = sum(c.get("total_claimed_amount", 0) for c in claims)
+		total_sanctioned = sum(c.get("total_sanctioned_amount", 0) for c in claims)
+		
+		status_summary = {}
+		for claim in claims:
+			status = claim.get("approval_status", "Unknown")
+			status_summary[status] = status_summary.get(status, 0) + 1
+		
+		return {
+			"status": "success",
+			"claims": claims,
+			"total_claims": len(claims),
+			"total_claimed_amount": total_claimed,
+			"total_sanctioned_amount": total_sanctioned,
+			"status_summary": status_summary,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Employee Expense Claims Error: {str(e)}\n{frappe.get_traceback()}", "Expense Claims")
+		return {
+			"status": "error",
+			"message": str(e),
+			"claims": [],
+		}
+
+
+@frappe.whitelist()
+def get_admin_expense_claims(
+	department: str | None = None,
+	employee: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+	approval_status: str | None = None,
+	limit: int = 500,
+) -> dict:
+	"""
+	Get all expense claims for admin with advanced filters.
+	
+	Args:
+		department: Filter by department
+		employee: Filter by specific employee
+		from_date: Filter from this date
+		to_date: Filter to this date
+		approval_status: Filter by status
+		limit: Maximum records
+	
+	Returns:
+		Dict with claims and statistics
+	"""
+	try:
+		# Check if user is admin
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User", "Expense Approver"})
+		
+		if not is_admin:
+			frappe.throw(_("You do not have permission to view all expense claims"))
+		
+		# Build filters
+		filters = {}
+		
+		if department:
+			filters["department"] = department
+		if employee:
+			filters["employee"] = employee
+		if from_date:
+			filters["posting_date"] = (">=", getdate(from_date))
+		if to_date:
+			filters["posting_date"] = ("<=", getdate(to_date))
+		if approval_status:
+			filters["approval_status"] = approval_status
+		
+		# Get claims
+		fields = [
+			"name",
+			"employee",
+			"employee_name",
+			"department",
+			"posting_date",
+			"approval_status",
+			"status",
+			"expense_approver",
+			"total_claimed_amount",
+			"total_sanctioned_amount",
+			"total_amount_reimbursed",
+			"is_paid",
+			"project",
+			"cost_center",
+			"remark",
+			"creation",
+			"modified",
+		]
+		
+		claims = frappe.get_list(
+			"Expense Claim",
+			fields=fields,
+			filters=filters,
+			order_by="posting_date desc, creation desc",
+			limit=limit,
+		)
+		
+		# Get expense details
+		for claim in claims:
+			expenses = frappe.get_all(
+				"Expense Claim Detail",
+				filters={"parent": claim.name},
+				fields=["expense_type", "expense_date", "description", "amount", "sanctioned_amount"],
+			)
+			claim["expenses"] = expenses
+			claim["total_expenses"] = len(expenses)
+		
+		# Calculate statistics
+		stats = {
+			"total_claims": len(claims),
+			"total_claimed": sum(c.get("total_claimed_amount", 0) for c in claims),
+			"total_sanctioned": sum(c.get("total_sanctioned_amount", 0) for c in claims),
+			"total_reimbursed": sum(c.get("total_amount_reimbursed", 0) for c in claims),
+			"by_status": {},
+			"by_department": {},
+		}
+		
+		for claim in claims:
+			# By status
+			status = claim.get("approval_status", "Unknown")
+			stats["by_status"][status] = stats["by_status"].get(status, 0) + 1
+			
+			# By department
+			dept = claim.get("department", "Unknown")
+			stats["by_department"][dept] = stats["by_department"].get(dept, 0) + 1
+		
+		return {
+			"status": "success",
+			"claims": claims,
+			"statistics": stats,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Admin Expense Claims Error: {str(e)}\n{frappe.get_traceback()}", "Admin Expense Claims")
+		return {
+			"status": "error",
+			"message": str(e),
+			"claims": [],
+		}
+
+
+def send_expense_claim_notification(claim_id: str, action: str, remarks: str | None = None):
+	"""Send FCM notification for expense claim status."""
+	try:
+		claim = frappe.get_doc("Expense Claim", claim_id)
+		
+		if action == "submitted":
+			# Send to approver
+			if claim.expense_approver:
+				tokens = frappe.get_all("Mobile Device",
+					filters={"user": claim.expense_approver},
+					pluck="fcm_token"
+				)
+				tokens = [t for t in tokens if t]
+				
+				if tokens:
+					title = "New Expense Claim"
+					body = f"{claim.employee_name} submitted expense claim for ₹{claim.total_claimed_amount:.2f}"
+					
+					send_fcm_notification(tokens, title, body, {
+						"type": "expense_claim",
+						"action": "submitted",
+						"claim_id": claim_id,
+					})
+		
+		else:
+			# Send to employee
+			user_id = frappe.get_value("Employee", claim.employee, "user_id")
+			if not user_id:
+				return
+			
+			tokens = frappe.get_all("Mobile Device",
+				filters={"user": user_id},
+				pluck="fcm_token"
+			)
+			tokens = [t for t in tokens if t]
+			
+			if not tokens:
+				return
+			
+			if action == "approved":
+				title = "Expense Claim Approved"
+				body = f"Your expense claim for ₹{claim.total_claimed_amount:.2f} has been approved"
+				if remarks:
+					body += f". {remarks}"
+			elif action == "rejected":
+				title = "Expense Claim Rejected"
+				body = f"Your expense claim for ₹{claim.total_claimed_amount:.2f} has been rejected"
+				if remarks:
+					body += f". Reason: {remarks}"
+			else:
+				return
+			
+			send_fcm_notification(tokens, title, body, {
+				"type": "expense_claim",
+				"action": action,
+				"claim_id": claim_id,
+			})
+		
+	except Exception as e:
+		frappe.log_error(f"Send Expense Claim Notification Error: {str(e)}", "Expense Claim Notification")
+
+
+# ============================================================================
+# TRAVEL REQUEST APIs
+# ============================================================================
+
+@frappe.whitelist()
+def submit_travel_request(
+	employee: str,
+	travel_type: str,
+	purpose_of_travel: str,
+	description: str,
+	itinerary: str,  # JSON string of itinerary items
+	costings: str | None = None,  # JSON string of costing items
+	travel_funding: str | None = None,
+	details_of_sponsor: str | None = None,
+) -> dict:
+	"""
+	Submit travel request for mobile app.
+	
+	Args:
+		employee: Employee ID
+		travel_type: Domestic or International
+		purpose_of_travel: Purpose of Travel ID
+		description: Description/details
+		itinerary: JSON array of itinerary items [{from_date, to_date, from_location, to_location}]
+		costings: JSON array of costing items [{expense_type, amount}]
+		travel_funding: Funding type
+		details_of_sponsor: Sponsor details
+	
+	Returns:
+		Dict with request details
+	"""
+	try:
+		import json
+		
+		# Validate current user
+		current_employee = get_employee_by_user()
+		if not current_employee:
+			frappe.throw(_("No employee record found for current user"))
+		
+		# Employees can only submit for themselves
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin and employee != current_employee:
+			frappe.throw(_("You can only submit travel requests for yourself"))
+		
+		# Parse itinerary
+		try:
+			itinerary_items = json.loads(itinerary) if isinstance(itinerary, str) else itinerary
+		except:
+			frappe.throw(_("Invalid itinerary format"))
+		
+		if not itinerary_items or len(itinerary_items) == 0:
+			frappe.throw(_("At least one itinerary item is required"))
+		
+		# Get employee details
+		emp_doc = frappe.get_doc("Employee", employee)
+		
+		# Create travel request
+		travel_request = frappe.get_doc({
+			"doctype": "Travel Request",
+			"employee": employee,
+			"travel_type": travel_type,
+			"purpose_of_travel": purpose_of_travel,
+			"description": description,
+			"travel_funding": travel_funding,
+			"details_of_sponsor": details_of_sponsor,
+			"company": emp_doc.company,
+			"itinerary": [],
+			"costings": [],
+		})
+		
+		# Add itinerary items
+		for item in itinerary_items:
+			travel_request.append("itinerary", {
+				"from_date": item.get("from_date"),
+				"to_date": item.get("to_date"),
+				"from_location": item.get("from_location"),
+				"to_location": item.get("to_location"),
+				"lodging_required": cint(item.get("lodging_required", 0)),
+				"travel_mode": item.get("travel_mode"),
+			})
+		
+		# Add costing items if provided
+		if costings:
+			try:
+				costing_items = json.loads(costings) if isinstance(costings, str) else costings
+				for item in costing_items:
+					travel_request.append("costings", {
+						"expense_type": item.get("expense_type"),
+						"amount": float(item.get("amount", 0)),
+					})
+			except:
+				pass  # Costings are optional
+		
+		# Insert
+		travel_request.insert(ignore_permissions=True)
+		frappe.db.commit()
+		
+		# Send notification to HR
+		try:
+			send_travel_request_notification(travel_request.name, "submitted")
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Travel Request Notification")
+		
+		return {
+			"status": "success",
+			"message": _("Travel request submitted successfully"),
+			"request_id": travel_request.name,
+			"employee": employee,
+			"employee_name": travel_request.employee_name,
+			"travel_type": travel_type,
+			"purpose": purpose_of_travel,
+			"total_itinerary_items": len(itinerary_items),
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Submit Travel Request Error: {str(e)}\n{frappe.get_traceback()}", "Travel Request")
+		frappe.throw(_("Failed to submit travel request: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def approve_travel_request(request_id: str, remarks: str | None = None) -> dict:
+	"""
+	Approve a travel request (for admins).
+	
+	Args:
+		request_id: Travel Request ID
+		remarks: Optional approval remarks
+	
+	Returns:
+		Dict with approval status
+	"""
+	try:
+		# Get travel request
+		request = frappe.get_doc("Travel Request", request_id)
+		
+		# Check permission
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin:
+			frappe.throw(_("You do not have permission to approve travel requests"))
+		
+		# Submit if not already submitted
+		if request.docstatus == 0:
+			request.submit()
+		
+		if remarks:
+			request.add_comment("Comment", f"Approved: {remarks}")
+		
+		frappe.db.commit()
+		
+		# Send notification to employee
+		try:
+			send_travel_request_notification(request_id, "approved", remarks)
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Travel Request Notification")
+		
+		return {
+			"status": "success",
+			"message": _("Travel request approved successfully"),
+			"request_id": request_id,
+			"employee": request.employee,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Approve Travel Request Error: {str(e)}\n{frappe.get_traceback()}", "Travel Request Approval")
+		frappe.throw(_("Failed to approve travel request: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def reject_travel_request(request_id: str, reason: str) -> dict:
+	"""
+	Reject a travel request (for admins).
+	
+	Args:
+		request_id: Travel Request ID
+		reason: Rejection reason (required)
+	
+	Returns:
+		Dict with rejection status
+	"""
+	try:
+		if not reason or not reason.strip():
+			frappe.throw(_("Rejection reason is required"))
+		
+		# Get travel request
+		request = frappe.get_doc("Travel Request", request_id)
+		
+		# Check permission
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin:
+			frappe.throw(_("You do not have permission to reject travel requests"))
+		
+		# Cancel if submitted
+		if request.docstatus == 1:
+			request.cancel()
+		else:
+			request.docstatus = 2
+			request.save(ignore_permissions=True)
+		
+		request.add_comment("Comment", f"Rejected: {reason}")
+		frappe.db.commit()
+		
+		# Send notification to employee
+		try:
+			send_travel_request_notification(request_id, "rejected", reason)
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send notification: {str(notif_error)}", "Travel Request Notification")
+		
+		return {
+			"status": "success",
+			"message": _("Travel request rejected"),
+			"request_id": request_id,
+			"employee": request.employee,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Reject Travel Request Error: {str(e)}\n{frappe.get_traceback()}", "Travel Request Rejection")
+		frappe.throw(_("Failed to reject travel request: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_employee_travel_requests(
+	employee: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+	docstatus: int | None = None,
+	limit: int = 100,
+) -> dict:
+	"""
+	Get travel requests for an employee.
+	
+	Args:
+		employee: Employee ID (if None, uses current user's employee)
+		from_date: Filter from this date
+		to_date: Filter to this date
+		docstatus: Filter by status (0=Draft, 1=Submitted/Approved, 2=Cancelled)
+		limit: Maximum number of records
+	
+	Returns:
+		Dict with requests list and summary
+	"""
+	try:
+		# If no employee, get current user's employee
+		if not employee:
+			employee = get_employee_by_user()
+			if not employee:
+				frappe.throw(_("No employee record found for current user"))
+		
+		# Build filters
+		filters = {"employee": employee}
+		
+		if docstatus is not None:
+			filters["docstatus"] = docstatus
+		
+		# Get requests
+		fields = [
+			"name",
+			"employee",
+			"employee_name",
+			"travel_type",
+			"purpose_of_travel",
+			"description",
+			"travel_funding",
+			"details_of_sponsor",
+			"docstatus",
+			"creation",
+			"modified",
+		]
+		
+		requests = frappe.get_list(
+			"Travel Request",
+			fields=fields,
+			filters=filters,
+			order_by="creation desc",
+			limit=limit,
+		)
+		
+		# Get itinerary and costings for each request
+		for req in requests:
+			itinerary = frappe.get_all(
+				"Travel Itinerary",
+				filters={"parent": req.name},
+				fields=["from_date", "to_date", "from_location", "to_location", "travel_mode", "lodging_required"],
+			)
+			req["itinerary"] = itinerary
+			
+			costings = frappe.get_all(
+				"Travel Costing",
+				filters={"parent": req.name},
+				fields=["expense_type", "amount"],
+			)
+			req["costings"] = costings
+			req["total_cost"] = sum(c.get("amount", 0) for c in costings)
+		
+		# Calculate summary
+		status_summary = {
+			"pending": sum(1 for r in requests if r.docstatus == 0),
+			"approved": sum(1 for r in requests if r.docstatus == 1),
+			"cancelled": sum(1 for r in requests if r.docstatus == 2),
+		}
+		
+		return {
+			"status": "success",
+			"requests": requests,
+			"total_requests": len(requests),
+			"status_summary": status_summary,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Employee Travel Requests Error: {str(e)}\n{frappe.get_traceback()}", "Travel Requests")
+		return {
+			"status": "error",
+			"message": str(e),
+			"requests": [],
+		}
+
+
+@frappe.whitelist()
+def get_admin_travel_requests(
+	employee: str | None = None,
+	travel_type: str | None = None,
+	docstatus: int | None = None,
+	limit: int = 500,
+) -> dict:
+	"""
+	Get all travel requests for admin with filters.
+	
+	Args:
+		employee: Filter by specific employee
+		travel_type: Filter by travel type (Domestic/International)
+		docstatus: Filter by status (0=Draft, 1=Approved, 2=Cancelled)
+		limit: Maximum records
+	
+	Returns:
+		Dict with requests and statistics
+	"""
+	try:
+		# Check if user is admin
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin:
+			frappe.throw(_("You do not have permission to view all travel requests"))
+		
+		# Build filters
+		filters = {}
+		
+		if employee:
+			filters["employee"] = employee
+		if travel_type:
+			filters["travel_type"] = travel_type
+		if docstatus is not None:
+			filters["docstatus"] = docstatus
+		
+		# Get requests
+		fields = [
+			"name",
+			"employee",
+			"employee_name",
+			"travel_type",
+			"purpose_of_travel",
+			"description",
+			"travel_funding",
+			"details_of_sponsor",
+			"docstatus",
+			"creation",
+			"modified",
+		]
+		
+		requests = frappe.get_list(
+			"Travel Request",
+			fields=fields,
+			filters=filters,
+			order_by="creation desc",
+			limit=limit,
+		)
+		
+		# Get itinerary and costings
+		for req in requests:
+			itinerary = frappe.get_all(
+				"Travel Itinerary",
+				filters={"parent": req.name},
+				fields=["from_date", "to_date", "from_location", "to_location", "travel_mode", "lodging_required"],
+			)
+			req["itinerary"] = itinerary
+			
+			costings = frappe.get_all(
+				"Travel Costing",
+				filters={"parent": req.name},
+				fields=["expense_type", "amount"],
+			)
+			req["costings"] = costings
+			req["total_cost"] = sum(c.get("amount", 0) for c in costings)
+		
+		# Calculate statistics
+		stats = {
+			"total_requests": len(requests),
+			"total_estimated_cost": sum(r.get("total_cost", 0) for r in requests),
+			"by_status": {
+				"pending": sum(1 for r in requests if r.docstatus == 0),
+				"approved": sum(1 for r in requests if r.docstatus == 1),
+				"cancelled": sum(1 for r in requests if r.docstatus == 2),
+			},
+			"by_travel_type": {},
+		}
+		
+		for req in requests:
+			ttype = req.get("travel_type", "Unknown")
+			stats["by_travel_type"][ttype] = stats["by_travel_type"].get(ttype, 0) + 1
+		
+		return {
+			"status": "success",
+			"requests": requests,
+			"statistics": stats,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Admin Travel Requests Error: {str(e)}\n{frappe.get_traceback()}", "Admin Travel Requests")
+		return {
+			"status": "error",
+			"message": str(e),
+			"requests": [],
+		}
+
+
+@frappe.whitelist()
+def get_purpose_of_travel_list() -> list[str]:
+	"""Get all purpose of travel options."""
+	try:
+		purposes = frappe.get_all(
+			"Purpose of Travel",
+			fields=["name"],
+			order_by="name",
+			pluck="name"
+		)
+		return purposes
+	except Exception as e:
+		frappe.log_error(f"Get Purpose of Travel Error: {str(e)}", "Purpose of Travel")
+		return []
+
+
+def send_travel_request_notification(request_id: str, action: str, remarks: str | None = None):
+	"""Send FCM notification for travel request status."""
+	try:
+		request = frappe.get_doc("Travel Request", request_id)
+		
+		if action == "submitted":
+			# Send to HR Managers/Users
+			hr_users = frappe.get_all("Has Role",
+				filters={"role": ["in", ["HR Manager", "HR User"]]},
+				pluck="parent"
+			)
+			
+			for hr_user in hr_users:
+				tokens = frappe.get_all("Mobile Device",
+					filters={"user": hr_user},
+					pluck="fcm_token"
+				)
+				tokens = [t for t in tokens if t]
+				
+				if tokens:
+					title = "New Travel Request"
+					body = f"{request.employee_name} submitted {request.travel_type} travel request"
+					
+					send_fcm_notification(tokens, title, body, {
+						"type": "travel_request",
+						"action": "submitted",
+						"request_id": request_id,
+					})
+		
+		else:
+			# Send to employee
+			user_id = frappe.get_value("Employee", request.employee, "user_id")
+			if not user_id:
+				return
+			
+			tokens = frappe.get_all("Mobile Device",
+				filters={"user": user_id},
+				pluck="fcm_token"
+			)
+			tokens = [t for t in tokens if t]
+			
+			if not tokens:
+				return
+			
+			if action == "approved":
+				title = "Travel Request Approved"
+				body = f"Your {request.travel_type} travel request has been approved"
+				if remarks:
+					body += f". {remarks}"
+			elif action == "rejected":
+				title = "Travel Request Rejected"
+				body = f"Your {request.travel_type} travel request has been rejected"
+				if remarks:
+					body += f". Reason: {remarks}"
+			else:
+				return
+			
+			send_fcm_notification(tokens, title, body, {
+				"type": "travel_request",
+				"action": action,
+				"request_id": request_id,
+			})
+		
+	except Exception as e:
+		frappe.log_error(f"Send Travel Request Notification Error: {str(e)}", "Travel Request Notification")
+
+
+# OLD Basic Expense Claims (Kept for backward compatibility)
 @frappe.whitelist()
 def get_expense_claims(
 	employee: str,
