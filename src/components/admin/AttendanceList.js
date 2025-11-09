@@ -2,7 +2,13 @@ import React from 'react';
 import { View, Text, FlatList, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 
-const AttendanceList = ({ attendance }) => {
+const AttendanceList = ({ 
+    attendance, 
+    ListHeaderComponent, 
+    ListFooterComponent, 
+    ListEmptyComponent,
+    refreshControl 
+}) => {
 
     const formatTime = (timeValue) => {
         if (!timeValue) return null;
@@ -284,20 +290,25 @@ const AttendanceList = ({ attendance }) => {
             data={attendance}
             renderItem={renderItem}
             keyExtractor={(item, index) => item.name || item.employee || index.toString()}
+            ListHeaderComponent={ListHeaderComponent}
+            ListFooterComponent={ListFooterComponent}
             ListEmptyComponent={
-                <View style={styles.emptyContainer}>
-                    <Icon name="calendar-times" size={48} color="#9CA3AF" />
-                    <Text style={styles.emptyText}>No attendance records found</Text>
-                    <Text style={styles.emptySubtext}>
-                        Try adjusting your search criteria or date range
-                    </Text>
-                </View>
+                ListEmptyComponent || (
+                    <View style={styles.emptyContainer}>
+                        <Icon name="calendar-times" size={48} color="#9CA3AF" />
+                        <Text style={styles.emptyText}>No attendance records found</Text>
+                        <Text style={styles.emptySubtext}>
+                            Try adjusting your search criteria or date range
+                        </Text>
+                    </View>
+                )
             }
             contentContainerStyle={[
                 styles.listContainer,
                 attendance.length === 0 && styles.emptyListContainer
             ]}
             showsVerticalScrollIndicator={false}
+            refreshControl={refreshControl}
         />
     );
 };
@@ -528,6 +539,7 @@ const styles = StyleSheet.create({
     },
     listContainer: {
         paddingVertical: 8,
+        paddingHorizontal: 16,
     },
     emptyListContainer: {
         flexGrow: 1,
