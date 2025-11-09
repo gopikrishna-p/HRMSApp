@@ -813,44 +813,40 @@ class ApiService {
     }
 
     /* -------------------------
-     * TRAVEL REQUESTS
+     * TRAVEL REQUEST APIs - Clean Implementation
+     * Based on hrms.api Travel Request documentation (line ~2230+)
      * -----------------------*/
-
+    
     /**
-     * Submit travel request with itinerary
-     * @param {string} employee - Employee ID
-     * @param {string} travelType - Domestic or International
-     * @param {string} purposeOfTravel - Purpose ID
-     * @param {string} description - Description/details
-     * @param {Array} itinerary - Array of itinerary items
-     * @param {Object} options - {costings, travel_funding, details_of_sponsor}
-     * @returns {Promise} Response with request details
+     * Submit new travel request (matches all 31 database fields)
+     * Uses: submit_travel_request from backend
+     * @param {Object} travelData - Travel request data
+     * @returns {Promise} Response with request details and status
      */
-    submitTravelRequest(employee, travelType, purposeOfTravel, description, itinerary, options = {}) {
-        const params = {
-            employee,
-            travel_type: travelType,
-            purpose_of_travel: purposeOfTravel,
-            description,
-            itinerary: JSON.stringify(itinerary)
-        };
-
-        // Add optional parameters as separate fields (backend expects them this way)
-        if (options.costings && options.costings.length > 0) {
-            params.costings = JSON.stringify(options.costings);
-        }
-        if (options.travel_funding) {
-            params.travel_funding = options.travel_funding;
-        }
-        if (options.details_of_sponsor) {
-            params.details_of_sponsor = options.details_of_sponsor;
-        }
-
-        return this.post(m('submit_travel_request'), params);
+    submitTravelRequest(travelData) {
+        return this.post(m('submit_travel_request'), {
+            employee: travelData.employee,
+            travel_type: travelData.travel_type, // "Domestic" or "International"
+            purpose_of_travel: travelData.purpose_of_travel, // Link to Purpose of Travel
+            description: travelData.description || null,
+            travel_funding: travelData.travel_funding || null,
+            details_of_sponsor: travelData.details_of_sponsor || null,
+            travel_proof: travelData.travel_proof || null, // Attachment URL
+            cell_number: travelData.cell_number || null,
+            prefered_email: travelData.prefered_email || null,
+            personal_id_type: travelData.personal_id_type || null,
+            personal_id_number: travelData.personal_id_number || null,
+            passport_number: travelData.passport_number || null,
+            cost_center: travelData.cost_center || null,
+            name_of_organizer: travelData.name_of_organizer || null,
+            address_of_organizer: travelData.address_of_organizer || null,
+            other_details: travelData.other_details || null
+        });
     }
 
     /**
-     * Approve travel request (Admin)
+     * Approve travel request (Admin only)
+     * Uses: approve_travel_request from backend
      * @param {string} requestId - Travel Request ID
      * @param {string} remarks - Optional approval remarks
      * @returns {Promise} Response with approval status
@@ -858,12 +854,13 @@ class ApiService {
     approveTravelRequest(requestId, remarks = '') {
         return this.post(m('approve_travel_request'), {
             request_id: requestId,
-            remarks
+            remarks: remarks
         });
     }
 
     /**
-     * Reject travel request (Admin)
+     * Reject travel request (Admin only)
+     * Uses: reject_travel_request from backend
      * @param {string} requestId - Travel Request ID
      * @param {string} reason - Rejection reason (required)
      * @returns {Promise} Response with rejection status
@@ -871,42 +868,46 @@ class ApiService {
     rejectTravelRequest(requestId, reason) {
         return this.post(m('reject_travel_request'), {
             request_id: requestId,
-            reason
+            reason: reason
         });
     }
 
     /**
-     * Get employee's travel requests with filters
-     * @param {Object} filters - {employee, from_date, to_date, docstatus, limit}
+     * Get travel requests with filters (employee or admin view)
+     * Uses: get_travel_requests from backend
+     * For employees: returns their own requests
+     * For admins: can see all requests or filter by employee
+     * @param {Object} filters - {employee, travel_type, purpose_of_travel, status, from_date, to_date, limit}
      * @returns {Promise} Response with requests list and summary
      */
-    getEmployeeTravelRequests(filters = {}) {
-        return this.get(m('get_employee_travel_requests'), {
+    getTravelRequests(filters = {}) {
+        return this.get(m('get_travel_requests'), {
             employee: filters.employee || null,
+            travel_type: filters.travel_type || null, // "Domestic" or "International"
+            purpose_of_travel: filters.purpose_of_travel || null,
+            status: filters.status || null, // "pending", "approved", "rejected"
             from_date: filters.from_date || null,
             to_date: filters.to_date || null,
-            docstatus: filters.docstatus !== undefined ? filters.docstatus : null,
             limit: filters.limit || 100
         });
     }
 
     /**
-     * Get all travel requests for admin with filters
-     * @param {Object} filters - {employee, travel_type, docstatus, limit}
-     * @returns {Promise} Response with requests and statistics
+     * Get detailed information about a specific travel request
+     * Uses: get_travel_request_details from backend
+     * @param {string} requestId - Travel Request ID
+     * @returns {Promise} Response with complete request details and comments
      */
-    getAdminTravelRequests(filters = {}) {
-        return this.get(m('get_admin_travel_requests'), {
-            employee: filters.employee || null,
-            travel_type: filters.travel_type || null,
-            docstatus: filters.docstatus !== undefined ? filters.docstatus : null,
-            limit: filters.limit || 500
+    getTravelRequestDetails(requestId) {
+        return this.get(m('get_travel_request_details'), {
+            request_id: requestId
         });
     }
 
     /**
-     * Get all purpose of travel options for dropdown
-     * @returns {Promise} Array of travel purposes
+     * Get all available purposes of travel for dropdown
+     * Uses: get_purpose_of_travel_list from backend
+     * @returns {Promise} Response with array of purpose names
      */
     getPurposeOfTravelList() {
         return this.get(m('get_purpose_of_travel_list'));

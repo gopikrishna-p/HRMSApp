@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     Text,
@@ -8,489 +8,511 @@ import {
     Alert,
     RefreshControl,
     Modal,
-    TextInput
+    TextInput,
+    ActivityIndicator,
 } from 'react-native';
-import { colors } from '../../theme/colors';
-import Button from '../../components/common/Button';
-import Loading from '../../components/common/Loading';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import apiService from '../../services/api.service';
 
 const TravelRequestApproval = ({ navigation }) => {
-    const [activeTab, setActiveTab] = useState('pending'); // pending, history, statistics
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
-    
-    // Data states
     const [requests, setRequests] = useState([]);
-    const [statistics, setStatistics] = useState({});
-    const [filterDocstatus, setFilterDocstatus] = useState(0); // For pending tab
-
-    // Action modal state
-    const [actionModal, setActionModal] = useState({
-        visible: false,
-        type: '', // 'approve' or 'reject'
-        request: null,
-        remarks: ''
-    });
+    const [filterStatus, setFilterStatus] = useState('pending');
+    const [selectedRequest, setSelectedRequest] = useState(null);
+    const [showDetailsModal, setShowDetailsModal] = useState(false);
+    const [showActionModal, setShowActionModal] = useState(false);
+    const [actionType, setActionType] = useState(null); // 'approve' or 'reject'
+    const [actionReason, setActionReason] = useState('');
 
     useEffect(() => {
         loadRequests();
-    }, [activeTab, filterDocstatus]);
+    }, [filterStatus]);
 
     const loadRequests = async () => {
         setLoading(true);
         try {
-            let filters = { limit: 500 };
-            
-            if (activeTab === 'pending') {
-                filters.docstatus = 0; // Draft/Pending requests
-            } else if (activeTab === 'history') {
-                if (filterDocstatus !== '') {
-                    filters.docstatus = filterDocstatus;
-                }
+            const filters = {};
+            if (filterStatus !== 'all') {
+                filters.status = filterStatus;
             }
 
-            const response = await apiService.getAdminTravelRequests(filters);
+            console.log('[Admin] Fetching travel requests with filters:', filters);
+            const response = await apiService.getTravelRequests(filters);
+            console.log('[Admin] Travel Requests Response:', JSON.stringify(response, null, 2));
             
-            if (response.success && response.data?.message) {
-                const data = response.data.message;
-                setRequests(data.travel_requests || []);
-                setStatistics(data.statistics || {});
+            // Try multiple possible response structures
+            let requestsData = null;
+            
+            if (response.success && response.data?.message?.data?.requests) {
+                requestsData = response.data.message.data.requests;
+            } else if (response.success && response.data?.message?.requests) {
+                requestsData = response.data.message.requests;
+            } else if (response.success && response.data?.requests) {
+                requestsData = response.data.requests;
+            } else if (response.data?.message?.data) {
+                requestsData = response.data.message.data;
+            } else if (response.data?.message) {
+                requestsData = response.data.message;
+            } else if (response.data) {
+                requestsData = response.data;
+            }
+            
+            console.log('[Admin] Parsed requests data:', requestsData);
+            console.log('[Admin] Number of requests:', requestsData?.length || 0);
+            
+            if (requestsData && Array.isArray(requestsData)) {
+                setRequests(requestsData);
+            } else if (requestsData) {
+                // If it's an object, try to extract an array
+                const possibleArrays = Object.values(requestsData).find(val => Array.isArray(val));
+                if (possibleArrays) {
+                    setRequests(possibleArrays);
+                } else {
+                    console.warn('[Admin] Response data is not an array:', requestsData);
+                    setRequests([]);
+                }
+            } else {
+                console.warn('[Admin] No requests found in response');
+                setRequests([]);
             }
         } catch (error) {
-            console.error('Error loading travel requests:', error);
+            console.error('[Admin] Load requests error:', error);
+            console.error('[Admin] Error details:', error.response?.data || error.message);
             Alert.alert('Error', 'Failed to load travel requests');
         } finally {
             setLoading(false);
         }
     };
 
-    const onRefresh = useCallback(async () => {
+    const onRefresh = async () => {
         setRefreshing(true);
         await loadRequests();
         setRefreshing(false);
-    }, [activeTab, filterDocstatus]);
-
-    const handleApprove = (request) => {
-        setActionModal({
-            visible: true,
-            type: 'approve',
-            request,
-            remarks: ''
-        });
     };
 
-    const handleReject = (request) => {
-        setActionModal({
-            visible: true,
-            type: 'reject',
-            request,
-            remarks: ''
-        });
+    const handleViewDetails = async (request) => {
+        try {
+            const response = await apiService.getTravelRequestDetails(request.name);
+            if (response.success && response.data?.message?.data) {
+                setSelectedRequest(response.data.message.data);
+                setShowDetailsModal(true);
+            } else {
+                Alert.alert('Error', 'Failed to load request details');
+            }
+        } catch (error) {
+            console.error('View details error:', error);
+            Alert.alert('Error', 'Failed to load request details');
+        }
+    };
+
+    const handleAction = (type) => {
+        if (!selectedRequest) return;
+
+        setActionType(type);
+        setActionReason('');
+        setShowDetailsModal(false);
+        setShowActionModal(true);
     };
 
     const confirmAction = async () => {
-        const { type, request, remarks } = actionModal;
-        
-        if (type === 'reject' && !remarks.trim()) {
-            Alert.alert('Error', 'Rejection reason is required');
+        if (actionType === 'reject' && !actionReason.trim()) {
+            Alert.alert('Validation Error', 'Please provide a reason for rejection');
             return;
         }
 
         setLoading(true);
         try {
             let response;
-            
-            if (type === 'approve') {
-                response = await apiService.approveTravelRequest(request.name, remarks);
+            if (actionType === 'approve') {
+                response = await apiService.approveTravelRequest(
+                    selectedRequest.request_id,
+                    actionReason
+                );
             } else {
-                response = await apiService.rejectTravelRequest(request.name, remarks);
-            }
-
-            if (response.success) {
-                Alert.alert(
-                    'Success',
-                    `Travel request ${type}d successfully`,
-                    [{ text: 'OK', onPress: () => {
-                        setActionModal({ visible: false, type: '', request: null, remarks: '' });
-                        loadRequests();
-                    }}]
+                response = await apiService.rejectTravelRequest(
+                    selectedRequest.request_id,
+                    actionReason
                 );
             }
+
+            if (response.success && response.data?.message?.status === 'success') {
+                Alert.alert(
+                    'Success',
+                    `Travel request ${actionType === 'approve' ? 'approved' : 'rejected'} successfully`,
+                    [
+                        {
+                            text: 'OK',
+                            onPress: () => {
+                                setShowActionModal(false);
+                                setSelectedRequest(null);
+                                setActionReason('');
+                                loadRequests();
+                            },
+                        },
+                    ]
+                );
+            } else {
+                Alert.alert('Error', response.data?.message?.message || `Failed to ${actionType} request`);
+            }
         } catch (error) {
-            console.error(`${type} request error:`, error);
-            Alert.alert('Error', error.message || `Failed to ${type} request`);
+            console.error('Action error:', error);
+            Alert.alert('Error', `Failed to ${actionType} travel request`);
         } finally {
             setLoading(false);
         }
     };
 
-    const getDocstatusLabel = (docstatus) => {
-        switch(docstatus) {
-            case 0: return 'Draft';
-            case 1: return 'Submitted';
-            case 2: return 'Cancelled';
-            default: return 'Unknown';
+    const getStatusColor = (status) => {
+        switch (status) {
+            case 'Pending':
+                return '#FFA500';
+            case 'Approved':
+                return '#4CAF50';
+            case 'Rejected':
+                return '#F44336';
+            default:
+                return '#757575';
         }
     };
 
-    const getDocstatusColor = (docstatus) => {
-        switch(docstatus) {
-            case 0: return colors.warning;
-            case 1: return colors.success;
-            case 2: return colors.error;
-            default: return colors.textSecondary;
-        }
-    };
+    const renderRequestCard = (request) => (
+        <TouchableOpacity
+            key={request.name}
+            style={styles.requestCard}
+            onPress={() => handleViewDetails(request)}
+        >
+            <View style={styles.cardHeader}>
+                <View style={styles.cardHeaderLeft}>
+                    <Icon name="account" size={20} color="#4A90E2" />
+                    <Text style={styles.employeeName}>{request.employee_name}</Text>
+                </View>
+                <View style={[styles.statusBadge, { backgroundColor: getStatusColor(request.status_label) }]}>
+                    <Text style={styles.statusText}>{request.status_label}</Text>
+                </View>
+            </View>
 
-    const renderRequestCard = (request) => {
-        const isPending = request.docstatus === 0;
-
-        return (
-            <View key={request.name} style={styles.requestCard}>
-                <View style={styles.requestHeader}>
-                    <View style={{ flex: 1 }}>
-                        <Text style={styles.requestId}>{request.name}</Text>
-                        <Text style={styles.employeeName}>{request.employee_name}</Text>
-                        <Text style={styles.department}>{request.department || 'N/A'}</Text>
-                    </View>
-                    <View style={[
-                        styles.statusBadge,
-                        { backgroundColor: getDocstatusColor(request.docstatus) }
-                    ]}>
-                        <Text style={styles.statusText}>
-                            {getDocstatusLabel(request.docstatus)}
-                        </Text>
-                    </View>
+            <View style={styles.cardBody}>
+                <View style={styles.infoRow}>
+                    <Icon name="airplane" size={16} color="#666" />
+                    <Text style={styles.infoText}>{request.travel_type}</Text>
                 </View>
 
-                <View style={styles.requestDetails}>
-                    <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>Travel Type:</Text>
-                        <Text style={styles.detailValue}>{request.travel_type}</Text>
+                <View style={styles.infoRow}>
+                    <Icon name="target" size={16} color="#666" />
+                    <Text style={styles.infoText}>{request.purpose_of_travel}</Text>
+                </View>
+
+                {request.description && (
+                    <Text style={styles.description} numberOfLines={2}>
+                        {request.description}
+                    </Text>
+                )}
+            </View>
+
+            <View style={styles.cardFooter}>
+                <Text style={styles.dateText}>
+                    <Icon name="calendar" size={14} color="#999" /> {request.creation}
+                </Text>
+                <Icon name="chevron-right" size={20} color="#999" />
+            </View>
+        </TouchableOpacity>
+    );
+
+    const renderDetailsModal = () => {
+        if (!selectedRequest) return null;
+
+        return (
+            <Modal
+                visible={showDetailsModal}
+                animationType="slide"
+                onRequestClose={() => setShowDetailsModal(false)}
+            >
+                <View style={styles.modalContainer}>
+                    {/* Header */}
+                    <View style={styles.modalHeader}>
+                        <TouchableOpacity onPress={() => setShowDetailsModal(false)}>
+                            <Icon name="close" size={24} color="#333" />
+                        </TouchableOpacity>
+                        <Text style={styles.modalTitle}>Request Details</Text>
+                        <View style={{ width: 24 }} />
                     </View>
-                    <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>Purpose:</Text>
-                        <Text style={[styles.detailValue, { flex: 1 }]}>{request.purpose_of_travel}</Text>
-                    </View>
-                    <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>Description:</Text>
-                        <Text style={[styles.detailValue, { flex: 1 }]} numberOfLines={2}>
-                            {request.description}
-                        </Text>
-                    </View>
-                    {request.travel_funding && (
-                        <View style={styles.detailRow}>
-                            <Text style={styles.detailLabel}>Funding:</Text>
-                            <Text style={styles.detailValue}>{request.travel_funding}</Text>
+
+                    {/* Content */}
+                    <ScrollView style={styles.modalContent}>
+                        {/* Employee Info */}
+                        <View style={styles.detailSection}>
+                            <Text style={styles.sectionTitle}>Employee Information</Text>
+                            <View style={styles.detailRow}>
+                                <Text style={styles.detailLabel}>Name:</Text>
+                                <Text style={styles.detailValue}>{selectedRequest.employee_name}</Text>
+                            </View>
+                            <View style={styles.detailRow}>
+                                <Text style={styles.detailLabel}>Employee ID:</Text>
+                                <Text style={styles.detailValue}>{selectedRequest.employee}</Text>
+                            </View>
+                            <View style={styles.detailRow}>
+                                <Text style={styles.detailLabel}>Company:</Text>
+                                <Text style={styles.detailValue}>{selectedRequest.company}</Text>
+                            </View>
+                        </View>
+
+                        {/* Travel Details */}
+                        <View style={styles.detailSection}>
+                            <Text style={styles.sectionTitle}>Travel Details</Text>
+                            <View style={styles.detailRow}>
+                                <Text style={styles.detailLabel}>Type:</Text>
+                                <Text style={styles.detailValue}>{selectedRequest.travel_type}</Text>
+                            </View>
+                            <View style={styles.detailRow}>
+                                <Text style={styles.detailLabel}>Purpose:</Text>
+                                <Text style={styles.detailValue}>{selectedRequest.purpose_of_travel}</Text>
+                            </View>
+                            {selectedRequest.description && (
+                                <View style={styles.detailRow}>
+                                    <Text style={styles.detailLabel}>Description:</Text>
+                                    <Text style={styles.detailValue}>{selectedRequest.description}</Text>
+                                </View>
+                            )}
+                        </View>
+
+                        {/* Contact Info */}
+                        {(selectedRequest.cell_number || selectedRequest.prefered_email) && (
+                            <View style={styles.detailSection}>
+                                <Text style={styles.sectionTitle}>Contact Information</Text>
+                                {selectedRequest.cell_number && (
+                                    <View style={styles.detailRow}>
+                                        <Text style={styles.detailLabel}>Phone:</Text>
+                                        <Text style={styles.detailValue}>{selectedRequest.cell_number}</Text>
+                                    </View>
+                                )}
+                                {selectedRequest.prefered_email && (
+                                    <View style={styles.detailRow}>
+                                        <Text style={styles.detailLabel}>Email:</Text>
+                                        <Text style={styles.detailValue}>{selectedRequest.prefered_email}</Text>
+                                    </View>
+                                )}
+                            </View>
+                        )}
+
+                        {/* Funding Info */}
+                        {(selectedRequest.travel_funding || selectedRequest.details_of_sponsor) && (
+                            <View style={styles.detailSection}>
+                                <Text style={styles.sectionTitle}>Funding Information</Text>
+                                {selectedRequest.travel_funding && (
+                                    <View style={styles.detailRow}>
+                                        <Text style={styles.detailLabel}>Funding:</Text>
+                                        <Text style={styles.detailValue}>{selectedRequest.travel_funding}</Text>
+                                    </View>
+                                )}
+                                {selectedRequest.details_of_sponsor && (
+                                    <View style={styles.detailRow}>
+                                        <Text style={styles.detailLabel}>Sponsor:</Text>
+                                        <Text style={styles.detailValue}>{selectedRequest.details_of_sponsor}</Text>
+                                    </View>
+                                )}
+                            </View>
+                        )}
+
+                        {/* Event Details */}
+                        {(selectedRequest.name_of_organizer || selectedRequest.address_of_organizer) && (
+                            <View style={styles.detailSection}>
+                                <Text style={styles.sectionTitle}>Event Details</Text>
+                                {selectedRequest.name_of_organizer && (
+                                    <View style={styles.detailRow}>
+                                        <Text style={styles.detailLabel}>Organizer:</Text>
+                                        <Text style={styles.detailValue}>{selectedRequest.name_of_organizer}</Text>
+                                    </View>
+                                )}
+                                {selectedRequest.address_of_organizer && (
+                                    <View style={styles.detailRow}>
+                                        <Text style={styles.detailLabel}>Address:</Text>
+                                        <Text style={styles.detailValue}>{selectedRequest.address_of_organizer}</Text>
+                                    </View>
+                                )}
+                            </View>
+                        )}
+
+                        {/* Status */}
+                        <View style={styles.detailSection}>
+                            <Text style={styles.sectionTitle}>Status</Text>
+                            <View style={styles.detailRow}>
+                                <Text style={styles.detailLabel}>Current Status:</Text>
+                                <View style={[styles.statusBadge, { backgroundColor: getStatusColor(selectedRequest.status_label) }]}>
+                                    <Text style={styles.statusText}>{selectedRequest.status_label}</Text>
+                                </View>
+                            </View>
+                            <View style={styles.detailRow}>
+                                <Text style={styles.detailLabel}>Submitted On:</Text>
+                                <Text style={styles.detailValue}>{selectedRequest.creation}</Text>
+                            </View>
+                        </View>
+
+                        {/* Comments */}
+                        {selectedRequest.comments && selectedRequest.comments.length > 0 && (
+                            <View style={styles.detailSection}>
+                                <Text style={styles.sectionTitle}>Comments</Text>
+                                {selectedRequest.comments.map((comment, index) => (
+                                    <View key={index} style={styles.commentCard}>
+                                        <Text style={styles.commentText}>{comment.content}</Text>
+                                        <Text style={styles.commentMeta}>
+                                            {comment.owner} • {comment.creation}
+                                        </Text>
+                                    </View>
+                                ))}
+                            </View>
+                        )}
+
+                        <View style={{ height: 100 }} />
+                    </ScrollView>
+
+                    {/* Action Buttons */}
+                    {selectedRequest.status_label === 'Pending' && (
+                        <View style={styles.actionButtons}>
+                            <TouchableOpacity
+                                style={[styles.actionButton, styles.rejectButton]}
+                                onPress={() => handleAction('reject')}
+                            >
+                                <Icon name="close-circle" size={20} color="#FFF" />
+                                <Text style={styles.actionButtonText}>Reject</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[styles.actionButton, styles.approveButton]}
+                                onPress={() => handleAction('approve')}
+                            >
+                                <Icon name="check-circle" size={20} color="#FFF" />
+                                <Text style={styles.actionButtonText}>Approve</Text>
+                            </TouchableOpacity>
                         </View>
                     )}
                 </View>
-
-                {/* Itinerary Details */}
-                {request.itinerary && request.itinerary.length > 0 && (
-                    <View style={styles.itinerarySection}>
-                        <Text style={styles.itineraryHeader}>
-                            Itinerary ({request.itinerary.length} items):
-                        </Text>
-                        {request.itinerary.map((item, idx) => (
-                            <View key={idx} style={styles.itineraryItem}>
-                                <View style={styles.itineraryItemHeader}>
-                                    <Text style={styles.itineraryRoute}>
-                                        {item.from_location} → {item.to_location}
-                                    </Text>
-                                    <Text style={styles.itineraryMode}>{item.travel_mode}</Text>
-                                </View>
-                                <Text style={styles.itineraryDates}>
-                                    {new Date(item.from_date).toLocaleDateString()} - {new Date(item.to_date).toLocaleDateString()}
-                                </Text>
-                                {item.lodging_required && (
-                                    <Text style={styles.itineraryLodging}>🏨 Lodging Required</Text>
-                                )}
-                            </View>
-                        ))}
-                    </View>
-                )}
-
-                {/* Cost Estimation */}
-                {request.costings && request.costings.length > 0 && (
-                    <View style={styles.costingSection}>
-                        <Text style={styles.costingHeader}>Cost Estimation:</Text>
-                        {request.costings.map((cost, idx) => (
-                            <View key={idx} style={styles.costingItem}>
-                                <Text style={styles.costingType}>{cost.expense_type}</Text>
-                                <Text style={styles.costingAmount}>₹{cost.amount?.toFixed(2)}</Text>
-                            </View>
-                        ))}
-                        <View style={styles.costingTotal}>
-                            <Text style={styles.costingTotalLabel}>Total Estimated Cost:</Text>
-                            <Text style={styles.costingTotalValue}>
-                                ₹{request.total_estimated_cost?.toFixed(2)}
-                            </Text>
-                        </View>
-                    </View>
-                )}
-
-                {/* Action Buttons */}
-                {isPending && (
-                    <View style={styles.actionButtons}>
-                        <TouchableOpacity
-                            style={[styles.actionButton, styles.approveButton]}
-                            onPress={() => handleApprove(request)}
-                        >
-                            <Text style={styles.actionButtonText}>Approve</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[styles.actionButton, styles.rejectButton]}
-                            onPress={() => handleReject(request)}
-                        >
-                            <Text style={styles.actionButtonText}>Reject</Text>
-                        </TouchableOpacity>
-                    </View>
-                )}
-            </View>
+            </Modal>
         );
     };
 
-    const renderPendingTab = () => (
-        <ScrollView
-            style={styles.tabContent}
-            refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-            }
+    const renderActionModal = () => (
+        <Modal
+            visible={showActionModal}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowActionModal(false)}
         >
-            {loading ? (
-                <Loading />
-            ) : requests.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                    <Text style={styles.emptyText}>No pending travel requests</Text>
-                    <Text style={styles.emptySubtext}>All requests have been processed</Text>
-                </View>
-            ) : (
-                <>
-                    <View style={styles.pendingHeader}>
-                        <Text style={styles.pendingCount}>
-                            {requests.length} Pending Approval{requests.length !== 1 ? 's' : ''}
-                        </Text>
+            <View style={styles.actionModalOverlay}>
+                <View style={styles.actionModalContent}>
+                    <Text style={styles.actionModalTitle}>
+                        {actionType === 'approve' ? 'Approve Request' : 'Reject Request'}
+                    </Text>
+
+                    <Text style={styles.actionModalSubtitle}>
+                        {actionType === 'approve'
+                            ? 'Optional: Add remarks or comments'
+                            : 'Please provide a reason for rejection'}
+                    </Text>
+
+                    <TextInput
+                        style={styles.actionInput}
+                        value={actionReason}
+                        onChangeText={setActionReason}
+                        placeholder={actionType === 'approve' ? 'Remarks (optional)' : 'Rejection reason *'}
+                        multiline
+                        numberOfLines={4}
+                        textAlignVertical="top"
+                    />
+
+                    <View style={styles.actionModalButtons}>
+                        <TouchableOpacity
+                            style={[styles.actionModalButton, styles.actionModalCancelButton]}
+                            onPress={() => setShowActionModal(false)}
+                        >
+                            <Text style={styles.actionModalCancelText}>Cancel</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[styles.actionModalButton, actionType === 'approve' ? styles.actionModalApproveButton : styles.actionModalRejectButton]}
+                            onPress={confirmAction}
+                            disabled={loading}
+                        >
+                            {loading ? (
+                                <ActivityIndicator size="small" color="#FFF" />
+                            ) : (
+                                <Text style={styles.actionModalConfirmText}>
+                                    {actionType === 'approve' ? 'Approve' : 'Reject'}
+                                </Text>
+                            )}
+                        </TouchableOpacity>
                     </View>
-                    {requests.map(renderRequestCard)}
-                    <View style={styles.bottomPadding} />
-                </>
-            )}
-        </ScrollView>
+                </View>
+            </View>
+        </Modal>
     );
 
-    const renderHistoryTab = () => (
-        <View style={styles.tabContent}>
-            {/* Filter Pills */}
+    if (loading && requests.length === 0) {
+        return (
+            <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#4A90E2" />
+                <Text style={styles.loadingText}>Loading requests...</Text>
+            </View>
+        );
+    }
+
+    return (
+        <View style={styles.container}>
+            {/* Header */}
+            <View style={styles.header}>
+                <Text style={styles.headerTitle}>Travel Request Approvals</Text>
+            </View>
+
+            {/* Filter Tabs */}
             <View style={styles.filterContainer}>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                    <TouchableOpacity
-                        onPress={() => setFilterDocstatus('')}
-                        style={[styles.filterPill, filterDocstatus === '' && styles.filterPillActive]}
-                    >
-                        <Text style={[styles.filterText, filterDocstatus === '' && styles.filterTextActive]}>
-                            All
-                        </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={() => setFilterDocstatus(1)}
-                        style={[styles.filterPill, filterDocstatus === 1 && styles.filterPillActive]}
-                    >
-                        <Text style={[styles.filterText, filterDocstatus === 1 && styles.filterTextActive]}>
-                            Submitted
-                        </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={() => setFilterDocstatus(2)}
-                        style={[styles.filterPill, filterDocstatus === 2 && styles.filterPillActive]}
-                    >
-                        <Text style={[styles.filterText, filterDocstatus === 2 && styles.filterTextActive]}>
-                            Cancelled
-                        </Text>
-                    </TouchableOpacity>
+                    {['pending', 'approved', 'rejected', 'all'].map((status) => (
+                        <TouchableOpacity
+                            key={status}
+                            style={[
+                                styles.filterTab,
+                                filterStatus === status && styles.filterTabActive,
+                            ]}
+                            onPress={() => setFilterStatus(status)}
+                        >
+                            <Text
+                                style={[
+                                    styles.filterTabText,
+                                    filterStatus === status && styles.filterTabTextActive,
+                                ]}
+                            >
+                                {status.charAt(0).toUpperCase() + status.slice(1)}
+                            </Text>
+                        </TouchableOpacity>
+                    ))}
                 </ScrollView>
             </View>
 
+            {/* Request List */}
             <ScrollView
-                style={styles.requestsList}
+                style={styles.content}
                 refreshControl={
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
                 }
             >
-                {loading ? (
-                    <Loading />
-                ) : requests.length === 0 ? (
-                    <View style={styles.emptyContainer}>
+                {requests.length === 0 ? (
+                    <View style={styles.emptyState}>
+                        <Icon name="clipboard-text-outline" size={80} color="#CCC" />
                         <Text style={styles.emptyText}>No travel requests found</Text>
+                        <Text style={styles.emptySubtext}>
+                            {filterStatus === 'pending'
+                                ? 'No pending requests at the moment'
+                                : `No ${filterStatus} requests found`}
+                        </Text>
                     </View>
                 ) : (
-                    <>
-                        {requests.map(renderRequestCard)}
-                        <View style={styles.bottomPadding} />
-                    </>
+                    requests.map(renderRequestCard)
                 )}
             </ScrollView>
-        </View>
-    );
 
-    const renderStatisticsTab = () => (
-        <ScrollView
-            style={styles.tabContent}
-            refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-            }
-        >
-            <View style={styles.statsContainer}>
-                <Text style={styles.statsTitle}>Overall Statistics</Text>
-                
-                <View style={styles.statsGrid}>
-                    <View style={styles.statCard}>
-                        <Text style={styles.statValue}>{statistics.total_requests || 0}</Text>
-                        <Text style={styles.statLabel}>Total Requests</Text>
-                    </View>
-                    <View style={styles.statCard}>
-                        <Text style={[styles.statValue, { color: colors.success }]}>
-                            ₹{(statistics.total_estimated_cost || 0).toFixed(0)}
-                        </Text>
-                        <Text style={styles.statLabel}>Total Cost</Text>
-                    </View>
-                    <View style={styles.statCard}>
-                        <Text style={[styles.statValue, { color: colors.warning }]}>
-                            {statistics.domestic_count || 0}
-                        </Text>
-                        <Text style={styles.statLabel}>Domestic</Text>
-                    </View>
-                    <View style={styles.statCard}>
-                        <Text style={[styles.statValue, { color: colors.primary }]}>
-                            {statistics.international_count || 0}
-                        </Text>
-                        <Text style={styles.statLabel}>International</Text>
-                    </View>
-                </View>
-
-                {/* By Status */}
-                {statistics.by_status && Object.keys(statistics.by_status).length > 0 && (
-                    <View style={styles.statsSection}>
-                        <Text style={styles.statsSectionTitle}>By Status</Text>
-                        {Object.entries(statistics.by_status).map(([status, count]) => (
-                            <View key={status} style={styles.statsRow}>
-                                <Text style={styles.statsRowLabel}>{getDocstatusLabel(parseInt(status))}</Text>
-                                <Text style={styles.statsRowValue}>{count}</Text>
-                            </View>
-                        ))}
-                    </View>
-                )}
-
-                {/* By Employee */}
-                {statistics.by_employee && Object.keys(statistics.by_employee).length > 0 && (
-                    <View style={styles.statsSection}>
-                        <Text style={styles.statsSectionTitle}>Top Requesters</Text>
-                        {Object.entries(statistics.by_employee)
-                            .sort(([, a], [, b]) => b - a)
-                            .slice(0, 10)
-                            .map(([employee, count]) => (
-                                <View key={employee} style={styles.statsRow}>
-                                    <Text style={styles.statsRowLabel}>{employee}</Text>
-                                    <Text style={styles.statsRowValue}>{count}</Text>
-                                </View>
-                            ))}
-                    </View>
-                )}
-            </View>
-            <View style={styles.bottomPadding} />
-        </ScrollView>
-    );
-
-    return (
-        <View style={styles.container}>
-            {/* Tab Navigation */}
-            <View style={styles.tabBar}>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'pending' && styles.activeTab]}
-                    onPress={() => setActiveTab('pending')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'pending' && styles.activeTabText]}>
-                        Pending
-                    </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'history' && styles.activeTab]}
-                    onPress={() => setActiveTab('history')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'history' && styles.activeTabText]}>
-                        History
-                    </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'statistics' && styles.activeTab]}
-                    onPress={() => setActiveTab('statistics')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'statistics' && styles.activeTabText]}>
-                        Statistics
-                    </Text>
-                </TouchableOpacity>
-            </View>
-
-            {/* Tab Content */}
-            {activeTab === 'pending' && renderPendingTab()}
-            {activeTab === 'history' && renderHistoryTab()}
-            {activeTab === 'statistics' && renderStatisticsTab()}
-
-            {/* Action Modal */}
-            <Modal
-                visible={actionModal.visible}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setActionModal({ ...actionModal, visible: false })}
-            >
-                <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>
-                            {actionModal.type === 'approve' ? 'Approve' : 'Reject'} Travel Request
-                        </Text>
-                        <Text style={styles.modalSubtitle}>
-                            {actionModal.request?.name}
-                        </Text>
-
-                        <Text style={styles.modalLabel}>
-                            {actionModal.type === 'approve' ? 'Remarks (Optional)' : 'Rejection Reason *'}
-                        </Text>
-                        <TextInput
-                            style={styles.modalInput}
-                            value={actionModal.remarks}
-                            onChangeText={(text) => setActionModal({ ...actionModal, remarks: text })}
-                            placeholder={actionModal.type === 'approve' 
-                                ? 'Add approval remarks...' 
-                                : 'Why is this request being rejected?'}
-                            multiline
-                            numberOfLines={4}
-                            textAlignVertical="top"
-                        />
-
-                        <View style={styles.modalButtons}>
-                            <TouchableOpacity
-                                style={[styles.modalButton, styles.modalCancelButton]}
-                                onPress={() => setActionModal({ visible: false, type: '', request: null, remarks: '' })}
-                            >
-                                <Text style={styles.modalCancelText}>Cancel</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[
-                                    styles.modalButton,
-                                    actionModal.type === 'approve' ? styles.modalApproveButton : styles.modalRejectButton
-                                ]}
-                                onPress={confirmAction}
-                                disabled={loading}
-                            >
-                                <Text style={styles.modalConfirmText}>
-                                    {loading ? 'Processing...' : 'Confirm'}
-                                </Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </View>
-            </Modal>
+            {/* Modals */}
+            {renderDetailsModal()}
+            {renderActionModal()}
         </View>
     );
 };
@@ -498,77 +520,87 @@ const TravelRequestApproval = ({ navigation }) => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: colors.background,
+        backgroundColor: '#F5F5F5',
     },
-    tabBar: {
-        flexDirection: 'row',
-        backgroundColor: colors.white,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    tab: {
+    loadingContainer: {
         flex: 1,
-        paddingVertical: 16,
+        justifyContent: 'center',
         alignItems: 'center',
-        borderBottomWidth: 2,
-        borderBottomColor: 'transparent',
+        backgroundColor: '#F5F5F5',
     },
-    activeTab: {
-        borderBottomColor: colors.primary,
-    },
-    tabText: {
+    loadingText: {
+        marginTop: 10,
         fontSize: 16,
-        color: colors.textSecondary,
+        color: '#666',
+    },
+    header: {
+        padding: 16,
+        backgroundColor: '#FFF',
+        borderBottomWidth: 1,
+        borderBottomColor: '#E0E0E0',
+    },
+    headerTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: '#333',
+    },
+    filterContainer: {
+        backgroundColor: '#FFF',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: '#E0E0E0',
+    },
+    filterTab: {
+        paddingHorizontal: 20,
+        paddingVertical: 8,
+        borderRadius: 20,
+        backgroundColor: '#F0F0F0',
+        marginRight: 8,
+    },
+    filterTabActive: {
+        backgroundColor: '#4A90E2',
+    },
+    filterTabText: {
+        fontSize: 14,
+        color: '#666',
         fontWeight: '500',
     },
-    activeTabText: {
-        color: colors.primary,
+    filterTabTextActive: {
+        color: '#FFF',
         fontWeight: '600',
     },
-    tabContent: {
+    content: {
         flex: 1,
-    },
-    pendingHeader: {
-        padding: 16,
-        backgroundColor: colors.white,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    pendingCount: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textPrimary,
     },
     requestCard: {
-        backgroundColor: colors.white,
+        backgroundColor: '#FFF',
         marginHorizontal: 16,
-        marginTop: 12,
-        borderRadius: 8,
+        marginVertical: 8,
         padding: 16,
-        borderWidth: 1,
-        borderColor: colors.border,
+        borderRadius: 12,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
     },
-    requestHeader: {
+    cardHeader: {
         flexDirection: 'row',
         justifyContent: 'space-between',
-        alignItems: 'flex-start',
+        alignItems: 'center',
         marginBottom: 12,
     },
-    requestId: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 4,
+    cardHeaderLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flex: 1,
     },
     employeeName: {
-        fontSize: 15,
-        fontWeight: '500',
-        color: colors.primary,
-        marginBottom: 2,
-    },
-    department: {
-        fontSize: 13,
-        color: colors.textSecondary,
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#333',
+        marginLeft: 8,
     },
     statusBadge: {
         paddingHorizontal: 12,
@@ -576,12 +608,88 @@ const styles = StyleSheet.create({
         borderRadius: 12,
     },
     statusText: {
-        color: colors.white,
+        color: '#FFF',
         fontSize: 12,
         fontWeight: '600',
     },
-    requestDetails: {
+    cardBody: {
+        marginBottom: 12,
+    },
+    infoRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    infoText: {
+        fontSize: 14,
+        color: '#666',
+        marginLeft: 8,
+    },
+    description: {
+        fontSize: 14,
+        color: '#888',
+        marginTop: 4,
+        fontStyle: 'italic',
+    },
+    cardFooter: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingTop: 12,
+        borderTopWidth: 1,
+        borderTopColor: '#F0F0F0',
+    },
+    dateText: {
+        fontSize: 13,
+        color: '#999',
+    },
+    emptyState: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 60,
+    },
+    emptyText: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: '#999',
+        marginTop: 16,
+    },
+    emptySubtext: {
+        fontSize: 14,
+        color: '#AAA',
         marginTop: 8,
+        textAlign: 'center',
+        paddingHorizontal: 32,
+    },
+    modalContainer: {
+        flex: 1,
+        backgroundColor: '#FFF',
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: '#E0E0E0',
+    },
+    modalTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#333',
+    },
+    modalContent: {
+        flex: 1,
+        padding: 16,
+    },
+    detailSection: {
+        marginBottom: 24,
+    },
+    sectionTitle: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#333',
+        marginBottom: 12,
     },
     detailRow: {
         flexDirection: 'row',
@@ -589,309 +697,123 @@ const styles = StyleSheet.create({
     },
     detailLabel: {
         fontSize: 14,
-        color: colors.textSecondary,
-        fontWeight: '500',
-        width: 100,
+        fontWeight: '600',
+        color: '#666',
+        width: 120,
     },
     detailValue: {
         fontSize: 14,
-        color: colors.textPrimary,
-        fontWeight: '600',
-    },
-    itinerarySection: {
-        marginTop: 12,
-        paddingTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: colors.border,
-    },
-    itineraryHeader: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 8,
-    },
-    itineraryItem: {
-        backgroundColor: colors.cardBackground,
-        padding: 12,
-        borderRadius: 6,
-        marginBottom: 8,
-    },
-    itineraryItemHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 4,
-    },
-    itineraryRoute: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.primary,
+        color: '#333',
         flex: 1,
     },
-    itineraryMode: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        fontWeight: '500',
-    },
-    itineraryDates: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginBottom: 2,
-    },
-    itineraryLodging: {
-        fontSize: 12,
-        color: colors.success,
-        marginTop: 2,
-    },
-    costingSection: {
-        marginTop: 12,
-        paddingTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: colors.border,
-    },
-    costingHeader: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
+    commentCard: {
+        backgroundColor: '#F9F9F9',
+        padding: 12,
+        borderRadius: 8,
         marginBottom: 8,
     },
-    costingItem: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        paddingVertical: 6,
-        paddingHorizontal: 12,
-        backgroundColor: colors.cardBackground,
-        borderRadius: 4,
-        marginBottom: 4,
-    },
-    costingType: {
-        fontSize: 13,
-        color: colors.textSecondary,
-    },
-    costingAmount: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: colors.textPrimary,
-    },
-    costingTotal: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginTop: 8,
-        paddingTop: 8,
-        borderTopWidth: 1,
-        borderTopColor: colors.border,
-    },
-    costingTotalLabel: {
+    commentText: {
         fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
+        color: '#333',
+        marginBottom: 8,
     },
-    costingTotalValue: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: colors.success,
+    commentMeta: {
+        fontSize: 12,
+        color: '#999',
     },
     actionButtons: {
         flexDirection: 'row',
-        marginTop: 16,
+        padding: 16,
+        backgroundColor: '#FFF',
+        borderTopWidth: 1,
+        borderTopColor: '#E0E0E0',
         gap: 12,
     },
     actionButton: {
         flex: 1,
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
         paddingVertical: 12,
         borderRadius: 8,
-        alignItems: 'center',
+        gap: 8,
     },
     approveButton: {
-        backgroundColor: colors.success,
+        backgroundColor: '#4CAF50',
     },
     rejectButton: {
-        backgroundColor: colors.error,
+        backgroundColor: '#F44336',
     },
     actionButtonText: {
-        color: colors.white,
+        color: '#FFF',
         fontSize: 16,
         fontWeight: '600',
     },
-    filterContainer: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        backgroundColor: colors.white,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    filterPill: {
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderRadius: 20,
-        backgroundColor: colors.cardBackground,
-        marginRight: 8,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    filterPillActive: {
-        backgroundColor: colors.primary,
-        borderColor: colors.primary,
-    },
-    filterText: {
-        fontSize: 14,
-        color: colors.textSecondary,
-        fontWeight: '500',
-    },
-    filterTextActive: {
-        color: colors.white,
-        fontWeight: '600',
-    },
-    requestsList: {
+    actionModalOverlay: {
         flex: 1,
-    },
-    statsContainer: {
-        padding: 16,
-    },
-    statsTitle: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: colors.textPrimary,
-        marginBottom: 16,
-    },
-    statsGrid: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        marginHorizontal: -6,
-        marginBottom: 20,
-    },
-    statCard: {
-        width: '50%',
-        padding: 6,
-    },
-    statValue: {
-        fontSize: 24,
-        fontWeight: '700',
-        color: colors.primary,
-        marginBottom: 4,
-    },
-    statLabel: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        fontWeight: '500',
-    },
-    statsSection: {
-        backgroundColor: colors.white,
-        borderRadius: 8,
-        padding: 16,
-        marginBottom: 16,
-    },
-    statsSectionTitle: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 12,
-    },
-    statsRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        paddingVertical: 8,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    statsRowLabel: {
-        fontSize: 14,
-        color: colors.textSecondary,
-    },
-    statsRowValue: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
-    },
-    emptyContainer: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 60,
-    },
-    emptyText: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textSecondary,
-        marginBottom: 8,
-    },
-    emptySubtext: {
-        fontSize: 14,
-        color: colors.textSecondary,
-    },
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
         justifyContent: 'center',
         alignItems: 'center',
         padding: 20,
     },
-    modalContent: {
-        backgroundColor: colors.white,
+    actionModalContent: {
+        backgroundColor: '#FFF',
         borderRadius: 12,
         padding: 20,
         width: '100%',
         maxWidth: 400,
     },
-    modalTitle: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: colors.textPrimary,
+    actionModalTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#333',
         marginBottom: 8,
     },
-    modalSubtitle: {
+    actionModalSubtitle: {
         fontSize: 14,
-        color: colors.textSecondary,
+        color: '#666',
         marginBottom: 16,
     },
-    modalLabel: {
-        fontSize: 14,
-        fontWeight: '500',
-        color: colors.textPrimary,
-        marginBottom: 8,
-    },
-    modalInput: {
+    actionInput: {
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: '#E0E0E0',
         borderRadius: 8,
         padding: 12,
-        fontSize: 16,
-        color: colors.textPrimary,
+        fontSize: 14,
+        backgroundColor: '#FAFAFA',
         minHeight: 100,
-        marginBottom: 20,
+        marginBottom: 16,
+        textAlignVertical: 'top',
     },
-    modalButtons: {
+    actionModalButtons: {
         flexDirection: 'row',
         gap: 12,
     },
-    modalButton: {
+    actionModalButton: {
         flex: 1,
         paddingVertical: 12,
         borderRadius: 8,
         alignItems: 'center',
+        justifyContent: 'center',
     },
-    modalCancelButton: {
-        backgroundColor: colors.cardBackground,
-        borderWidth: 1,
-        borderColor: colors.border,
+    actionModalCancelButton: {
+        backgroundColor: '#F0F0F0',
     },
-    modalApproveButton: {
-        backgroundColor: colors.success,
+    actionModalApproveButton: {
+        backgroundColor: '#4CAF50',
     },
-    modalRejectButton: {
-        backgroundColor: colors.error,
+    actionModalRejectButton: {
+        backgroundColor: '#F44336',
     },
-    modalCancelText: {
-        color: colors.textPrimary,
+    actionModalCancelText: {
         fontSize: 16,
         fontWeight: '600',
+        color: '#666',
     },
-    modalConfirmText: {
-        color: colors.white,
+    actionModalConfirmText: {
         fontSize: 16,
         fontWeight: '600',
-    },
-    bottomPadding: {
-        height: 80,
+        color: '#FFF',
     },
 });
 
