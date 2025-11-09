@@ -6,7 +6,6 @@ import Icon from 'react-native-vector-icons/FontAwesome5';
 // Import Employee Screens
 import CheckInOutScreen from '../screens/employee/CheckInOutScreen';
 import AttendanceHistoryScreen from '../screens/employee/AttendanceHistoryScreen';
-import AttendanceScreen from '../screens/employee/AttendanceScreen';
 import WFHRequestScreen from '../screens/employee/WFHRequestScreen';
 import HolidayListScreen from '../screens/employee/HolidayListScreen';
 import LeaveApplicationScreen from '../screens/employee/LeaveApplicationScreen';
@@ -47,7 +46,6 @@ const EmployeeNavigator = () => {
             
             <Stack.Screen name="CheckInOut" component={CheckInOutScreen} options={{ title: 'Check In/Out' }} />
             <Stack.Screen name="AttendanceHistory" component={AttendanceHistoryScreen} options={{ title: 'Attendance History' }} />
-            <Stack.Screen name="Attendance" component={AttendanceScreen} options={{ title: 'My Attendance' }} />
             <Stack.Screen name="WFHRequest" component={WFHRequestScreen} options={{ title: 'WFH Request' }} />
 
             <Stack.Screen name="HolidayList" component={HolidayListScreen} options={{ title: 'Holiday List' }} />
