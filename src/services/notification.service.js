@@ -213,13 +213,17 @@ class NotificationService {
             if (response.success) {
                 console.log('✅ FCM token saved to server successfully');
             } else {
-                console.error('❌ Failed to save FCM token:', response.message);
+                console.error('❌ Failed to save FCM token:', response.message || 'Unknown error');
+                // Don't throw error - just log it so app continues to work
+                // Token can be re-registered after login
             }
             
             return response;
         } catch (error) {
-            console.error('❌ Failed to save FCM token to server:', error);
-            throw error;
+            console.error('❌ Failed to save FCM token to server:', error.message || error);
+            // Don't throw error - token registration is not critical for app startup
+            // It will be retried after login via AuthContext
+            return { success: false, message: error.message || 'Failed to save token' };
         }
     }
 
