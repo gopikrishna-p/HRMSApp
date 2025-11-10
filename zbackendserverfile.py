@@ -6,6 +6,7 @@ from frappe.model.workflow import get_workflow_name
 from frappe.query_builder import Order
 from frappe.utils import add_days, date_diff, getdate, strip_html, nowdate, cint, now_datetime
 import json
+from datetime import timedelta
 from geopy.distance import geodesic
 import firebase_admin
 from firebase_admin import credentials, messaging
@@ -98,6 +99,649 @@ def get_all_employees() -> list[dict]:
         order_by="employee_name asc",   # Sort alphabetically for better UX
         limit=999999,
     )
+
+
+# ============================================================================
+# EMPLOYEE ANALYTICS APIs - Comprehensive Dashboard Data
+# ============================================================================
+
+@frappe.whitelist()
+def get_employee_analytics(
+	employee: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+	period: str = "current_month",
+) -> dict:
+	"""
+	Get comprehensive employee analytics for dashboard.
+	
+	Args:
+		employee: Employee ID (if None, uses current user's employee)
+		from_date: Start date (YYYY-MM-DD) - overrides period
+		to_date: End date (YYYY-MM-DD) - overrides period
+		period: Predefined period - "current_month", "last_month", "current_year", "custom"
+	
+	Returns:
+		Comprehensive analytics dict with:
+		- attendance: detailed attendance statistics
+		- leave: leave balance and usage
+		- expense: expense claims summary
+		- travel: travel requests summary
+		- projects: project and task stats
+		- performance: overall performance metrics
+	"""
+	try:
+		# Get employee
+		if not employee:
+			employee = get_employee_by_user()
+			if not employee:
+				frappe.throw(_("No employee record found for current user"))
+		
+		# Verify permission - employees can only see their own data
+		current_employee = get_employee_by_user()
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin and employee != current_employee:
+			frappe.throw(_("You can only view your own analytics"))
+		
+		# Calculate date range based on period
+		if from_date and to_date:
+			start_date = getdate(from_date)
+			end_date = getdate(to_date)
+		else:
+			if period == "current_month":
+				today = getdate()
+				start_date = today.replace(day=1)
+				next_month = start_date.replace(day=28) + timedelta(days=4)
+				end_date = next_month.replace(day=1) - timedelta(days=1)
+			elif period == "last_month":
+				today = getdate()
+				end_date = today.replace(day=1) - timedelta(days=1)
+				start_date = end_date.replace(day=1)
+			elif period == "current_year":
+				today = getdate()
+				start_date = today.replace(month=1, day=1)
+				end_date = today.replace(month=12, day=31)
+			else:
+				# Default to current month
+				today = getdate()
+				start_date = today.replace(day=1)
+				next_month = start_date.replace(day=28) + timedelta(days=4)
+				end_date = next_month.replace(day=1) - timedelta(days=1)
+		
+		# Get employee info
+		emp_info = frappe.get_doc("Employee", employee)
+		
+		# Build analytics response
+		analytics = {
+			"employee": employee,
+			"employee_name": emp_info.employee_name,
+			"department": emp_info.department,
+			"designation": emp_info.designation,
+			"company": emp_info.company,
+			"period": {
+				"from_date": str(start_date),
+				"to_date": str(end_date),
+				"period_type": period,
+			},
+			
+			# Attendance Analytics
+			"attendance": get_attendance_analytics(employee, start_date, end_date),
+			
+			# Leave Analytics
+			"leave": get_leave_analytics(employee, start_date, end_date),
+			
+			# Expense Analytics
+			"expense": get_expense_analytics(employee, start_date, end_date),
+			
+			# Travel Analytics
+			"travel": get_travel_analytics(employee, start_date, end_date),
+			
+			# Project & Task Analytics
+			"projects": get_project_analytics(employee, start_date, end_date),
+			
+			# Overall Performance Score
+			"performance": calculate_performance_score(employee, start_date, end_date),
+		}
+		
+		return {
+			"status": "success",
+			"data": analytics,
+			"message": _("Analytics fetched successfully"),
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Employee Analytics Error: {str(e)}\n{frappe.get_traceback()}", "Employee Analytics")
+		return {
+			"status": "error",
+			"message": str(e),
+			"data": None,
+		}
+
+
+def get_attendance_analytics(employee: str, start_date, end_date) -> dict:
+	"""Get detailed attendance analytics."""
+	try:
+		# Get all attendance records for period
+		attendance_records = frappe.get_all(
+			"Attendance",
+			filters={
+				"employee": employee,
+				"attendance_date": ["between", [start_date, end_date]],
+				"docstatus": 1,
+			},
+			fields=["attendance_date", "status", "working_hours", "in_time", "out_time", "late_entry", "early_exit"],
+		)
+		
+		# Calculate statistics
+		total_days = date_diff(end_date, start_date) + 1
+		present_days = sum(1 for a in attendance_records if a.status == "Present")
+		absent_days = sum(1 for a in attendance_records if a.status == "Absent")
+		half_day = sum(1 for a in attendance_records if a.status == "Half Day")
+		wfh_days = sum(1 for a in attendance_records if a.status == "Work From Home")
+		on_leave = sum(1 for a in attendance_records if a.status == "On Leave")
+		late_arrivals = sum(1 for a in attendance_records if a.get("late_entry"))
+		early_exits = sum(1 for a in attendance_records if a.get("early_exit"))
+		
+		# Calculate working hours - try working_hours field first, then calculate from in/out times
+		total_working_hours = 0
+		hours_count = 0
+		
+		for a in attendance_records:
+			hours = 0
+			
+			# First try to use the working_hours field
+			if a.working_hours and a.working_hours > 0:
+				hours = a.working_hours
+			# Otherwise calculate from in_time and out_time
+			elif a.in_time and a.out_time:
+				try:
+					# Calculate time difference in hours
+					time_diff = a.out_time - a.in_time
+					hours = time_diff.total_seconds() / 3600.0
+				except:
+					hours = 0
+			
+			if hours > 0:
+				total_working_hours += hours
+				hours_count += 1
+		
+		# Calculate average working hours
+		avg_working_hours = total_working_hours / hours_count if hours_count > 0 else 0
+		
+		# Get holidays for period
+		holiday_list = get_holiday_list_for_employee(employee, raise_exception=False)
+		holidays_count = 0
+		if holiday_list:
+			holidays_count = frappe.db.count(
+				"Holiday",
+				filters={
+					"parent": holiday_list,
+					"holiday_date": ["between", [start_date, end_date]],
+				}
+			)
+		
+		# Calculate working days (excluding weekends/holidays)
+		total_working_days = total_days - holidays_count
+		
+		# Calculate attendance percentage - count Present + WFH + 0.5*HalfDay as attended
+		attended_days = present_days + wfh_days + (half_day * 0.5)
+		attendance_percentage = (attended_days / total_working_days * 100) if total_working_days > 0 else 0
+		
+		# Get recent check-ins
+		recent_checkins = frappe.get_all(
+			"Employee Checkin",
+			filters={
+				"employee": employee,
+				"time": ["between", [start_date, end_date]],
+			},
+			fields=["name", "time", "log_type", "device_id"],
+			order_by="time desc",
+			limit=10,
+		)
+		
+		return {
+			"total_days": total_days,
+			"total_working_days": total_working_days,
+			"holidays": holidays_count,
+			"present_days": present_days,
+			"absent_days": absent_days,
+			"half_day": half_day,
+			"wfh_days": wfh_days,
+			"on_leave": on_leave,
+			"late_arrivals": late_arrivals,
+			"early_exits": early_exits,
+			"total_working_hours": round(total_working_hours, 2),
+			"avg_working_hours": round(avg_working_hours, 2),
+			"attendance_percentage": round(attendance_percentage, 2),
+			"recent_checkins": recent_checkins,
+			"status_breakdown": {
+				"Present": present_days,
+				"Absent": absent_days,
+				"Half Day": half_day,
+				"Work From Home": wfh_days,
+				"On Leave": on_leave,
+			}
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Attendance Analytics Error: {str(e)}", "Attendance Analytics")
+		return {
+			"total_days": 0,
+			"error": str(e),
+		}
+
+
+def get_leave_analytics(employee: str, start_date, end_date) -> dict:
+	"""Get leave analytics and balances."""
+	try:
+		# Get leave balance
+		leave_balance_map = get_leave_balance_map(employee)
+		
+		# Get leave applications for period
+		leave_applications = frappe.get_all(
+			"Leave Application",
+			filters={
+				"employee": employee,
+				"from_date": ["<=", end_date],
+				"to_date": [">=", start_date],
+				"docstatus": 1,
+			},
+			fields=["name", "leave_type", "from_date", "to_date", "total_leave_days", "status", "half_day"],
+		)
+		
+		# Calculate statistics
+		total_leave_taken = sum(app.total_leave_days for app in leave_applications if app.status == "Approved")
+		pending_leaves = sum(app.total_leave_days for app in leave_applications if app.status == "Open")
+		rejected_leaves = sum(app.total_leave_days for app in leave_applications if app.status == "Rejected")
+		
+		# Leave by type
+		leave_by_type = {}
+		for app in leave_applications:
+			if app.status == "Approved":
+				leave_type = app.leave_type
+				leave_by_type[leave_type] = leave_by_type.get(leave_type, 0) + app.total_leave_days
+		
+		# Calculate total available leaves
+		total_allocated = sum(details.get("allocated_leaves", 0) for details in leave_balance_map.values())
+		total_balance = sum(details.get("balance_leaves", 0) for details in leave_balance_map.values())
+		
+		return {
+			"leave_balances": leave_balance_map,
+			"total_allocated": round(total_allocated, 2),
+			"total_balance": round(total_balance, 2),
+			"total_used": round(total_allocated - total_balance, 2),
+			"period_stats": {
+				"total_leave_taken": round(total_leave_taken, 2),
+				"pending_leaves": round(pending_leaves, 2),
+				"rejected_leaves": round(rejected_leaves, 2),
+				"leave_by_type": leave_by_type,
+			},
+			"applications": leave_applications,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Leave Analytics Error: {str(e)}", "Leave Analytics")
+		return {
+			"leave_balances": {},
+			"error": str(e),
+		}
+
+
+def get_expense_analytics(employee: str, start_date, end_date) -> dict:
+	"""Get expense claim analytics."""
+	try:
+		# Get expense claims for period
+		expense_claims = frappe.get_all(
+			"Expense Claim",
+			filters={
+				"employee": employee,
+				"posting_date": ["between", [start_date, end_date]],
+			},
+			fields=[
+				"name", "posting_date", "approval_status", "total_claimed_amount",
+				"total_sanctioned_amount", "total_amount_reimbursed", "is_paid",
+			],
+		)
+		
+		# Calculate statistics
+		total_claimed = sum(c.total_claimed_amount for c in expense_claims)
+		total_sanctioned = sum(c.total_sanctioned_amount or 0 for c in expense_claims)
+		total_reimbursed = sum(c.total_amount_reimbursed or 0 for c in expense_claims)
+		
+		pending_claims = sum(1 for c in expense_claims if c.approval_status == "Draft")
+		approved_claims = sum(1 for c in expense_claims if c.approval_status == "Approved")
+		rejected_claims = sum(1 for c in expense_claims if c.approval_status == "Rejected")
+		
+		paid_claims = sum(1 for c in expense_claims if c.is_paid)
+		unpaid_amount = sum(c.total_sanctioned_amount or 0 for c in expense_claims if not c.is_paid)
+		
+		return {
+			"total_claims": len(expense_claims),
+			"total_claimed": round(total_claimed, 2),
+			"total_sanctioned": round(total_sanctioned, 2),
+			"total_reimbursed": round(total_reimbursed, 2),
+			"unpaid_amount": round(unpaid_amount, 2),
+			"status_summary": {
+				"pending": pending_claims,
+				"approved": approved_claims,
+				"rejected": rejected_claims,
+				"paid": paid_claims,
+			},
+			"claims": expense_claims,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Expense Analytics Error: {str(e)}", "Expense Analytics")
+		return {
+			"total_claims": 0,
+			"error": str(e),
+		}
+
+
+def get_travel_analytics(employee: str, start_date, end_date) -> dict:
+	"""Get travel request analytics."""
+	try:
+		# Get travel requests for period
+		travel_requests = frappe.get_all(
+			"Travel Request",
+			filters={
+				"employee": employee,
+				"creation": ["between", [start_date, end_date]],
+			},
+			fields=[
+				"name", "travel_type", "purpose_of_travel", "docstatus",
+				"creation", "modified",
+			],
+		)
+		
+		# Calculate statistics
+		total_requests = len(travel_requests)
+		pending_requests = sum(1 for r in travel_requests if r.docstatus == 0)
+		approved_requests = sum(1 for r in travel_requests if r.docstatus == 1)
+		rejected_requests = sum(1 for r in travel_requests if r.docstatus == 2)
+		
+		domestic_travel = sum(1 for r in travel_requests if r.travel_type == "Domestic")
+		international_travel = sum(1 for r in travel_requests if r.travel_type == "International")
+		
+		return {
+			"total_requests": total_requests,
+			"pending": pending_requests,
+			"approved": approved_requests,
+			"rejected": rejected_requests,
+			"domestic_travel": domestic_travel,
+			"international_travel": international_travel,
+			"requests": travel_requests,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Travel Analytics Error: {str(e)}", "Travel Analytics")
+		return {
+			"total_requests": 0,
+			"error": str(e),
+		}
+
+
+def get_project_analytics(employee: str, start_date, end_date) -> dict:
+	"""Get project and task analytics."""
+	try:
+		# Get projects where employee is a member
+		project_members = frappe.get_all(
+			"Project Member",
+			filters={
+				"employee": employee,
+				"active": 1,
+			},
+			fields=["parent", "role_in_project"],
+			pluck="parent",
+		)
+		
+		# Get project details
+		projects = []
+		if project_members:
+			projects = frappe.get_all(
+				"Project",
+				filters={
+					"name": ["in", project_members],
+				},
+				fields=["name", "project_name", "status", "percent_complete", "expected_start_date", "expected_end_date"],
+			)
+		
+		# Get tasks for period
+		tasks = []
+		if project_members:
+			tasks = frappe.get_all(
+				"Task",
+				filters={
+					"project": ["in", project_members],
+					"modified": ["between", [start_date, end_date]],
+				},
+				fields=["name", "subject", "project", "status", "priority", "progress"],
+			)
+		
+		# Get task logs for period
+		task_logs = frappe.get_all(
+			"Task Log",
+			filters={
+				"employee": employee,
+				"log_time": ["between", [start_date, end_date]],
+			},
+			fields=["name", "task", "project", "log_time", "description"],
+		)
+		
+		# Calculate statistics
+		total_projects = len(projects)
+		active_projects = sum(1 for p in projects if p.status == "Open")
+		completed_projects = sum(1 for p in projects if p.status == "Completed")
+		
+		total_tasks = len(tasks)
+		open_tasks = sum(1 for t in tasks if t.status == "Open")
+		completed_tasks = sum(1 for t in tasks if t.status == "Completed")
+		overdue_tasks = sum(1 for t in tasks if t.status == "Overdue")
+		
+		total_task_logs = len(task_logs)
+		
+		return {
+			"total_projects": total_projects,
+			"active_projects": active_projects,
+			"completed_projects": completed_projects,
+			"total_tasks": total_tasks,
+			"open_tasks": open_tasks,
+			"completed_tasks": completed_tasks,
+			"overdue_tasks": overdue_tasks,
+			"total_task_logs": total_task_logs,
+			"projects": projects,
+			"tasks": tasks,
+			"recent_task_logs": task_logs[:10],  # Last 10 logs
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Project Analytics Error: {str(e)}", "Project Analytics")
+		return {
+			"total_projects": 0,
+			"total_tasks": 0,
+			"error": str(e),
+		}
+
+
+def calculate_performance_score(employee: str, start_date, end_date) -> dict:
+	"""Calculate overall performance score based on various metrics."""
+	try:
+		# Get all analytics
+		attendance = get_attendance_analytics(employee, start_date, end_date)
+		projects = get_project_analytics(employee, start_date, end_date)
+		
+		# Calculate scores (0-100)
+		
+		# Attendance Score (40% weight)
+		attendance_score = attendance.get("attendance_percentage", 0)
+		
+		# Punctuality Score (20% weight) - based on late arrivals
+		late_ratio = attendance.get("late_arrivals", 0) / attendance.get("total_working_days", 1)
+		punctuality_score = max(0, 100 - (late_ratio * 200))  # Penalty for late arrivals
+		
+		# Task Completion Score (30% weight)
+		total_tasks = projects.get("total_tasks", 0)
+		completed_tasks = projects.get("completed_tasks", 0)
+		task_completion_score = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 100
+		
+		# Engagement Score (10% weight) - based on task logs
+		task_logs = projects.get("total_task_logs", 0)
+		working_days = attendance.get("total_working_days", 1)
+		engagement_score = min(100, (task_logs / working_days) * 50) if working_days > 0 else 0
+		
+		# Weighted overall score
+		overall_score = (
+			attendance_score * 0.4 +
+			punctuality_score * 0.2 +
+			task_completion_score * 0.3 +
+			engagement_score * 0.1
+		)
+		
+		# Determine rating
+		if overall_score >= 90:
+			rating = "Excellent"
+		elif overall_score >= 75:
+			rating = "Good"
+		elif overall_score >= 60:
+			rating = "Average"
+		elif overall_score >= 50:
+			rating = "Below Average"
+		else:
+			rating = "Needs Improvement"
+		
+		return {
+			"overall_score": round(overall_score, 2),
+			"rating": rating,
+			"breakdown": {
+				"attendance_score": round(attendance_score, 2),
+				"punctuality_score": round(punctuality_score, 2),
+				"task_completion_score": round(task_completion_score, 2),
+				"engagement_score": round(engagement_score, 2),
+			},
+			"insights": {
+				"total_working_days": working_days,
+				"attendance_percentage": round(attendance.get("attendance_percentage", 0), 2),
+				"late_arrivals": attendance.get("late_arrivals", 0),
+				"tasks_completed": completed_tasks,
+				"tasks_total": total_tasks,
+				"task_logs": task_logs,
+			}
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Performance Score Error: {str(e)}", "Performance Score")
+		return {
+			"overall_score": 0,
+			"rating": "N/A",
+			"error": str(e),
+		}
+
+
+@frappe.whitelist()
+def get_employee_attendance_history(
+	employee_id: str,
+	start_date: str,
+	end_date: str,
+) -> dict:
+	"""
+	Get employee attendance history with summary statistics.
+	Optimized for mobile app dashboard.
+	
+	Args:
+		employee_id: Employee ID
+		start_date: Start date (YYYY-MM-DD)
+		end_date: End date (YYYY-MM-DD)
+	
+	Returns:
+		Dict with attendance records and summary stats
+	"""
+	try:
+		# Validate dates
+		start = getdate(start_date)
+		end = getdate(end_date)
+		
+		# Get attendance records
+		attendance_records = frappe.get_all(
+			"Attendance",
+			filters={
+				"employee": employee_id,
+				"attendance_date": ["between", [start, end]],
+				"docstatus": 1,
+			},
+			fields=[
+				"name", "attendance_date", "status", "working_hours",
+				"in_time", "out_time", "late_entry", "early_exit", "shift",
+			],
+			order_by="attendance_date desc",
+		)
+		
+		# Calculate summary statistics
+		present_days = sum(1 for a in attendance_records if a.status == "Present")
+		absent_days = sum(1 for a in attendance_records if a.status == "Absent")
+		half_day = sum(1 for a in attendance_records if a.status == "Half Day")
+		wfh_days = sum(1 for a in attendance_records if a.status == "Work From Home")
+		on_leave = sum(1 for a in attendance_records if a.status == "On Leave")
+		late_arrivals = sum(1 for a in attendance_records if a.late_entry)
+		early_exits = sum(1 for a in attendance_records if a.early_exit)
+		
+		total_working_hours = sum(a.working_hours or 0 for a in attendance_records)
+		
+		# Get holidays count
+		holiday_list = get_holiday_list_for_employee(employee_id, raise_exception=False)
+		holidays_count = 0
+		if holiday_list:
+			holidays_count = frappe.db.count(
+				"Holiday",
+				filters={
+					"parent": holiday_list,
+					"holiday_date": ["between", [start, end]],
+				}
+			)
+		
+		# Calculate working days
+		total_days = date_diff(end, start) + 1
+		total_working_days = total_days - holidays_count
+		
+		# Calculate attendance percentage
+		attendance_percentage = 0
+		if total_working_days > 0:
+			attended_days = present_days + wfh_days + (half_day * 0.5)
+			attendance_percentage = (attended_days / total_working_days) * 100
+		
+		return {
+			"status": "success",
+			"data": {
+				"records": attendance_records,
+				"summary_stats": {
+					"total_days": total_days,
+					"total_working_days": total_working_days,
+					"holidays": holidays_count,
+					"present_days": present_days,
+					"absent_days": absent_days,
+					"half_day": half_day,
+					"wfh_days": wfh_days,
+					"on_leave": on_leave,
+					"late_arrivals": late_arrivals,
+					"early_exits": early_exits,
+					"total_working_hours": round(total_working_hours, 2),
+					"attendance_percentage": round(attendance_percentage, 2),
+				},
+			},
+			"message": _("Attendance history fetched successfully"),
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Attendance History Error: {str(e)}\n{frappe.get_traceback()}", "Attendance History")
+		return {
+			"status": "error",
+			"message": str(e),
+			"data": {
+				"records": [],
+				"summary_stats": {},
+			},
+		}
 
 
 # HR Settings
@@ -5804,8 +6448,8 @@ def get_department_statistics():
 
 
 @frappe.whitelist(allow_guest=False)
-def get_attendance_analytics(period="week"):
-    """Get attendance analytics for different time periods, excluding holidays."""
+def get_admin_attendance_analytics(period="week"):
+    """Get attendance analytics for different time periods, excluding holidays (Admin Dashboard)."""
     try:
         if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
             frappe.throw(_("You do not have permission to access this resource."), frappe.PermissionError)
@@ -7187,7 +7831,6 @@ def add_task_log(task, description, log_time=None):
     except Exception as e:
         frappe.log_error(f"Task Log Error: {str(e)}")
         frappe.throw(_("Failed to add task log: {0}").format(str(e)))
-
 
 @frappe.whitelist()
 def my_project_summary(project, limit_tasks=200, limit_logs=200):

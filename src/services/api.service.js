@@ -426,6 +426,21 @@ class ApiService {
         });
     }
 
+    /**
+     * Get comprehensive employee analytics (NEW)
+     * Single API call for all dashboard metrics
+     * @param {Object} params - {employee, from_date, to_date, period}
+     * @returns {Promise} Response with complete analytics including attendance, leave, expense, travel, projects, performance
+     */
+    getEmployeeAnalytics(params = {}) {
+        return this.get(m('get_employee_analytics'), {
+            employee: params.employee || null,
+            from_date: params.from_date || null,
+            to_date: params.to_date || null,
+            period: params.period || 'current_month'
+        });
+    }
+
     /* -------------------------
      * LEAVE MANAGEMENT - COMPREHENSIVE APIs
      * Based on hrms.api leave management documentation
