@@ -1171,8 +1171,8 @@ def get_holidays_for_employee(employee: str) -> list[dict]:
 	Holiday = frappe.qb.DocType("Holiday")
 	holidays = (
 		frappe.qb.from_(Holiday)
-		.select(Holiday.name, Holiday.holiday_date, Holiday.description)
-		.where((Holiday.parent == holiday_list) & (Holiday.weekly_off == 0))
+		.select(Holiday.name, Holiday.holiday_date, Holiday.description, Holiday.weekly_off)
+		.where(Holiday.parent == holiday_list)
 		.orderby(Holiday.holiday_date, order=Order.asc)
 	).run(as_dict=True)
 

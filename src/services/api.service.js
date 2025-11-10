@@ -260,6 +260,30 @@ class ApiService {
         return this.get(m('get_holidays'), { start_date, end_date });
     }
 
+    /**
+     * Get holidays for employee from their holiday list
+     * Uses: get_holidays_for_employee from backend (line ~1166)
+     * @param {string} employee - Employee ID
+     * @returns {Promise} Response with array of holidays
+     */
+    getHolidaysForEmployee(employee) {
+        return this.get(m('get_holidays_for_employee'), { employee });
+    }
+
+    /**
+     * Get comprehensive employee holidays with statistics (NEW API)
+     * Uses: get_employee_holidays from backend
+     * @param {string} employee - Employee ID (optional, defaults to current user)
+     * @param {string} year - Year filter (optional, e.g., "2025")
+     * @returns {Promise} Response with holidays, statistics, and grouped data
+     */
+    getEmployeeHolidays(employee = null, year = null) {
+        const params = {};
+        if (employee) params.employee = employee;
+        if (year) params.year = year;
+        return this.get(m('get_employee_holidays'), params);
+    }
+
     getLeaveApplications({ employee }) {
         return this.get(m('get_leave_applications'), { employee });
     }
