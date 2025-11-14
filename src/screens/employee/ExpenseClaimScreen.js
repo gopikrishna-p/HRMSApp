@@ -30,8 +30,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
         expense_type: '',
         amount: '',
         description: '',
-        expense_date: new Date(),
-        sanctioned_amount: ''
+        expense_date: new Date()
     }]);
     const [remark, setRemark] = useState('');
     const [expenseTypes, setExpenseTypes] = useState([]);
@@ -117,8 +116,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
             expense_type: '',
             amount: '',
             description: '',
-            expense_date: new Date(),
-            sanctioned_amount: ''
+            expense_date: new Date()
         }]);
     };
 
@@ -133,10 +131,8 @@ const ExpenseClaimScreen = ({ navigation }) => {
         const newExpenses = [...expenses];
         newExpenses[index][field] = value;
         
-        // Auto-fill sanctioned amount with claimed amount
-        if (field === 'amount' && !newExpenses[index].sanctioned_amount) {
-            newExpenses[index].sanctioned_amount = value;
-        }
+        // Note: sanctioned_amount is NOT set here - it will be set by backend
+        // The admin/approver will modify it during approval process
         
         setExpenses(newExpenses);
     };
@@ -189,12 +185,14 @@ const ExpenseClaimScreen = ({ navigation }) => {
         setLoading(true);
         try {
             // Prepare expense items
+            // Note: sanctioned_amount should NOT be sent by employee
+            // It will be set by backend and modified by admin/approver during approval
             const expenseItems = expenses.map(exp => ({
                 expense_type: exp.expense_type,
                 amount: parseFloat(exp.amount),
                 description: exp.description.trim(),
-                expense_date: exp.expense_date.toISOString().split('T')[0],
-                sanctioned_amount: exp.sanctioned_amount ? parseFloat(exp.sanctioned_amount) : parseFloat(exp.amount)
+                expense_date: exp.expense_date.toISOString().split('T')[0]
+                // sanctioned_amount is handled by backend - defaults to amount, then admin can modify
             }));
 
             console.log('Submitting expense claim:', {
@@ -229,8 +227,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
                             expense_type: '',
                             amount: '',
                             description: '',
-                            expense_date: new Date(),
-                            sanctioned_amount: ''
+                            expense_date: new Date()
                         }]);
                         setRemark('');
                         setActiveTab('history');
@@ -243,8 +240,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
                             expense_type: '',
                             amount: '',
                             description: '',
-                            expense_date: new Date(),
-                            sanctioned_amount: ''
+                            expense_date: new Date()
                         }]);
                         setRemark('');
                         setActiveTab('history');

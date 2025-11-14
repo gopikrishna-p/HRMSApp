@@ -10,6 +10,7 @@ import {
     Modal,
     TextInput
 } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
@@ -25,18 +26,52 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
     const [claims, setClaims] = useState([]);
     const [statistics, setStatistics] = useState({});
     const [filterStatus, setFilterStatus] = useState('Draft'); // For pending tab
+    
+    // Payable accounts
+    const [payableAccounts, setPayableAccounts] = useState([]);
+    const [defaultPayableAccount, setDefaultPayableAccount] = useState('');
 
     // Action modal state
     const [actionModal, setActionModal] = useState({
         visible: false,
         type: '', // 'approve' or 'reject'
         claim: null,
-        remarks: ''
+        remarks: '',
+        sanctionedAmounts: {}, // Store custom sanctioned amounts: { expenseIndex: amount }
+        selectedPayableAccount: '' // Store selected payable account
     });
+
+    useEffect(() => {
+        loadInitialData();
+    }, []);
 
     useEffect(() => {
         loadClaims();
     }, [activeTab, filterStatus]);
+    
+    const loadInitialData = async () => {
+        await loadPayableAccounts();
+    };
+    
+    const loadPayableAccounts = async () => {
+        try {
+            console.log('Loading payable accounts...');
+            const response = await apiService.getPayableAccounts();
+            console.log('Payable accounts response:', JSON.stringify(response, null, 2));
+            
+            if (response.success && response.data?.message) {
+                const data = response.data.message;
+                console.log('Payable accounts data:', data);
+                setPayableAccounts(data.accounts || []);
+                setDefaultPayableAccount(data.default_account || '');
+                console.log('Set payable accounts:', data.accounts?.length || 0, 'accounts');
+            } else {
+                console.error('Failed to load payable accounts:', response);
+            }
+        } catch (error) {
+            console.error('Error loading payable accounts:', error);
+        }
+    };
 
     const loadClaims = async () => {
         setLoading(true);
@@ -71,11 +106,25 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
     }, [activeTab, filterStatus]);
 
     const handleApprove = (claim) => {
+        // Initialize sanctioned amounts with claimed amounts (default) - ensure proper number formatting
+        const initialSanctionedAmounts = {};
+        if (claim.expenses && claim.expenses.length > 0) {
+            claim.expenses.forEach((exp, idx) => {
+                const amount = exp.sanctioned_amount || exp.amount;
+                initialSanctionedAmounts[idx] = typeof amount === 'number' ? amount.toFixed(2) : String(amount || '0.00');
+            });
+        }
+        
+        // Pre-select payable account
+        const selectedAccount = claim.payable_account || defaultPayableAccount;
+        
         setActionModal({
             visible: true,
             type: 'approve',
             claim,
-            remarks: ''
+            remarks: '',
+            sanctionedAmounts: initialSanctionedAmounts,
+            selectedPayableAccount: selectedAccount
         });
     };
 
@@ -84,16 +133,41 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
             visible: true,
             type: 'reject',
             claim,
-            remarks: ''
+            remarks: '',
+            sanctionedAmounts: {},
+            selectedPayableAccount: ''
         });
     };
 
     const confirmAction = async () => {
-        const { type, claim, remarks } = actionModal;
+        const { type, claim, remarks, sanctionedAmounts, selectedPayableAccount } = actionModal;
         
         if (type === 'reject' && !remarks.trim()) {
             Alert.alert('Error', 'Rejection reason is required');
             return;
+        }
+
+        // Validate sanctioned amounts and payable account for approval
+        if (type === 'approve') {
+            // Validate payable account only if accounts were loaded
+            if (payableAccounts.length > 0 && !selectedPayableAccount) {
+                Alert.alert('Error', 'Please select a Payable Account');
+                return;
+            }
+            
+            // Validate sanctioned amounts
+            for (const [idx, amount] of Object.entries(sanctionedAmounts)) {
+                const numAmount = parseFloat(amount);
+                if (isNaN(numAmount) || numAmount <= 0) {
+                    Alert.alert('Error', `Invalid sanctioned amount for expense item ${parseInt(idx) + 1}`);
+                    return;
+                }
+                const claimedAmount = claim.expenses[idx]?.amount || 0;
+                if (numAmount > claimedAmount) {
+                    Alert.alert('Error', `Sanctioned amount cannot exceed claimed amount for expense item ${parseInt(idx) + 1}`);
+                    return;
+                }
+            }
         }
 
         setLoading(true);
@@ -101,17 +175,34 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
             let response;
             
             if (type === 'approve') {
-                response = await apiService.approveExpenseClaim(claim.name, remarks);
+                // Send sanctioned amounts and payable account with approval
+                response = await apiService.approveExpenseClaim(
+                    claim.name, 
+                    remarks,
+                    sanctionedAmounts,
+                    selectedPayableAccount
+                );
             } else {
                 response = await apiService.rejectExpenseClaim(claim.name, remarks);
             }
 
             if (response.success) {
+                let message;
+                if (type === 'approve') {
+                    // Calculate total from sanctionedAmounts
+                    const totalSanctioned = Object.values(sanctionedAmounts)
+                        .reduce((sum, amt) => sum + parseFloat(amt || 0), 0);
+                    
+                    message = `Expense claim approved successfully\nTotal Sanctioned: ₹${totalSanctioned.toFixed(2)}`;
+                } else {
+                    message = `Expense claim ${type}d successfully`;
+                }
+                    
                 Alert.alert(
                     'Success',
-                    `Expense claim ${type}d successfully`,
+                    message,
                     [{ text: 'OK', onPress: () => {
-                        setActionModal({ visible: false, type: '', claim: null, remarks: '' });
+                        setActionModal({ visible: false, type: '', claim: null, remarks: '', sanctionedAmounts: {}, selectedPayableAccount: '' });
                         loadClaims();
                     }}]
                 );
@@ -413,50 +504,177 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
                 onRequestClose={() => setActionModal({ ...actionModal, visible: false })}
             >
                 <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>
-                            {actionModal.type === 'approve' ? 'Approve' : 'Reject'} Expense Claim
-                        </Text>
-                        <Text style={styles.modalSubtitle}>
-                            {actionModal.claim?.name}
-                        </Text>
+                    <ScrollView 
+                        contentContainerStyle={styles.modalScrollContent}
+                        showsVerticalScrollIndicator={false}
+                    >
+                        <View style={styles.modalContent}>
+                            <Text style={styles.modalTitle}>
+                                {actionModal.type === 'approve' ? 'Approve' : 'Reject'} Expense Claim
+                            </Text>
+                            <Text style={styles.modalSubtitle}>
+                                {actionModal.claim?.name}
+                            </Text>
+                            <Text style={styles.modalEmployee}>
+                                {actionModal.claim?.employee_name}
+                            </Text>
 
-                        <Text style={styles.modalLabel}>
-                            {actionModal.type === 'approve' ? 'Remarks (Optional)' : 'Rejection Reason *'}
-                        </Text>
-                        <TextInput
-                            style={styles.modalInput}
-                            value={actionModal.remarks}
-                            onChangeText={(text) => setActionModal({ ...actionModal, remarks: text })}
-                            placeholder={actionModal.type === 'approve' 
-                                ? 'Add approval remarks...' 
-                                : 'Why is this claim being rejected?'}
-                            multiline
-                            numberOfLines={4}
-                            textAlignVertical="top"
-                        />
+                            {/* Payable Account Selection (only for approve) */}
+                            {actionModal.type === 'approve' && (
+                                <View style={styles.payableAccountSection}>
+                                    <Text style={styles.sectionLabel}>
+                                        Payable Account {payableAccounts.length > 0 ? '*' : '(Optional)'}
+                                    </Text>
+                                    {payableAccounts.length === 0 ? (
+                                        <View style={styles.noAccountsWarning}>
+                                            <Text style={styles.warningText}>
+                                                ⚠️ No payable accounts configured. Please configure Payable Accounts in your Chart of Accounts or set a default expense claim payable account in Company settings.
+                                            </Text>
+                                        </View>
+                                    ) : (
+                                        <>
+                                            <View style={styles.pickerContainer}>
+                                                <Picker
+                                                    selectedValue={actionModal.selectedPayableAccount}
+                                                    onValueChange={(value) => 
+                                                        setActionModal({ ...actionModal, selectedPayableAccount: value })
+                                                    }
+                                                    style={styles.picker}
+                                                >
+                                                    <Picker.Item label="Select Payable Account..." value="" />
+                                                    {payableAccounts.map((account) => (
+                                                        <Picker.Item
+                                                            key={account.name}
+                                                            label={`${account.account_name}${account.account_number ? ` (${account.account_number})` : ''}`}
+                                                            value={account.name}
+                                                        />
+                                                    ))}
+                                                </Picker>
+                                            </View>
+                                            {defaultPayableAccount === actionModal.selectedPayableAccount && (
+                                                <Text style={styles.defaultAccountHint}>Default account</Text>
+                                            )}
+                                        </>
+                                    )}
+                                </View>
+                            )}
 
-                        <View style={styles.modalButtons}>
-                            <TouchableOpacity
-                                style={[styles.modalButton, styles.modalCancelButton]}
-                                onPress={() => setActionModal({ visible: false, type: '', claim: null, remarks: '' })}
-                            >
-                                <Text style={styles.modalCancelText}>Cancel</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[
-                                    styles.modalButton,
-                                    actionModal.type === 'approve' ? styles.modalApproveButton : styles.modalRejectButton
-                                ]}
-                                onPress={confirmAction}
-                                disabled={loading}
-                            >
-                                <Text style={styles.modalConfirmText}>
-                                    {loading ? 'Processing...' : 'Confirm'}
-                                </Text>
-                            </TouchableOpacity>
+                            {/* Sanctioned Amounts Editor (only for approve) */}
+                            {actionModal.type === 'approve' && actionModal.claim?.expenses && (
+                                <View style={styles.sanctionSection}>
+                                    <Text style={styles.sanctionTitle}>Sanctioned Amounts</Text>
+                                    <Text style={styles.sanctionSubtitle}>
+                                        You can approve full amount or enter custom sanctioned amounts
+                                    </Text>
+                                    
+                                    {actionModal.claim.expenses.map((expense, idx) => {
+                                        const claimedAmount = expense.amount || 0;
+                                        const currentSanctioned = actionModal.sanctionedAmounts[idx] !== undefined 
+                                            ? actionModal.sanctionedAmounts[idx] 
+                                            : claimedAmount;
+                                        
+                                        return (
+                                            <View key={idx} style={styles.sanctionItem}>
+                                                <View style={styles.sanctionItemHeader}>
+                                                    <Text style={styles.sanctionExpenseType}>
+                                                        {idx + 1}. {expense.expense_type}
+                                                    </Text>
+                                                    <Text style={styles.sanctionClaimedAmount}>
+                                                        Claimed: ₹{claimedAmount.toFixed(2)}
+                                                    </Text>
+                                                </View>
+                                                
+                                                <Text style={styles.sanctionDescription} numberOfLines={2}>
+                                                    {expense.description}
+                                                </Text>
+                                                
+                                                <View style={styles.sanctionInputRow}>
+                                                    <Text style={styles.sanctionInputLabel}>Sanctioned Amount:</Text>
+                                                    <TextInput
+                                                        style={styles.sanctionInput}
+                                                        value={String(currentSanctioned)}
+                                                        onChangeText={(text) => {
+                                                            // Allow only numbers and one decimal point
+                                                            const sanitized = text.replace(/[^0-9.]/g, '');
+                                                            const parts = sanitized.split('.');
+                                                            let finalValue = parts[0];
+                                                            
+                                                            // Allow only one decimal point with max 2 decimal places
+                                                            if (parts.length > 1) {
+                                                                finalValue = parts[0] + '.' + parts.slice(1).join('').substring(0, 2);
+                                                            }
+                                                            
+                                                            const newAmounts = { ...actionModal.sanctionedAmounts };
+                                                            newAmounts[idx] = finalValue;
+                                                            setActionModal({ ...actionModal, sanctionedAmounts: newAmounts });
+                                                        }}
+                                                        keyboardType="decimal-pad"
+                                                        placeholder="0.00"
+                                                        returnKeyType="done"
+                                                    />
+                                                    <TouchableOpacity
+                                                        style={styles.fullAmountButton}
+                                                        onPress={() => {
+                                                            const newAmounts = { ...actionModal.sanctionedAmounts };
+                                                            newAmounts[idx] = claimedAmount.toFixed(2);
+                                                            setActionModal({ ...actionModal, sanctionedAmounts: newAmounts });
+                                                        }}
+                                                    >
+                                                        <Text style={styles.fullAmountButtonText}>Full</Text>
+                                                    </TouchableOpacity>
+                                                </View>
+                                            </View>
+                                        );
+                                    })}
+                                    
+                                    <View style={styles.sanctionTotalRow}>
+                                        <Text style={styles.sanctionTotalLabel}>Total Sanctioned:</Text>
+                                        <Text style={styles.sanctionTotalAmount}>
+                                            ₹{Object.values(actionModal.sanctionedAmounts)
+                                                .reduce((sum, amt) => sum + parseFloat(amt || 0), 0)
+                                                .toFixed(2)}
+                                        </Text>
+                                    </View>
+                                </View>
+                            )}
+
+                            <Text style={styles.modalLabel}>
+                                {actionModal.type === 'approve' ? 'Remarks (Optional)' : 'Rejection Reason *'}
+                            </Text>
+                            <TextInput
+                                style={styles.modalInput}
+                                value={actionModal.remarks}
+                                onChangeText={(text) => setActionModal({ ...actionModal, remarks: text })}
+                                placeholder={actionModal.type === 'approve' 
+                                    ? 'Add approval remarks...' 
+                                    : 'Why is this claim being rejected?'}
+                                multiline
+                                numberOfLines={3}
+                                textAlignVertical="top"
+                            />
+
+                            <View style={styles.modalButtons}>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, styles.modalCancelButton]}
+                                    onPress={() => setActionModal({ visible: false, type: '', claim: null, remarks: '', sanctionedAmounts: {} })}
+                                >
+                                    <Text style={styles.modalCancelText}>Cancel</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.modalButton,
+                                        actionModal.type === 'approve' ? styles.modalApproveButton : styles.modalRejectButton
+                                    ]}
+                                    onPress={confirmAction}
+                                    disabled={loading}
+                                >
+                                    <Text style={styles.modalConfirmText}>
+                                        {loading ? 'Processing...' : 'Confirm'}
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
                         </View>
-                    </View>
+                    </ScrollView>
                 </View>
             </Modal>
         </View>
@@ -762,26 +980,174 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: 'rgba(0,0,0,0.5)',
         justifyContent: 'center',
-        alignItems: 'center',
         padding: 16,
+    },
+    modalScrollContent: {
+        flexGrow: 1,
+        justifyContent: 'center',
     },
     modalContent: {
         backgroundColor: colors.white,
         borderRadius: 14,
         padding: 16,
         width: '100%',
-        maxWidth: 400,
+        maxWidth: 500,
+        alignSelf: 'center',
     },
     modalTitle: {
         fontSize: 16,
         fontWeight: '600',
         color: colors.textPrimary,
-        marginBottom: 6,
+        marginBottom: 4,
     },
     modalSubtitle: {
         fontSize: 12,
         color: colors.textSecondary,
+        marginBottom: 2,
+    },
+    modalEmployee: {
+        fontSize: 13,
+        color: colors.primary,
+        fontWeight: '500',
+        marginBottom: 16,
+    },
+    payableAccountSection: {
+        marginBottom: 16,
+    },
+    sectionLabel: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: colors.textPrimary,
+        marginBottom: 8,
+    },
+    pickerContainer: {
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: 8,
+        backgroundColor: colors.white,
+    },
+    picker: {
+        height: 50,
+    },
+    defaultAccountHint: {
+        fontSize: 11,
+        color: colors.success,
+        marginTop: 4,
+        fontStyle: 'italic',
+    },
+    noAccountsWarning: {
+        backgroundColor: '#FFF3CD',
+        borderRadius: 8,
+        padding: 12,
+        borderWidth: 1,
+        borderColor: '#FFE69C',
+    },
+    warningText: {
+        fontSize: 12,
+        color: '#856404',
+        lineHeight: 18,
+    },
+    sanctionSection: {
+        backgroundColor: colors.cardBackground,
+        borderRadius: 10,
+        padding: 12,
+        marginBottom: 16,
+        borderWidth: 1,
+        borderColor: colors.border,
+    },
+    sanctionTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: colors.textPrimary,
+        marginBottom: 4,
+    },
+    sanctionSubtitle: {
+        fontSize: 11,
+        color: colors.textSecondary,
         marginBottom: 12,
+        lineHeight: 16,
+    },
+    sanctionItem: {
+        backgroundColor: colors.white,
+        borderRadius: 8,
+        padding: 10,
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: colors.border,
+    },
+    sanctionItemHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        marginBottom: 6,
+    },
+    sanctionExpenseType: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: colors.textPrimary,
+        flex: 1,
+        marginRight: 8,
+    },
+    sanctionClaimedAmount: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: colors.primary,
+    },
+    sanctionDescription: {
+        fontSize: 11,
+        color: colors.textSecondary,
+        marginBottom: 8,
+    },
+    sanctionInputRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    sanctionInputLabel: {
+        fontSize: 11,
+        fontWeight: '500',
+        color: colors.textPrimary,
+    },
+    sanctionInput: {
+        flex: 1,
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        fontSize: 12,
+        color: colors.textPrimary,
+        backgroundColor: colors.white,
+    },
+    fullAmountButton: {
+        backgroundColor: colors.primary,
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 6,
+    },
+    fullAmountButtonText: {
+        color: colors.white,
+        fontSize: 11,
+        fontWeight: '600',
+    },
+    sanctionTotalRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingTop: 10,
+        marginTop: 4,
+        borderTopWidth: 1,
+        borderTopColor: colors.border,
+    },
+    sanctionTotalLabel: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: colors.textPrimary,
+    },
+    sanctionTotalAmount: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: colors.success,
     },
     modalLabel: {
         fontSize: 13,
@@ -796,7 +1162,7 @@ const styles = StyleSheet.create({
         padding: 10,
         fontSize: 13,
         color: colors.textPrimary,
-        minHeight: 90,
+        minHeight: 70,
         marginBottom: 16,
     },
     modalButtons: {

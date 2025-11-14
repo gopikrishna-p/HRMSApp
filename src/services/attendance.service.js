@@ -39,6 +39,59 @@ class AttendanceService {
         return ApiService.get(ENDPOINTS.GET_USER_WFH_INFO);
     }
 
+    // Get today's attendance status for current employee (check-in/out times)
+    async getTodayAttendanceStatus(employee) {
+        try {
+            const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+            const response = await ApiService.get('/api/method/hrms.api.get_attendance_records', {
+                employee: employee,
+                start_date: today,
+                end_date: today
+            });
+            
+            console.log('Today attendance response:', response);
+            
+            // Extract attendance data from response
+            let attendanceRecords = [];
+            if (response?.success || response?.data?.message?.status === 'success') {
+                attendanceRecords = response.data?.message?.data || response.data?.data || [];
+            }
+            
+            // Get the first (today's) record if exists
+            if (attendanceRecords && attendanceRecords.length > 0) {
+                const record = attendanceRecords[0];
+                return {
+                    hasCheckedIn: !!record.in_time,
+                    hasCheckedOut: !!(record.out_time || record.custom_out_time_copy),
+                    checkInTime: record.in_time,
+                    checkOutTime: record.out_time || record.custom_out_time_copy,
+                    status: record.status,
+                    workType: record.work_type || 'Office'
+                };
+            }
+            
+            // No attendance record for today
+            return {
+                hasCheckedIn: false,
+                hasCheckedOut: false,
+                checkInTime: null,
+                checkOutTime: null,
+                status: null,
+                workType: null
+            };
+        } catch (error) {
+            console.error('Error fetching today attendance status:', error);
+            return {
+                hasCheckedIn: false,
+                hasCheckedOut: false,
+                checkInTime: null,
+                checkOutTime: null,
+                status: null,
+                workType: null
+            };
+        }
+    }
+
     async getEmployeeWFHList() {
         return ApiService.get(ENDPOINTS.GET_EMPLOYEE_WFH_LIST);
     }

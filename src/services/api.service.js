@@ -790,13 +790,32 @@ class ApiService {
      * Approve expense claim (Admin/Approver)
      * @param {string} claimId - Expense Claim ID
      * @param {string} remarks - Optional approval remarks
+     * @param {object} sanctionedAmounts - Custom sanctioned amounts per expense item
+     * @param {string} payableAccount - Payable account for the expense claim
      * @returns {Promise} Response with approval status
      */
-    approveExpenseClaim(claimId, remarks = '') {
-        return this.post(m('approve_expense_claim'), {
+    approveExpenseClaim(claimId, remarks = '', sanctionedAmounts = {}, payableAccount = null) {
+        const data = {
             claim_id: claimId,
-            remarks
-        });
+            remarks,
+            sanctioned_amounts: sanctionedAmounts
+        };
+        
+        if (payableAccount) {
+            data.payable_account = payableAccount;
+        }
+        
+        return this.post(m('approve_expense_claim'), data);
+    }
+
+    /**
+     * Get list of payable accounts for expense claims (Admin/Approver)
+     * @param {string} company - Company name (optional)
+     * @returns {Promise} Response with list of payable accounts
+     */
+    getPayableAccounts(company = null) {
+        const params = company ? { company } : {};
+        return this.get(m('get_payable_accounts'), params);
     }
 
     /**

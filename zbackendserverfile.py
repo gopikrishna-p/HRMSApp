@@ -1163,23 +1163,146 @@ def get_leave_balance_map(employee: str) -> dict[str, dict[str, float]]:
 
 
 @frappe.whitelist()
-def get_holidays_for_employee(employee: str) -> list[dict]:
-	holiday_list = get_holiday_list_for_employee(employee, raise_exception=False)
-	if not holiday_list:
-		return []
-
-	Holiday = frappe.qb.DocType("Holiday")
-	holidays = (
-		frappe.qb.from_(Holiday)
-		.select(Holiday.name, Holiday.holiday_date, Holiday.description, Holiday.weekly_off)
-		.where(Holiday.parent == holiday_list)
-		.orderby(Holiday.holiday_date, order=Order.asc)
-	).run(as_dict=True)
-
-	for holiday in holidays:
-		holiday["description"] = strip_html(holiday["description"] or "").strip()
-
-	return holidays
+def get_employee_holidays(employee: str = None, year: str = None) -> dict:
+	"""
+	Get comprehensive holiday information for employee or admin.
+	Works for both employees (viewing their own) and HR managers (viewing any employee).
+	
+	Args:
+		employee: Employee ID (optional, defaults to current user's employee)
+		year: Optional year filter (e.g., "2025")
+		
+	Returns:
+		dict with holiday list details, all holidays, and statistics
+	"""
+	try:
+		from datetime import datetime
+		
+		# Get employee if not provided
+		if not employee:
+			employee = frappe.db.get_value("Employee", {"user_id": frappe.session.user}, "name")
+			if not employee:
+				return {
+					"data": None,
+					"message": _("No employee record found for current user"),
+					"status": "error"
+				}
+		
+		# Check permissions
+		current_user = frappe.session.user
+		employee_user = frappe.db.get_value("Employee", employee, "user_id")
+		user_roles = frappe.get_roles(current_user)
+		
+		# Allow if: user is viewing their own data OR user has HR Manager/Admin role
+		is_own_data = employee_user == current_user
+		is_hr_manager = "HR Manager" in user_roles or "System Manager" in user_roles
+		
+		if not (is_own_data or is_hr_manager):
+			return {
+				"data": None,
+				"message": _("You don't have permission to view this employee's holidays"),
+				"status": "error"
+			}
+		
+		# Get employee's holiday list
+		holiday_list_name = get_holiday_list_for_employee(employee, raise_exception=False)
+		
+		if not holiday_list_name:
+			return {
+				"data": None,
+				"message": _("No holiday list assigned to this employee"),
+				"status": "error"
+			}
+		
+		# Get holiday list details
+		holiday_list = frappe.get_doc("Holiday List", holiday_list_name)
+		
+		# Build filters for holidays
+		filters = {"parent": holiday_list_name}
+		
+		# Filter by year if specified
+		if year:
+			year_int = int(year)
+			filters["holiday_date"] = ["between", [f"{year_int}-01-01", f"{year_int}-12-31"]]
+		
+		# Fetch all holidays (including weekly offs)
+		holidays = frappe.get_all(
+			"Holiday",
+			filters=filters,
+			fields=["name", "holiday_date", "description", "weekly_off"],
+			order_by="holiday_date asc"
+		)
+		
+		# Clean descriptions
+		for holiday in holidays:
+			holiday["description"] = strip_html(holiday["description"] or "").strip()
+		
+		# Calculate statistics
+		today = getdate()
+		total = len(holidays)
+		weekly_offs = sum(1 for h in holidays if h.get("weekly_off"))
+		public_holidays = total - weekly_offs
+		upcoming = sum(1 for h in holidays if getdate(h["holiday_date"]) >= today)
+		past = total - upcoming
+		
+		# Count holidays in current month
+		current_month = today.month
+		current_year = today.year
+		this_month = sum(
+			1 for h in holidays 
+			if getdate(h["holiday_date"]).month == current_month 
+			and getdate(h["holiday_date"]).year == current_year
+		)
+		
+		# Group by month
+		holidays_by_month = {}
+		for holiday in holidays:
+			holiday_date = getdate(holiday["holiday_date"])
+			month_key = holiday_date.strftime("%Y-%m")
+			if month_key not in holidays_by_month:
+				holidays_by_month[month_key] = {
+					"month": holiday_date.strftime("%B %Y"),
+					"holidays": []
+				}
+			holidays_by_month[month_key]["holidays"].append(holiday)
+		
+		return {
+			"data": {
+				"employee": employee,
+				"holiday_list": {
+					"name": holiday_list.name,
+					"holiday_list_name": holiday_list.holiday_list_name,
+					"from_date": str(holiday_list.from_date) if holiday_list.from_date else None,
+					"to_date": str(holiday_list.to_date) if holiday_list.to_date else None,
+					"weekly_off": holiday_list.weekly_off,
+					"country": holiday_list.country,
+					"color": holiday_list.color
+				},
+				"holidays": holidays,
+				"holidays_by_month": holidays_by_month,
+				"statistics": {
+					"total": total,
+					"weekly_offs": weekly_offs,
+					"public_holidays": public_holidays,
+					"upcoming": upcoming,
+					"past": past,
+					"this_month": this_month
+				}
+			},
+			"message": _("Holidays fetched successfully"),
+			"status": "success"
+		}
+		
+	except Exception as e:
+		frappe.log_error(
+			f"Get Employee Holidays Error: {str(e)}\n{frappe.get_traceback()}", 
+			"Employee Holidays API"
+		)
+		return {
+			"data": None,
+			"message": str(e),
+			"status": "error"
+		}
 
 
 @frappe.whitelist()
@@ -1316,9 +1439,8 @@ def submit_leave_application(
 			"status": "Open",
 		})
 		
-		# Insert and submit
+		# Insert only (don't submit yet - it needs approval)
 		leave_app.insert(ignore_permissions=True)
-		leave_app.submit()
 		frappe.db.commit()
 		
 		# Get updated leave balance
@@ -1332,7 +1454,7 @@ def submit_leave_application(
 		
 		return {
 			"status": "success",
-			"message": _("Leave application submitted successfully"),
+			"message": _("Leave application submitted successfully and pending approval"),
 			"application_id": leave_app.name,
 			"employee": employee,
 			"employee_name": leave_app.employee_name,
@@ -1340,7 +1462,9 @@ def submit_leave_application(
 			"from_date": str(leave_app.from_date),
 			"to_date": str(leave_app.to_date),
 			"total_leave_days": leave_app.total_leave_days,
-			"leave_balance": balance.get(leave_type, {}).get("remaining_leaves", 0),
+			"application_status": leave_app.status,
+			"docstatus": leave_app.docstatus,
+			"leave_balance": balance.get(leave_type, {}).get("balance_leaves", 0),
 		}
 		
 	except Exception as e:
@@ -1377,11 +1501,14 @@ def approve_leave_application(application_id: str, remarks: str | None = None) -
 		if leave_app.status != "Open":
 			frappe.throw(_("This leave application has already been {0}").format(leave_app.status.lower()))
 		
-		# Approve
+		# Approve and submit
 		leave_app.status = "Approved"
 		if remarks:
 			leave_app.add_comment("Comment", f"Approved: {remarks}")
 		leave_app.save(ignore_permissions=True)
+		
+		# Submit the document after approval
+		leave_app.submit()
 		frappe.db.commit()
 		
 		# Get updated balance
@@ -1439,10 +1566,13 @@ def reject_leave_application(application_id: str, reason: str) -> dict:
 		if leave_app.status != "Open":
 			frappe.throw(_("This leave application has already been {0}").format(leave_app.status.lower()))
 		
-		# Reject
+		# Reject and submit
 		leave_app.status = "Rejected"
 		leave_app.add_comment("Comment", f"Rejected: {reason}")
 		leave_app.save(ignore_permissions=True)
+		
+		# Submit the document after rejection
+		leave_app.submit()
 		frappe.db.commit()
 		
 		# Send notification to employee
@@ -2471,18 +2601,27 @@ def submit_expense_claim(
 
 
 @frappe.whitelist()
-def approve_expense_claim(claim_id: str, remarks: str | None = None) -> dict:
+def approve_expense_claim(
+	claim_id: str, 
+	remarks: str | None = None,
+	sanctioned_amounts: str | None = None,
+	payable_account: str | None = None,
+) -> dict:
 	"""
 	Approve an expense claim (for admins/approvers).
 	
 	Args:
 		claim_id: Expense Claim ID
 		remarks: Optional approval remarks
+		sanctioned_amounts: JSON dict or dict of expense index -> sanctioned amount {0: 1000.0, 1: 500.0}
+		payable_account: Payable Account for this expense claim (mandatory for submission)
 	
 	Returns:
 		Dict with approval status
 	"""
 	try:
+		import json
+		
 		# Get expense claim
 		claim = frappe.get_doc("Expense Claim", claim_id)
 		
@@ -2502,6 +2641,41 @@ def approve_expense_claim(claim_id: str, remarks: str | None = None) -> dict:
 		if claim.approval_status == "Rejected":
 			frappe.throw(_("Cannot approve a rejected expense claim"))
 		
+		# Parse sanctioned amounts if provided
+		sanctioned_amounts_dict = {}
+		if sanctioned_amounts:
+			try:
+				sanctioned_amounts_dict = json.loads(sanctioned_amounts) if isinstance(sanctioned_amounts, str) else sanctioned_amounts
+				# Convert string keys to integers
+				sanctioned_amounts_dict = {int(k): float(v) for k, v in sanctioned_amounts_dict.items()}
+			except Exception as parse_error:
+				frappe.log_error(f"Failed to parse sanctioned_amounts: {str(parse_error)}", "Expense Claim Approval")
+				# Continue without custom sanctioned amounts
+		
+		# Update sanctioned amounts for each expense item
+		if sanctioned_amounts_dict:
+			for idx, expense in enumerate(claim.expenses):
+				if idx in sanctioned_amounts_dict:
+					new_sanctioned = float(sanctioned_amounts_dict[idx])
+					
+					# Validate: sanctioned amount should not exceed claimed amount
+					if new_sanctioned > expense.amount:
+						frappe.throw(_(f"Sanctioned amount (₹{new_sanctioned}) cannot exceed claimed amount (₹{expense.amount}) for expense item {idx + 1}"))
+					
+					if new_sanctioned < 0:
+						frappe.throw(_(f"Sanctioned amount cannot be negative for expense item {idx + 1}"))
+					
+					expense.sanctioned_amount = new_sanctioned
+		
+		# Set payable account if provided (mandatory for submission)
+		if payable_account:
+			claim.payable_account = payable_account
+		elif not claim.payable_account:
+			# Try to fetch default payable account from company
+			default_payable = frappe.get_cached_value("Company", claim.company, "default_expense_claim_payable_account")
+			if default_payable:
+				claim.payable_account = default_payable
+		
 		# Approve
 		claim.approval_status = "Approved"
 		claim.status = "Approved"
@@ -2509,6 +2683,7 @@ def approve_expense_claim(claim_id: str, remarks: str | None = None) -> dict:
 		if remarks:
 			claim.add_comment("Comment", f"Approved: {remarks}")
 		
+		# Save and recalculate totals
 		claim.save(ignore_permissions=True)
 		frappe.db.commit()
 		
@@ -2524,6 +2699,8 @@ def approve_expense_claim(claim_id: str, remarks: str | None = None) -> dict:
 			"claim_id": claim_id,
 			"employee": claim.employee,
 			"total_claimed_amount": claim.total_claimed_amount,
+			"total_sanctioned_amount": claim.total_sanctioned_amount,
+			"payable_account": claim.payable_account,
 		}
 		
 	except Exception as e:
@@ -2642,6 +2819,7 @@ def get_employee_expense_claims(
 			"total_sanctioned_amount",
 			"total_amount_reimbursed",
 			"is_paid",
+			"payable_account",
 			"project",
 			"cost_center",
 			"remark",
@@ -2753,6 +2931,7 @@ def get_admin_expense_claims(
 			"total_sanctioned_amount",
 			"total_amount_reimbursed",
 			"is_paid",
+			"payable_account",
 			"project",
 			"cost_center",
 			"remark",
@@ -2809,6 +2988,59 @@ def get_admin_expense_claims(
 			"status": "error",
 			"message": str(e),
 			"claims": [],
+		}
+
+
+@frappe.whitelist()
+def get_payable_accounts(company: str | None = None) -> dict:
+	"""
+	Get list of payable accounts for expense claims.
+	
+	Args:
+		company: Company name (optional, uses employee's company if not provided)
+	
+	Returns:
+		Dict with list of payable accounts
+	"""
+	try:
+		# If no company specified, get from current user's employee
+		if not company:
+			employee = get_employee_by_user()
+			if employee:
+				company = frappe.get_value("Employee", employee, "company")
+		
+		if not company:
+			frappe.throw(_("Company is required to fetch payable accounts"))
+		
+		# Get payable accounts (account_type = "Payable")
+		accounts = frappe.get_all(
+			"Account",
+			filters={
+				"company": company,
+				"account_type": "Payable",
+				"is_group": 0,
+				"disabled": 0,
+			},
+			fields=["name", "account_name", "account_number", "parent_account"],
+			order_by="account_name asc",
+		)
+		
+		# Get default payable account from company
+		default_account = frappe.get_cached_value("Company", company, "default_expense_claim_payable_account")
+		
+		return {
+			"status": "success",
+			"accounts": accounts,
+			"default_account": default_account,
+			"company": company,
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Payable Accounts Error: {str(e)}\n{frappe.get_traceback()}", "Payable Accounts")
+		return {
+			"status": "error",
+			"message": str(e),
+			"accounts": [],
 		}
 
 

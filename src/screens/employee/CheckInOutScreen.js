@@ -32,6 +32,16 @@ const CheckInOutScreen = () => {
     const [locationStatus, setLocationStatus] = useState('checking'); // checking | inside | outside | error | wfh
     const [distance, setDistance] = useState(null);
     const [locationError, setLocationError] = useState(null);
+    
+    // Today's attendance status
+    const [todayAttendance, setTodayAttendance] = useState({
+        hasCheckedIn: false,
+        hasCheckedOut: false,
+        checkInTime: null,
+        checkOutTime: null,
+        status: null,
+        workType: null
+    });
 
     const employeeId = employee?.name;
 
@@ -41,6 +51,17 @@ const CheckInOutScreen = () => {
             setWfhEligible(!!res.data.message.wfh_eligible);
         }
     }, []);
+
+    const fetchTodayAttendance = useCallback(async () => {
+        if (!employeeId) return;
+        try {
+            const attendanceStatus = await AttendanceService.getTodayAttendanceStatus(employeeId);
+            setTodayAttendance(attendanceStatus);
+            console.log('Today attendance status:', attendanceStatus);
+        } catch (error) {
+            console.error('Error fetching today attendance:', error);
+        }
+    }, [employeeId]);
 
     const fetchOfficeLocation = useCallback(async () => {
         if (!employeeId) return;
@@ -82,8 +103,9 @@ const CheckInOutScreen = () => {
         if (employeeId) {
             fetchWFHInfo();
             fetchOfficeLocation();
+            fetchTodayAttendance(); // Fetch today's attendance on load
         }
-    }, [employeeId, fetchWFHInfo, fetchOfficeLocation]);
+    }, [employeeId, fetchWFHInfo, fetchOfficeLocation, fetchTodayAttendance]);
 
     // Run location check exactly once after officeLocation is available
     useEffect(() => {
@@ -156,6 +178,9 @@ const CheckInOutScreen = () => {
             if (res.success && res.data?.message) {
                 const m = res.data.message;
                 Alert.alert('Success', `${action} successful!\nRef: ${m.geo_log || m.attendance}\n${isWFH ? 'Mode: WFH' : `Distance: ${distance}m`}`);
+                
+                // Refresh today's attendance after check-in/out
+                fetchTodayAttendance();
             } else {
                 const msg = parseBackendError(res);
                 Alert.alert('Failed', msg);
@@ -206,7 +231,7 @@ const CheckInOutScreen = () => {
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
             >
-                {/* Work Mode */}
+                {/* 1. Work Mode */}
                 <Card style={styles.card}>
                     <Card.Title title="Work Mode" subtitle="Choose your working location" />
                     <Card.Content>
@@ -225,7 +250,88 @@ const CheckInOutScreen = () => {
                     </Card.Content>
                 </Card>
 
-                {/* Location Status (with REFRESH icon at top-right) */}
+                {/* 2. Check-In/Check-Out Actions */}
+                <View style={styles.actionsContainer}>
+                    <Button onPress={() => doAction('Check-In')} style={styles.actionButton} disabled={loading || (!isWFH && locationStatus !== 'inside')}>
+                        <Icon name="sign-in-alt" size={14} /> Check In
+                    </Button>
+
+                    <Button variant="outline" onPress={() => doAction('Check-Out')} style={styles.actionButton} disabled={loading || (!isWFH && locationStatus !== 'inside')}>
+                        <Icon name="sign-out-alt" size={14} /> Check Out
+                    </Button>
+                </View>
+
+                {!isWFH && locationStatus === 'outside' && (
+                    <View style={[styles.bannerError, { borderLeftColor: custom.palette.danger }]}>
+                        <Text style={[styles.errorTitle, { color: custom.palette.danger }]}>⚠️ Check-in/out disabled</Text>
+                        <Text style={[styles.errorText, { color: custom.palette.danger }]}>You are currently {distance}m away. Move closer to the office or enable WFH mode.</Text>
+                    </View>
+                )}
+
+                {/* 3. Today's Attendance Status */}
+                {(todayAttendance.hasCheckedIn || todayAttendance.hasCheckedOut) && (
+                    <Card style={styles.card}>
+                        <Card.Title 
+                            title="Today's Attendance" 
+                            subtitle="Your check-in and check-out times"
+                            left={(props) => <Icon {...props} name="calendar-check" size={20} color={custom.palette.primary} />}
+                        />
+                        <Card.Content>
+                            <View style={styles.attendanceInfoContainer}>
+                                {todayAttendance.hasCheckedIn && (
+                                    <View style={styles.timeRow}>
+                                        <View style={styles.timeIconContainer}>
+                                            <Icon name="sign-in-alt" size={18} color={custom.palette.success} />
+                                            <Text style={styles.timeLabel}>Check In</Text>
+                                        </View>
+                                        <Text style={styles.timeValue}>
+                                            {todayAttendance.checkInTime 
+                                                ? new Date(todayAttendance.checkInTime).toLocaleTimeString('en-US', { 
+                                                    hour: '2-digit', 
+                                                    minute: '2-digit',
+                                                    hour12: true 
+                                                })
+                                                : 'N/A'}
+                                        </Text>
+                                    </View>
+                                )}
+                                
+                                {todayAttendance.hasCheckedOut && (
+                                    <View style={styles.timeRow}>
+                                        <View style={styles.timeIconContainer}>
+                                            <Icon name="sign-out-alt" size={18} color={custom.palette.danger} />
+                                            <Text style={styles.timeLabel}>Check Out</Text>
+                                        </View>
+                                        <Text style={styles.timeValue}>
+                                            {todayAttendance.checkOutTime 
+                                                ? new Date(todayAttendance.checkOutTime).toLocaleTimeString('en-US', { 
+                                                    hour: '2-digit', 
+                                                    minute: '2-digit',
+                                                    hour12: true 
+                                                })
+                                                : 'N/A'}
+                                        </Text>
+                                    </View>
+                                )}
+                                
+                                {todayAttendance.workType && (
+                                    <View style={[styles.workTypeBadge, { backgroundColor: `${custom.palette.primary}20` }]}>
+                                        <Icon 
+                                            name={todayAttendance.workType === 'WFH' ? 'home' : 'building'} 
+                                            size={14} 
+                                            color={custom.palette.primary} 
+                                        />
+                                        <Text style={[styles.workTypeText, { color: custom.palette.primary }]}>
+                                            {todayAttendance.workType === 'WFH' ? 'Work From Home' : 'Office'}
+                                        </Text>
+                                    </View>
+                                )}
+                            </View>
+                        </Card.Content>
+                    </Card>
+                )}
+
+                {/* 4. Location Status (with REFRESH icon at top-right) */}
                 {!isWFH && (
                     <Card style={styles.card}>
                         <Card.Title
@@ -273,7 +379,7 @@ const CheckInOutScreen = () => {
                     </Card>
                 )}
 
-                {/* Office Details */}
+                {/* 5. Office Geofence Details */}
                 {!isWFH && officeLocation && (
                     <Card style={styles.card}>
                         <Card.Title
@@ -298,24 +404,6 @@ const CheckInOutScreen = () => {
                             </View>
                         </Card.Content>
                     </Card>
-                )}
-
-                {/* Actions */}
-                <View style={styles.actionsContainer}>
-                    <Button onPress={() => doAction('Check-In')} style={styles.actionButton} disabled={loading || (!isWFH && locationStatus !== 'inside')}>
-                        <Icon name="sign-in-alt" size={14} /> Check In
-                    </Button>
-
-                    <Button variant="outline" onPress={() => doAction('Check-Out')} style={styles.actionButton} disabled={loading || (!isWFH && locationStatus !== 'inside')}>
-                        <Icon name="sign-out-alt" size={14} /> Check Out
-                    </Button>
-                </View>
-
-                {!isWFH && locationStatus === 'outside' && (
-                    <View style={[styles.bannerError, { borderLeftColor: custom.palette.danger }]}>
-                        <Text style={[styles.errorTitle, { color: custom.palette.danger }]}>⚠️ Check-in/out disabled</Text>
-                        <Text style={[styles.errorText, { color: custom.palette.danger }]}>You are currently {distance}m away. Move closer to the office or enable WFH mode.</Text>
-                    </View>
                 )}
             </ScrollView>
         </View>
@@ -366,6 +454,44 @@ const styles = StyleSheet.create({
     bannerWarnText: { color: '#856404', fontSize: 13 },
     bannerError: { marginTop: 12, padding: 12, backgroundColor: '#FFEBEE', borderRadius: 10, borderLeftWidth: 4 },
     errorTitle: { fontWeight: '700', fontSize: 13 },
+    attendanceInfoContainer: { 
+        gap: 12 
+    },
+    timeRow: { 
+        flexDirection: 'row', 
+        justifyContent: 'space-between', 
+        alignItems: 'center',
+        paddingVertical: 8,
+        borderBottomWidth: 0.5,
+        borderBottomColor: '#E0E0E0'
+    },
+    timeIconContainer: { 
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        gap: 10 
+    },
+    timeLabel: { 
+        fontSize: 14, 
+        fontWeight: '600', 
+        color: '#4B5563' 
+    },
+    timeValue: { 
+        fontSize: 15, 
+        fontWeight: '700', 
+        color: '#111827' 
+    },
+    workTypeBadge: { 
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        gap: 8, 
+        padding: 10, 
+        borderRadius: 8,
+        marginTop: 8
+    },
+    workTypeText: { 
+        fontSize: 13, 
+        fontWeight: '600' 
+    },
 });
 
 export default CheckInOutScreen;

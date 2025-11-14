@@ -10,6 +10,7 @@ import ListItem from '../../components/ui/ListItem';
 import StatCard from '../../components/ui/StatCard';
 import Button from '../../components/common/Button';
 import ApiService from '../../services/api.service';
+import AttendanceService from '../../services/attendance.service';
 import showToast from '../../utils/Toast';
 
 const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navigation }) => {
@@ -18,67 +19,122 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
 
         const [loading, setLoading] = useState(true);
         const [refreshing, setRefreshing] = useState(false);
-        const [analytics, setAnalytics] = useState({
-            attendance: {
-                total_working_days: 0,
-                present_days: 0,
-                wfh_days: 0,
-                absent_days: 0,
-                late_arrivals: 0,
-                total_working_hours: 0,
-                avg_working_hours: 0,
-                attendance_percentage: 0
-            },
-            leave: {
-                balances: {},
-                total_allocated: 0,
-                total_used: 0,
-                total_balance: 0,
-                pending_applications: 0
-            },
-            thisMonth: {
-                present: 0,
-                wfh: 0,
-                absent: 0,
-                late: 0
-            }
-        });
+    const [analytics, setAnalytics] = useState({
+        attendance: {
+            total_working_days: 0,
+            present_days: 0,
+            wfh_days: 0,
+            absent_days: 0,
+            late_arrivals: 0,
+            total_working_hours: 0,
+            avg_working_hours: 0,
+            attendance_percentage: 0
+        },
+        leave: {
+            balances: {},
+            total_allocated: 0,
+            total_used: 0,
+            total_balance: 0,
+            pending_applications: 0
+        },
+        thisMonth: {
+            present: 0,
+            wfh: 0,
+            absent: 0,
+            late: 0
+        }
+    });
 
-        const handleLogout = async () => { await logout(); };
+    // Add state for calculated working hours (using same logic as AttendanceHistoryScreen)
+    const [calculatedHours, setCalculatedHours] = useState({
+        total_working_hours: 0,
+        avg_working_hours: 0
+    });        const handleLogout = async () => { await logout(); };
 
-        // Fetch employee analytics data
-        const fetchAnalytics = async () => {
-            try {
-                if (!employee?.name) {
-                    console.log('No employee ID available yet');
-                    return;
-                }
+    // Get first day of current month
+    const getFirstDayOfCurrentMonth = () => {
+        const today = new Date();
+        return new Date(today.getFullYear(), today.getMonth(), 1);
+    };
 
-                console.log('Fetching analytics for employee:', employee.name);
+    // Format date to YYYY-MM-DD
+    const formatDate = (date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
 
-                // Use the new comprehensive analytics API
-                const response = await ApiService.getEmployeeAnalytics({
-                    employee: employee.name,
-                    period: 'current_month'
+    // Fetch actual attendance records and calculate working hours (same logic as AttendanceHistoryScreen)
+    const fetchActualWorkingHours = async () => {
+        try {
+            if (!employee?.name) return;
+
+            const startDate = formatDate(getFirstDayOfCurrentMonth());
+            const endDate = formatDate(new Date());
+
+            console.log('Fetching attendance history for working hours calculation:', {
+                employee: employee.name,
+                startDate,
+                endDate
+            });
+
+            const result = await AttendanceService.getEmployeeAttendanceHistory(
+                employee.name,
+                startDate,
+                endDate
+            );
+
+            console.log('Attendance history result for hours calculation:', result);
+
+            if (result && result.summary_stats) {
+                setCalculatedHours({
+                    total_working_hours: result.summary_stats.total_working_hours || 0,
+                    avg_working_hours: result.summary_stats.avg_working_hours || 0
                 });
+                console.log('Calculated hours updated:', {
+                    total: result.summary_stats.total_working_hours,
+                    avg: result.summary_stats.avg_working_hours
+                });
+            }
+        } catch (error) {
+            console.error('Error fetching actual working hours:', error);
+        }
+    };
 
-                console.log('Analytics API Response:', JSON.stringify(response, null, 2));
+    // Fetch employee analytics data
+    const fetchAnalytics = async () => {
+        try {
+            if (!employee?.name) {
+                console.log('No employee ID available yet');
+                return;
+            }
 
-                if (response.success && response.data) {
-                    // Backend returns: { message: { status: "success", data: {...}, message: "..." } }
-                    // Extract the analytics data - it's nested inside message.data
-                    const messageData = response.data.message;
-                    let analyticsData = null;
-                    
-                    if (messageData && messageData.data) {
-                        analyticsData = messageData.data;
-                    } else if (messageData && typeof messageData === 'object' && messageData.attendance) {
-                        // Sometimes the data IS the message object itself
-                        analyticsData = messageData;
-                    } else {
-                        analyticsData = response.data;
-                    }
-                    
+            console.log('Fetching analytics for employee:', employee.name);
+
+            // Use the new comprehensive analytics API
+            const response = await ApiService.getEmployeeAnalytics({
+                employee: employee.name,
+                period: 'current_month'
+            });
+
+            console.log('Analytics API Response:', JSON.stringify(response, null, 2));
+
+            if (response.success && response.data) {
+                // Backend returns: { message: { status: "success", data: {...}, message: "..." } }
+                // Extract the analytics data - it's nested inside message.data
+                const messageData = response.data.message;
+                let analyticsData = null;
+                
+                if (messageData && messageData.data) {
+                    analyticsData = messageData.data;
+                } else if (messageData && typeof messageData === 'object' && messageData.attendance) {
+                    // Sometimes the data IS the message object itself
+                    analyticsData = messageData;
+                } else {
+                    analyticsData = response.data;
+                }
+                
                     console.log('Extracted Analytics Data:', JSON.stringify(analyticsData, null, 2));
 
                     // Check if we have the attendance and leave data
@@ -130,6 +186,9 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                         console.log('Setting Analytics State:', newAnalytics);
                         setAnalytics(newAnalytics);
                         console.log('Analytics state updated successfully');
+                        
+                        // Fetch actual working hours using same logic as AttendanceHistoryScreen
+                        await fetchActualWorkingHours();
                     } else {
                         console.error('Analytics data structure unexpected:', analyticsData);
                         showToast({
@@ -168,13 +227,12 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
             }
         }, [employee?.name]);
 
-        // Handle pull-to-refresh
-        const onRefresh = useCallback(() => {
-            setRefreshing(true);
-            fetchAnalytics();
-        }, [employee?.name]);
-
-        // Quick stats for display - All in one row
+    // Handle pull-to-refresh
+    const onRefresh = useCallback(() => {
+        setRefreshing(true);
+        fetchAnalytics();
+        fetchActualWorkingHours();
+    }, [employee?.name]);        // Quick stats for display - All in one row
         const quickStats = [
             { 
                 id: 1, 
@@ -313,8 +371,8 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                         <View style={{ flexDirection: 'row', marginHorizontal: -2 }}>
                             {[
                                 { label: 'Total Working Days', value: analytics.attendance.total_working_days, icon: 'calendar', color: '#6B7280' },
-                                { label: 'Hours', value: Math.round(analytics.attendance.total_working_hours) || 0, icon: 'clock', color: '#8B5CF6' },
-                                { label: 'Avg/Day', value: analytics.attendance.avg_working_hours > 0 ? analytics.attendance.avg_working_hours.toFixed(1) + 'h' : '0h', icon: 'hourglass-half', color: '#10B981' },
+                                { label: 'Hours', value: calculatedHours.total_working_hours || 0, icon: 'clock', color: '#8B5CF6' },
+                                { label: 'Avg/Day', value: calculatedHours.avg_working_hours > 0 ? calculatedHours.avg_working_hours + 'h' : '0h', icon: 'hourglass-half', color: '#10B981' },
                             ].map((stat, index) => (
                                 <View key={index} style={{ flex: 1, paddingHorizontal: 2 }}>
                                     <View style={{ 
