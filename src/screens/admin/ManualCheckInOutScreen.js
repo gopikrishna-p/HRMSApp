@@ -11,7 +11,6 @@ import {
     ScrollView,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { format as fmtDate, addDays, subDays } from 'date-fns';
 
@@ -174,18 +173,21 @@ const ManualCheckInOutScreen = ({ navigation }) => {
     };
 
     const openEditTimes = (row, mode = 'both') => {
-        const t = new Date(date);
-        const defaultCheckIn = new Date(date);
-        defaultCheckIn.setHours(10, 0, 0, 0);
-        const defaultCheckOut = new Date(date);
-        defaultCheckOut.setHours(19, 0, 0, 0);
+        // Pre-fill existing times or use defaults
+        const checkInTime = row.in_time 
+            ? fmtDate(new Date(row.in_time), 'HH:mm') 
+            : '10:00'; // Default check-in time
+        
+        const checkOutTime = (row.out_time || row.custom_out_time_copy) 
+            ? fmtDate(new Date(row.out_time || row.custom_out_time_copy), 'HH:mm') 
+            : '19:00'; // Default check-out time
 
         setEditDialog({
             open: true,
             row,
             mode, // 'in', 'out', or 'both'
-            checkIn: row.in_time ? new Date(row.in_time) : defaultCheckIn,
-            checkOut: row.out_time || row.custom_out_time_copy ? new Date(row.out_time || row.custom_out_time_copy) : defaultCheckOut,
+            checkIn: checkInTime,
+            checkOut: checkOutTime,
             showPicker: null,
         });
     };
@@ -193,27 +195,76 @@ const ManualCheckInOutScreen = ({ navigation }) => {
     const doUpdateTimes = async () => {
         const { row, checkIn, checkOut, mode } = editDialog;
         if (!row) return;
-        
-        const payload = {
-            attendance_id: row.name,
-        };
-        
-        // Only include the fields based on mode
-        if (mode === 'in' || mode === 'both') {
-            payload.check_in_time = checkIn ? fmt(checkIn) : undefined;
-        }
-        if (mode === 'out' || mode === 'both') {
-            payload.check_out_time = checkOut ? fmt(checkOut) : undefined;
-        }
-        
-        const res = await ApiService.updateAttendanceTimes(payload);
-        setSnack({
-            visible: true,
-            msg: res.success ? 'Times updated' : res.message || 'Failed to update',
-        });
-        if (res.success) {
-            setEditDialog({ open: false, row: null, mode: null, checkIn: null, checkOut: null, showPicker: null });
-            fetchList();
+
+        try {
+            const attendanceDate = new Date(row.attendance_date || date);
+            
+            let updateData = {
+                attendance_id: row.name
+            };
+
+            // Prepare check-in time if editing
+            if (mode === 'in' || mode === 'both') {
+                if (!checkIn) {
+                    setSnack({
+                        visible: true,
+                        msg: 'Check-in time is required'
+                    });
+                    return;
+                }
+                
+                const [hours, minutes] = checkIn.split(':');
+                const checkInDateTime = new Date(attendanceDate);
+                checkInDateTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+                
+                // Send as local datetime string without timezone conversion
+                // Format: "YYYY-MM-DD HH:MM:SS" (no timezone info)
+                const year = checkInDateTime.getFullYear();
+                const month = String(checkInDateTime.getMonth() + 1).padStart(2, '0');
+                const day = String(checkInDateTime.getDate()).padStart(2, '0');
+                const hour = String(checkInDateTime.getHours()).padStart(2, '0');
+                const minute = String(checkInDateTime.getMinutes()).padStart(2, '0');
+                const second = '00';
+                
+                updateData.check_in_time = `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+            }
+
+            // Prepare check-out time if editing
+            if (mode === 'out' || mode === 'both') {
+                if (!checkOut) {
+                    setSnack({
+                        visible: true,
+                        msg: 'Check-out time is required'
+                    });
+                    return;
+                }
+                
+                const [hours, minutes] = checkOut.split(':');
+                const checkOutDateTime = new Date(attendanceDate);
+                checkOutDateTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+                
+                // Send as local datetime string without timezone conversion
+                const year = checkOutDateTime.getFullYear();
+                const month = String(checkOutDateTime.getMonth() + 1).padStart(2, '0');
+                const day = String(checkOutDateTime.getDate()).padStart(2, '0');
+                const hour = String(checkOutDateTime.getHours()).padStart(2, '0');
+                const minute = String(checkOutDateTime.getMinutes()).padStart(2, '0');
+                const second = '00';
+                
+                updateData.check_out_time = `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+            }
+
+            const res = await ApiService.updateAttendanceTimes(updateData);
+            setSnack({
+                visible: true,
+                msg: res.success ? 'Times updated' : res.message || 'Failed to update',
+            });
+            if (res.success) {
+                setEditDialog({ open: false, row: null, mode: null, checkIn: null, checkOut: null, showPicker: null });
+                fetchList();
+            }
+        } catch (error) {
+            setSnack({ visible: true, msg: 'Error: ' + error.message });
         }
     };
 
@@ -783,71 +834,32 @@ const ManualCheckInOutScreen = ({ navigation }) => {
 
                         {(editDialog.mode === 'in' || editDialog.mode === 'both') && (
                             <View style={styles.timeInputContainer}>
-                                <Text style={styles.inputLabel}>Check-In (YYYY-MM-DD HH:mm:ss)</Text>
+                                <Text style={styles.inputLabel}>Check-In Time (HH:MM)</Text>
                                 <TextInput
                                     mode="outlined"
-                                    value={editDialog.checkIn ? fmt(editDialog.checkIn) : ''}
-                                    placeholder="YYYY-MM-DD HH:mm:ss"
-                                    right={
-                                        <TextInput.Icon 
-                                            icon="clock" 
-                                            onPress={() => setEditDialog((s) => ({ ...s, showPicker: 'in' }))} 
-                                        />
-                                    }
+                                    value={editDialog.checkIn}
+                                    placeholder="10:00"
                                     onChangeText={(t) =>
-                                        setEditDialog((s) => ({ 
-                                            ...s, 
-                                            checkIn: t ? new Date(t.replace(' ', 'T')) : null 
-                                        }))
+                                        setEditDialog((s) => ({ ...s, checkIn: t }))
                                     }
                                     style={{ backgroundColor: 'white' }}
+                                    keyboardType="numeric"
                                 />
                             </View>
                         )}
 
                         {(editDialog.mode === 'out' || editDialog.mode === 'both') && (
                             <View style={styles.timeInputContainer}>
-                                <Text style={styles.inputLabel}>Check-Out (YYYY-MM-DD HH:mm:ss)</Text>
+                                <Text style={styles.inputLabel}>Check-Out Time (HH:MM)</Text>
                                 <TextInput
                                     mode="outlined"
-                                    value={editDialog.checkOut ? fmt(editDialog.checkOut) : ''}
-                                    placeholder="YYYY-MM-DD HH:mm:ss"
-                                    right={
-                                        <TextInput.Icon 
-                                            icon="clock-end" 
-                                            onPress={() => setEditDialog((s) => ({ ...s, showPicker: 'out' }))} 
-                                        />
-                                    }
+                                    value={editDialog.checkOut}
+                                    placeholder="19:00"
                                     onChangeText={(t) =>
-                                        setEditDialog((s) => ({ 
-                                            ...s, 
-                                            checkOut: t ? new Date(t.replace(' ', 'T')) : null 
-                                        }))
+                                        setEditDialog((s) => ({ ...s, checkOut: t }))
                                     }
                                     style={{ backgroundColor: 'white' }}
-                                />
-                            </View>
-                        )}
-
-                        {editDialog.showPicker && (
-                            <View style={{ marginTop: 8 }}>
-                                <DateTimePicker
-                                    value={
-                                        editDialog[editDialog.showPicker === 'in' ? 'checkIn' : 'checkOut'] || new Date()
-                                    }
-                                    mode="datetime"
-                                    is24Hour
-                                    onChange={(_, d) => {
-                                        if (!d) {
-                                            setEditDialog((s) => ({ ...s, showPicker: null }));
-                                            return;
-                                        }
-                                        setEditDialog((s) =>
-                                            s.showPicker === 'in'
-                                                ? { ...s, checkIn: d, showPicker: null }
-                                                : { ...s, checkOut: d, showPicker: null }
-                                        );
-                                    }}
+                                    keyboardType="numeric"
                                 />
                             </View>
                         )}
