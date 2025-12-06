@@ -49,7 +49,11 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
     const [calculatedHours, setCalculatedHours] = useState({
         total_working_hours: 0,
         avg_working_hours: 0
-    });        const handleLogout = async () => { await logout(); };
+    });
+
+    const [pendingNotifications, setPendingNotifications] = useState(0);
+
+    const handleLogout = async () => { await logout(); };
 
     // Get first day of current month
     const getFirstDayOfCurrentMonth = () => {
@@ -222,6 +226,7 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
         useEffect(() => {
             if (employee?.name) {
                 fetchAnalytics();
+                fetchPendingNotifications();
             } else {
                 setLoading(false);
             }
@@ -232,7 +237,27 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
         setRefreshing(true);
         fetchAnalytics();
         fetchActualWorkingHours();
-    }, [employee?.name]);        // Quick stats for display - All in one row
+        fetchPendingNotifications();
+    }, [employee?.name]);
+
+    // Fetch pending notifications from system
+    const fetchPendingNotifications = async () => {
+        try {
+            if (!employee?.name) return;
+
+            // For employees, notifications are typically announcements/broadcasts from admin
+            // We can count pending items that might require attention
+            // For now, set to 0 unless there's a specific notification API
+            console.log('📢 Fetching pending notifications for employee:', employee.name);
+            
+            // Placeholder - employees typically receive broadcast notifications
+            // In real implementation, this would fetch from a notifications API
+            setPendingNotifications(0);
+        } catch (error) {
+            console.error('Error fetching pending notifications:', error);
+            setPendingNotifications(0);
+        }
+    };        // Quick stats for display - All in one row
         const quickStats = [
             { 
                 id: 1, 
@@ -279,7 +304,7 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                     title="logo" 
                     canGoBack={false} 
                     rightIcon="bell" 
-                    badge={5} 
+                    badge={pendingNotifications > 0 ? pendingNotifications : null}
                     onRightPress={() => navigation.navigate('NotificationScreen')}
                 />
                 
@@ -496,7 +521,7 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                     </Section>
 
                     <Section title="Other" icon="ellipsis-h" tint="#6B7280">
-                        <ListItem title="Notifications" subtitle="View notifications" leftIcon="bell" badge="3"
+                        <ListItem title="Notifications" subtitle="View notifications" leftIcon="bell" badge={pendingNotifications > 0 ? pendingNotifications : null}
                             tint="#6B7280" onPress={() => navigation.navigate('Notifications')} />
                         <ListItem title="Profile" subtitle="Update your profile" leftIcon="user-circle"
                             tint="#6B7280" onPress={() => navigation.navigate('Profile')} />
