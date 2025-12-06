@@ -38,40 +38,125 @@ const AdminDashboard = ({ navigation }) => {
         attendanceRate: 0,
     });
 
+    const [pendingData, setPendingData] = useState({
+        wfhApprovals: 0,
+        leaveApprovals: 0,
+        expenseApprovals: 0,
+        travelApprovals: 0,
+        compLeaveApprovals: 0,
+        notifications: 0,
+    });
+
     const handleLogout = async () => { await logout(); };
 
     useEffect(() => {
-        fetchDashboardStats();
+        fetchDashboardData();
     }, []);
 
-    const fetchDashboardStats = async () => {
+    const fetchDashboardData = async () => {
         try {
             setLoading(true);
-            const response = await ApiService.get('/api/method/hrms.api.get_employee_statistics');
-            if (response.success && response.data?.message) {
-                setStats(response.data.message);
-            } else {
-                showToast({
-                    type: 'error',
-                    text1: 'Error',
-                    text2: 'Failed to load dashboard stats',
-                });
-            }
+            await Promise.all([
+                fetchDashboardStats(),
+                fetchPendingApprovals(),
+            ]);
         } catch (error) {
-            console.error('Dashboard stats error:', error);
-            showToast({
-                type: 'error',
-                text1: 'Error',
-                text2: 'Failed to load dashboard statistics',
-            });
+            console.error('Dashboard load error:', error);
         } finally {
             setLoading(false);
         }
     };
 
+    const fetchDashboardStats = async () => {
+        try {
+            const response = await ApiService.get('/api/method/hrms.api.get_employee_statistics');
+            if (response.success && response.data?.message) {
+                setStats(response.data.message);
+            }
+        } catch (error) {
+            console.error('Dashboard stats error:', error);
+        }
+    };
+
+    const fetchPendingApprovals = async () => {
+        try {
+            const data = { ...pendingData };
+            
+            // Get current employee ID (admin user's employee record)
+            const empId = employee?.name;
+            console.log('📋 Fetching approvals for employee:', empId);
+
+            // Fetch WFH approvals
+            try {
+                const wfhRes = await ApiService.get(`/api/method/hrms.api.get_shift_requests?employee=${empId}&for_approval=true&limit_page_length=500`);
+                if (wfhRes.success) {
+                    data.wfhApprovals = (wfhRes.data?.message || []).length;
+                    console.log('✅ WFH Approvals fetched:', data.wfhApprovals, wfhRes.data?.message);
+                }
+            } catch (e) { 
+                console.log('❌ WFH fetch error:', e?.message); 
+            }
+
+            // Fetch leave approvals
+            try {
+                const leaveRes = await ApiService.get(`/api/method/hrms.api.get_leave_applications?employee=${empId}&for_approval=true&limit_page_length=500`);
+                if (leaveRes.success) {
+                    data.leaveApprovals = (leaveRes.data?.message || []).length;
+                    console.log('✅ Leave Approvals fetched:', data.leaveApprovals, leaveRes.data?.message);
+                }
+            } catch (e) { 
+                console.log('❌ Leave fetch error:', e?.message); 
+            }
+
+            // Fetch expense approvals
+            try {
+                const expenseRes = await ApiService.get(`/api/method/hrms.api.get_expense_claims?employee=${empId}&for_approval=true&limit_page_length=500`);
+                if (expenseRes.success) {
+                    data.expenseApprovals = (expenseRes.data?.message || []).length;
+                    console.log('✅ Expense Approvals fetched:', data.expenseApprovals, expenseRes.data?.message);
+                } else {
+                    console.log('❌ Expense API not successful:', expenseRes);
+                }
+            } catch (e) { 
+                console.log('❌ Expense fetch error:', e?.message); 
+            }
+
+            // Fetch travel approvals
+            try {
+                const travelRes = await ApiService.get(`/api/method/hrms.api.get_travel_requests?employee=${empId}&for_approval=true&limit_page_length=500`);
+                if (travelRes.success) {
+                    data.travelApprovals = (travelRes.data?.message || []).length;
+                    console.log('✅ Travel Approvals fetched:', data.travelApprovals, travelRes.data?.message);
+                }
+            } catch (e) { 
+                console.log('❌ Travel fetch error:', e?.message); 
+            }
+
+            // Fetch comp leave approvals
+            try {
+                const compRes = await ApiService.get(`/api/method/hrms.api.get_comp_offs?employee=${empId}&for_approval=true&limit_page_length=500`);
+                if (compRes.success) {
+                    data.compLeaveApprovals = (compRes.data?.message || []).length;
+                    console.log('✅ Comp Leave Approvals fetched:', data.compLeaveApprovals, compRes.data?.message);
+                }
+            } catch (e) { 
+                console.log('❌ Comp leave fetch error:', e?.message); 
+            }
+
+            // Calculate total notifications
+            data.notifications = data.wfhApprovals + data.leaveApprovals + data.expenseApprovals + 
+                                data.travelApprovals + data.compLeaveApprovals;
+
+            console.log('📊 Final pending data:', data);
+            setPendingData(data);
+        } catch (error) {
+            console.error('Pending approvals fetch error:', error);
+        }
+    };
+
     const onRefresh = async () => {
         setRefreshing(true);
-        await fetchDashboardStats();
+        await fetchDashboardData();
         setRefreshing(false);
     };
 
@@ -87,7 +172,13 @@ const AdminDashboard = ({ navigation }) => {
 
     return (
         <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
-            <AppHeader title="logo" canGoBack={false} rightIcon="bell" badge={5} onRightPress={() => navigation.navigate('AdminNotifications')} />
+            <AppHeader 
+                title="logo" 
+                canGoBack={false} 
+                rightIcon="bell" 
+                badge={pendingData.notifications > 0 ? pendingData.notifications : null}
+                onRightPress={() => navigation.navigate('AdminNotifications')} 
+            />
 
             {loading ? (
                 <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -183,7 +274,7 @@ const AdminDashboard = ({ navigation }) => {
                 <Section title="WFH Policy & Settings" icon="home" tint={custom.palette.success}>
                     <ListItem title="Manage WFH Settings" subtitle="Configure rules & eligibility" leftIcon="cog"
                         tint={custom.palette.success} onPress={() => navigation.navigate('WFHSettings')} />
-                    <ListItem title="WFH Approvals" subtitle="Approve/reject requests" leftIcon="check-circle" badge="5"
+                    <ListItem title="WFH Approvals" subtitle="Approve/reject requests" leftIcon="check-circle" badge={pendingData.wfhApprovals || null}
                         tint={custom.palette.success} onPress={() => navigation.navigate('WFHApprovals')} />
                 </Section>
 
@@ -197,16 +288,16 @@ const AdminDashboard = ({ navigation }) => {
                 </Section>
 
                 <Section title="Leave Management" icon="umbrella-beach" tint="#8B5CF6">
-                    <ListItem title="Leave Approvals" subtitle="Approve/reject leave requests" leftIcon="clipboard-list" badge="8"
+                    <ListItem title="Leave Approvals" subtitle="Approve/reject leave requests" leftIcon="clipboard-list" badge={pendingData.leaveApprovals || null}
                         tint="#8B5CF6" onPress={() => navigation.navigate('LeaveApprovals')} />
-                    <ListItem title="Compensatory Leave Approvals" subtitle="Approve comp leave for holidays" leftIcon="calendar-plus"
+                    <ListItem title="Compensatory Leave Approvals" subtitle="Approve comp leave for holidays" leftIcon="calendar-plus" badge={pendingData.compLeaveApprovals || null}
                         tint="#8B5CF6" onPress={() => navigation.navigate('CompApprovals')} />
                 </Section>
 
                 <Section title="Expense & Travel Management" icon="money-bill-wave" tint="#10B981">
-                    <ListItem title="Expense Claim Approvals" subtitle="Review & approve expense claims" leftIcon="receipt"
+                    <ListItem title="Expense Claim Approvals" subtitle="Review & approve expense claims" leftIcon="receipt" badge={pendingData.expenseApprovals || null}
                         tint="#10B981" onPress={() => navigation.navigate('ExpenseClaimApproval')} />
-                    <ListItem title="Travel Request Approvals" subtitle="Approve/reject travel requests" leftIcon="plane"
+                    <ListItem title="Travel Request Approvals" subtitle="Approve/reject travel requests" leftIcon="plane" badge={pendingData.travelApprovals || null}
                         tint="#10B981" onPress={() => navigation.navigate('TravelRequestApproval')} />
                 </Section>
 
