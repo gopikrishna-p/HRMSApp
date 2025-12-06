@@ -1446,7 +1446,13 @@ def submit_leave_application(
 		# Get updated leave balance
 		balance = get_leave_balance_map(employee)
 		
-		# Send notification to approver
+		# Send notification to approvers (NEW)
+		try:
+			send_leave_approval_notification(leave_app.name, "submitted")
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send approval notification: {str(notif_error)}", "Leave Notification")
+		
+		# Also send to employee
 		try:
 			send_leave_application_notification(leave_app.name, "submitted")
 		except Exception as notif_error:
@@ -2003,7 +2009,13 @@ def submit_compensatory_leave_request(
 		if half_day:
 			date_difference -= 0.5
 		
-		# Send notification to HR
+		# Send notification to approvers (NEW)
+		try:
+			send_comp_leave_approval_notification(comp_leave.name, "submitted")
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send approval notification: {str(notif_error)}", "Comp Leave Notification")
+		
+		# Also send to employee
 		try:
 			send_comp_leave_notification(comp_leave.name, "submitted")
 		except Exception as notif_error:
@@ -2578,7 +2590,13 @@ def submit_expense_claim(
 		expense_claim.insert(ignore_permissions=True)
 		frappe.db.commit()
 		
-		# Send notification to approver
+		# Send notification to approvers (NEW)
+		try:
+			send_expense_approval_notification(expense_claim.name, "submitted")
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send approval notification: {str(notif_error)}", "Expense Claim Notification")
+		
+		# Also send to employee
 		try:
 			send_expense_claim_notification(expense_claim.name, "submitted")
 		except Exception as notif_error:
@@ -3198,7 +3216,13 @@ def submit_travel_request(
 		travel_request.insert(ignore_permissions=True)
 		frappe.db.commit()
 		
-		# Send notification to HR/Admin
+		# Send notification to approvers (NEW)
+		try:
+			send_travel_approval_notification(travel_request.name, "submitted")
+		except Exception as notif_error:
+			frappe.log_error(f"Failed to send approval notification: {str(notif_error)}", "Travel Request Notification")
+		
+		# Also send to employee
 		try:
 			send_travel_request_notification(travel_request.name, "submitted")
 		except Exception as notif_error:
@@ -6384,6 +6408,367 @@ def send_admin_notification(docname):
     return {"status": "success", "message": "Notification sent"}
 
 
+# ============================================================================
+# ADMIN NOTIFICATION SYSTEM - Automatic Notifications for Approvals
+# ============================================================================
+
+def get_approver_tokens(approver_users):
+    """Get FCM tokens for approver users."""
+    if not approver_users:
+        return []
+    
+    if isinstance(approver_users, str):
+        approver_users = [approver_users]
+    
+    tokens = frappe.db.sql(
+        """SELECT fcm_token FROM `tabMobile Device` 
+           WHERE user IN ({users}) AND fcm_token IS NOT NULL AND fcm_token != ''
+        """.format(users=",".join(["%s"] * len(approver_users))),
+        approver_users,
+        as_dict=False
+    )
+    return [t[0] for t in tokens if t[0]]
+
+
+def send_approver_notification(approver_users, title, body, data=None):
+    """Send push notification to approvers."""
+    try:
+        tokens = get_approver_tokens(approver_users)
+        if not tokens:
+            frappe.logger().info(f"⚠️ No tokens found for approvers: {approver_users}")
+            return False
+        
+        if data is None:
+            data = {}
+        
+        data.update({
+            "type": "approval_request",
+            "priority": "high"
+        })
+        
+        result = send_fcm_notification(tokens, title, body, data)
+        frappe.logger().info(f"✅ Admin notification sent to {result.get('success_count', 0)} approvers")
+        return True
+    except Exception as e:
+        frappe.logger().error(f"❌ Failed to send approver notification: {str(e)}")
+        return False
+
+
+def send_leave_approval_notification(application_id, notification_type="submitted"):
+    """Send notification to leave approvers when new application is submitted."""
+    try:
+        leave_app = frappe.get_doc("Leave Application", application_id)
+        
+        # Get all approvers
+        approvers = []
+        
+        # Primary leave approver
+        if leave_app.leave_approver:
+            approvers.append(leave_app.leave_approver)
+        
+        # Department leave approvers
+        if leave_app.department:
+            dept_approvers = frappe.db.sql(
+                """SELECT employee FROM `tabDepartment Approver` 
+                   WHERE parent = %s AND approver_type = 'Leave Approver'""",
+                leave_app.department,
+                as_dict=False
+            )
+            approvers.extend([a[0] for a in dept_approvers])
+        
+        # HR managers as fallback
+        if not approvers:
+            hr_managers = frappe.get_all(
+                "User",
+                filters={"roles": "HR Manager"},
+                pluck="name"
+            )
+            approvers.extend(hr_managers)
+        
+        if not approvers:
+            frappe.logger().warning(f"⚠️ No approvers found for leave application {application_id}")
+            return
+        
+        # Remove duplicates
+        approvers = list(set(approvers))
+        
+        if notification_type == "submitted":
+            title = f"New Leave Request - {leave_app.employee_name}"
+            body = f"Leave request for {leave_app.total_leave_days} day(s) from {leave_app.from_date} to {leave_app.to_date}"
+        elif notification_type == "resubmitted":
+            title = f"Leave Request Resubmitted - {leave_app.employee_name}"
+            body = f"Updated leave request pending approval"
+        else:
+            return
+        
+        data = {
+            "type": "leave_application",
+            "application_id": application_id,
+            "employee": leave_app.employee,
+            "notification_type": notification_type,
+            "from_date": str(leave_app.from_date),
+            "to_date": str(leave_app.to_date)
+        }
+        
+        send_approver_notification(approvers, title, body, data)
+        frappe.logger().info(f"✅ Leave approval notification sent to {len(approvers)} approvers for {application_id}")
+        
+    except Exception as e:
+        frappe.logger().error(f"❌ Error sending leave approval notification: {str(e)}")
+
+
+def send_expense_approval_notification(claim_id, notification_type="submitted"):
+    """Send notification to expense approvers when new claim is submitted."""
+    try:
+        expense_claim = frappe.get_doc("Expense Claim", claim_id)
+        
+        # Get all approvers
+        approvers = []
+        
+        # Employee's expense approver
+        employee = frappe.get_doc("Employee", expense_claim.employee)
+        if employee.expense_approver:
+            approvers.append(employee.expense_approver)
+        
+        # Department expense approvers
+        if expense_claim.department:
+            dept_approvers = frappe.db.sql(
+                """SELECT employee FROM `tabDepartment Approver` 
+                   WHERE parent = %s AND approver_type = 'Expense Approver'""",
+                expense_claim.department,
+                as_dict=False
+            )
+            approvers.extend([a[0] for a in dept_approvers])
+        
+        # HR managers as fallback
+        if not approvers:
+            hr_managers = frappe.get_all(
+                "User",
+                filters={"roles": "HR Manager"},
+                pluck="name"
+            )
+            approvers.extend(hr_managers)
+        
+        if not approvers:
+            frappe.logger().warning(f"⚠️ No approvers found for expense claim {claim_id}")
+            return
+        
+        approvers = list(set(approvers))
+        
+        if notification_type == "submitted":
+            title = f"New Expense Claim - {expense_claim.employee_name}"
+            body = f"Expense claim of ₹{expense_claim.total_claimed_amount} pending approval"
+        elif notification_type == "resubmitted":
+            title = f"Expense Claim Resubmitted - {expense_claim.employee_name}"
+            body = f"Updated expense claim of ₹{expense_claim.total_claimed_amount} pending approval"
+        else:
+            return
+        
+        data = {
+            "type": "expense_claim",
+            "claim_id": claim_id,
+            "employee": expense_claim.employee,
+            "notification_type": notification_type,
+            "amount": str(expense_claim.total_claimed_amount)
+        }
+        
+        send_approver_notification(approvers, title, body, data)
+        frappe.logger().info(f"✅ Expense approval notification sent to {len(approvers)} approvers for {claim_id}")
+        
+    except Exception as e:
+        frappe.logger().error(f"❌ Error sending expense approval notification: {str(e)}")
+
+
+def send_wfh_approval_notification(request_id, notification_type="submitted"):
+    """Send notification to WFH approvers when new request is submitted."""
+    try:
+        shift_request = frappe.get_doc("Shift Request", request_id)
+        
+        # Get all approvers
+        approvers = []
+        
+        # Employee's shift request approver
+        employee = frappe.get_doc("Employee", shift_request.employee)
+        if employee.shift_request_approver:
+            approvers.append(employee.shift_request_approver)
+        
+        # Department approvers
+        if shift_request.department:
+            dept_approvers = frappe.db.sql(
+                """SELECT employee FROM `tabDepartment Approver` 
+                   WHERE parent = %s AND approver_type = 'Shift Request Approver'""",
+                shift_request.department,
+                as_dict=False
+            )
+            approvers.extend([a[0] for a in dept_approvers])
+        
+        # HR managers as fallback
+        if not approvers:
+            hr_managers = frappe.get_all(
+                "User",
+                filters={"roles": "HR Manager"},
+                pluck="name"
+            )
+            approvers.extend(hr_managers)
+        
+        if not approvers:
+            frappe.logger().warning(f"⚠️ No approvers found for WFH request {request_id}")
+            return
+        
+        approvers = list(set(approvers))
+        
+        if notification_type == "submitted":
+            title = f"New WFH Request - {shift_request.employee_name}"
+            body = f"Work from home request for {shift_request.date} pending approval"
+        elif notification_type == "resubmitted":
+            title = f"WFH Request Resubmitted - {shift_request.employee_name}"
+            body = f"Updated WFH request pending approval"
+        else:
+            return
+        
+        data = {
+            "type": "wfh_request",
+            "request_id": request_id,
+            "employee": shift_request.employee,
+            "notification_type": notification_type,
+            "date": str(shift_request.date)
+        }
+        
+        send_approver_notification(approvers, title, body, data)
+        frappe.logger().info(f"✅ WFH approval notification sent to {len(approvers)} approvers for {request_id}")
+        
+    except Exception as e:
+        frappe.logger().error(f"❌ Error sending WFH approval notification: {str(e)}")
+
+
+def send_travel_approval_notification(request_id, notification_type="submitted"):
+    """Send notification to travel approvers when new request is submitted."""
+    try:
+        travel_request = frappe.get_doc("Travel Request", request_id)
+        
+        # Get all approvers
+        approvers = []
+        
+        # Employee's reports_to
+        employee = frappe.get_doc("Employee", travel_request.employee)
+        if employee.reports_to:
+            reports_to_user = frappe.get_value("Employee", employee.reports_to, "user_id")
+            if reports_to_user:
+                approvers.append(reports_to_user)
+        
+        # Department approvers
+        if travel_request.department:
+            dept_approvers = frappe.db.sql(
+                """SELECT employee FROM `tabDepartment Approver` 
+                   WHERE parent = %s""",
+                travel_request.department,
+                as_dict=False
+            )
+            approvers.extend([a[0] for a in dept_approvers])
+        
+        # HR managers as fallback
+        if not approvers:
+            hr_managers = frappe.get_all(
+                "User",
+                filters={"roles": "HR Manager"},
+                pluck="name"
+            )
+            approvers.extend(hr_managers)
+        
+        if not approvers:
+            frappe.logger().warning(f"⚠️ No approvers found for travel request {request_id}")
+            return
+        
+        approvers = list(set(approvers))
+        
+        if notification_type == "submitted":
+            title = f"New Travel Request - {travel_request.employee_name}"
+            body = f"Travel request from {travel_request.travel_from_date} to {travel_request.travel_to_date} pending approval"
+        elif notification_type == "resubmitted":
+            title = f"Travel Request Resubmitted - {travel_request.employee_name}"
+            body = f"Updated travel request pending approval"
+        else:
+            return
+        
+        data = {
+            "type": "travel_request",
+            "request_id": request_id,
+            "employee": travel_request.employee,
+            "notification_type": notification_type,
+            "from_date": str(travel_request.travel_from_date),
+            "to_date": str(travel_request.travel_to_date)
+        }
+        
+        send_approver_notification(approvers, title, body, data)
+        frappe.logger().info(f"✅ Travel approval notification sent to {len(approvers)} approvers for {request_id}")
+        
+    except Exception as e:
+        frappe.logger().error(f"❌ Error sending travel approval notification: {str(e)}")
+
+
+def send_comp_leave_approval_notification(request_id, notification_type="submitted"):
+    """Send notification to approvers when new comp leave request is submitted."""
+    try:
+        comp_off = frappe.get_doc("Compensatory Leave Request", request_id)
+        
+        # Get all approvers
+        approvers = []
+        
+        # Employee's leave approver
+        employee = frappe.get_doc("Employee", comp_off.employee)
+        if employee.leave_approver:
+            approvers.append(employee.leave_approver)
+        
+        # Department leave approvers
+        if comp_off.department:
+            dept_approvers = frappe.db.sql(
+                """SELECT employee FROM `tabDepartment Approver` 
+                   WHERE parent = %s AND approver_type = 'Leave Approver'""",
+                comp_off.department,
+                as_dict=False
+            )
+            approvers.extend([a[0] for a in dept_approvers])
+        
+        # HR managers as fallback
+        if not approvers:
+            hr_managers = frappe.get_all(
+                "User",
+                filters={"roles": "HR Manager"},
+                pluck="name"
+            )
+            approvers.extend(hr_managers)
+        
+        if not approvers:
+            frappe.logger().warning(f"⚠️ No approvers found for comp leave request {request_id}")
+            return
+        
+        approvers = list(set(approvers))
+        
+        if notification_type == "submitted":
+            title = f"New Comp Leave Request - {comp_off.employee_name}"
+            body = f"Compensatory leave request from {comp_off.work_from_date} to {comp_off.work_end_date} pending approval"
+        elif notification_type == "resubmitted":
+            title = f"Comp Leave Request Resubmitted - {comp_off.employee_name}"
+            body = f"Updated compensatory leave request pending approval"
+        else:
+            return
+        
+        data = {
+            "type": "comp_leave_request",
+            "request_id": request_id,
+            "employee": comp_off.employee,
+            "notification_type": notification_type,
+            "from_date": str(comp_off.work_from_date),
+            "to_date": str(comp_off.work_end_date)
+        }
+        
+        send_approver_notification(approvers, title, body, data)
+        frappe.logger().info(f"✅ Comp leave approval notification sent to {len(approvers)} approvers for {request_id}")
+        
+    except Exception as e:
+        frappe.logger().error(f"❌ Error sending comp leave approval notification: {str(e)}")
+
+
 # Admin Dashboard Statistics
 @frappe.whitelist(allow_guest=False)
 def get_employee_statistics():
@@ -8208,3 +8593,135 @@ def get_current_employee_profile() -> dict:
     except Exception as e:
         frappe.logger().error(f"❌ Error fetching current employee profile: {str(e)}")
         frappe.throw(_("Failed to fetch your profile: {0}").format(str(e)))
+
+
+# ============================================================================
+# ADMIN APPROVALS NOTIFICATIONS API
+# ============================================================================
+
+@frappe.whitelist()
+def get_admin_pending_approvals(employee: str | None = None, limit_page_length: int = 500) -> dict:
+    """
+    Get all pending approvals for admin/approver.
+    Returns leave, expense, travel, WFH, and comp-leave requests pending approval.
+    
+    Args:
+        employee: Employee ID (approver)
+        limit_page_length: Limit results
+    
+    Returns:
+        dict with all pending approvals by type
+    """
+    try:
+        if not employee:
+            current_user = frappe.session.user
+            employee = frappe.db.get_value(
+                "Employee",
+                {"user_id": current_user, "status": "Active"},
+                "name"
+            )
+        
+        if not employee:
+            frappe.throw(_("No employee record found"))
+        
+        # Get user ID from employee
+        approver_user = frappe.db.get_value("Employee", employee, "user_id")
+        
+        # Check if user is an approver or HR manager
+        user_roles = frappe.get_roles(approver_user)
+        is_hr = bool(set(user_roles) & {"HR Manager", "HR User", "System Manager"})
+        
+        pending_approvals = {
+            "leave_applications": [],
+            "expense_claims": [],
+            "wfh_requests": [],
+            "travel_requests": [],
+            "comp_leave_requests": [],
+            "total_pending": 0
+        }
+        
+        # Get leave applications pending for this approver
+        try:
+            leave_apps = frappe.db.sql("""
+                SELECT name, employee, employee_name, from_date, to_date, total_leave_days, status
+                FROM `tabLeave Application`
+                WHERE docstatus = 0
+                AND (leave_approver = %s OR %s = 1)
+                ORDER BY creation DESC
+                LIMIT %s
+            """, (approver_user, 1 if is_hr else 0, limit_page_length), as_dict=True)
+            pending_approvals["leave_applications"] = leave_apps
+        except:
+            pass
+        
+        # Get expense claims pending for this approver
+        try:
+            expense_claims = frappe.db.sql("""
+                SELECT name, employee, employee_name, total_claimed_amount, posting_date, approval_status
+                FROM `tabExpense Claim`
+                WHERE docstatus = 0
+                AND (expense_approver = %s OR %s = 1)
+                ORDER BY posting_date DESC
+                LIMIT %s
+            """, (approver_user, 1 if is_hr else 0, limit_page_length), as_dict=True)
+            pending_approvals["expense_claims"] = expense_claims
+        except:
+            pass
+        
+        # Get WFH requests pending
+        try:
+            wfh_requests = frappe.db.sql("""
+                SELECT name, employee, employee_name, from_date, to_date, reason, status
+                FROM `tabShift Request`
+                WHERE status = 'Pending'
+                ORDER BY creation DESC
+                LIMIT %s
+            """, limit_page_length, as_dict=True)
+            pending_approvals["wfh_requests"] = wfh_requests
+        except:
+            pass
+        
+        # Get travel requests pending
+        try:
+            travel_requests = frappe.db.sql("""
+                SELECT name, employee, employee_name, travel_type, purpose_of_travel, 
+                       travel_from_date, travel_to_date, docstatus
+                FROM `tabTravel Request`
+                WHERE docstatus = 0
+                ORDER BY creation DESC
+                LIMIT %s
+            """, limit_page_length, as_dict=True)
+            pending_approvals["travel_requests"] = travel_requests
+        except:
+            pass
+        
+        # Get comp leave requests pending
+        try:
+            comp_leaves = frappe.db.sql("""
+                SELECT name, employee, employee_name, work_from_date, work_end_date, reason, docstatus
+                FROM `tabCompensatory Leave Request`
+                WHERE docstatus = 0
+                ORDER BY creation DESC
+                LIMIT %s
+            """, limit_page_length, as_dict=True)
+            pending_approvals["comp_leave_requests"] = comp_leaves
+        except:
+            pass
+        
+        # Calculate total pending
+        total_count = (
+            len(pending_approvals["leave_applications"]) +
+            len(pending_approvals["expense_claims"]) +
+            len(pending_approvals["wfh_requests"]) +
+            len(pending_approvals["travel_requests"]) +
+            len(pending_approvals["comp_leave_requests"])
+        )
+        pending_approvals["total_pending"] = total_count
+        
+        frappe.logger().info(f"✅ Admin pending approvals fetched: {total_count} total")
+        
+        return pending_approvals
+        
+    except Exception as e:
+        frappe.logger().error(f"❌ Error fetching admin pending approvals: {str(e)}")
+        frappe.throw(_("Failed to fetch pending approvals: {0}").format(str(e)))

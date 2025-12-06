@@ -88,83 +88,47 @@ const AdminDashboard = ({ navigation }) => {
 
     const fetchPendingApprovals = async () => {
         try {
-            const data = { ...pendingData };
-            
-            // Get current employee ID (admin user's employee record)
             const empId = employee?.name;
-            console.log('📋 Fetching approvals for employee:', empId);
+            console.log('📋 Fetching admin pending approvals for:', empId);
 
-            // Skip if employee ID is missing or logout is in progress
+            // Skip if employee ID is missing
             if (!empId) {
                 console.log('⚠️ No employee ID, skipping approval fetch');
                 return;
             }
 
-            // Fetch WFH approvals
-            try {
-                const wfhRes = await ApiService.get(`/api/method/hrms.api.get_shift_requests?employee=${empId}&for_approval=true&limit_page_length=500`);
-                if (wfhRes.success) {
-                    data.wfhApprovals = (wfhRes.data?.message || []).length;
-                    console.log('✅ WFH Approvals fetched:', data.wfhApprovals, wfhRes.data?.message);
-                }
-            } catch (e) { 
-                console.log('❌ WFH fetch error:', e?.message); 
+            // Use new comprehensive admin approval API
+            const response = await ApiService.get(`/api/method/hrms.api.get_admin_pending_approvals?employee=${empId}&limit_page_length=500`);
+            
+            if (response.success && response.data?.message) {
+                const approvals = response.data.message;
+                const data = {
+                    wfhApprovals: approvals.wfh_requests?.length || 0,
+                    leaveApprovals: approvals.leave_applications?.length || 0,
+                    expenseApprovals: approvals.expense_claims?.length || 0,
+                    travelApprovals: approvals.travel_requests?.length || 0,
+                    compLeaveApprovals: approvals.comp_leave_requests?.length || 0,
+                };
+                
+                data.notifications = data.wfhApprovals + data.leaveApprovals + data.expenseApprovals + 
+                                    data.travelApprovals + data.compLeaveApprovals;
+                
+                console.log('✅ Admin pending approvals fetched:', {
+                    leave: data.leaveApprovals,
+                    expense: data.expenseApprovals,
+                    wfh: data.wfhApprovals,
+                    travel: data.travelApprovals,
+                    compLeave: data.compLeaveApprovals,
+                    total: data.notifications
+                });
+                
+                setPendingData(data);
+            } else {
+                console.error('❌ Failed to fetch approvals:', response);
             }
-
-            // Fetch leave approvals
-            try {
-                const leaveRes = await ApiService.get(`/api/method/hrms.api.get_leave_applications?employee=${empId}&for_approval=true&limit_page_length=500`);
-                if (leaveRes.success) {
-                    data.leaveApprovals = (leaveRes.data?.message || []).length;
-                    console.log('✅ Leave Approvals fetched:', data.leaveApprovals, leaveRes.data?.message);
-                }
-            } catch (e) { 
-                console.log('❌ Leave fetch error:', e?.message); 
-            }
-
-            // Fetch expense approvals
-            try {
-                const expenseRes = await ApiService.get(`/api/method/hrms.api.get_expense_claims?employee=${empId}&for_approval=true&limit_page_length=500`);
-                if (expenseRes.success) {
-                    data.expenseApprovals = (expenseRes.data?.message || []).length;
-                    console.log('✅ Expense Approvals fetched:', data.expenseApprovals, expenseRes.data?.message);
-                } else {
-                    console.log('❌ Expense API not successful:', expenseRes);
-                }
-            } catch (e) { 
-                console.log('❌ Expense fetch error:', e?.message); 
-            }
-
-            // Fetch travel approvals
-            try {
-                const travelRes = await ApiService.get(`/api/method/hrms.api.get_travel_requests?employee=${empId}&for_approval=true&limit_page_length=500`);
-                if (travelRes.success) {
-                    data.travelApprovals = (travelRes.data?.message || []).length;
-                    console.log('✅ Travel Approvals fetched:', data.travelApprovals, travelRes.data?.message);
-                }
-            } catch (e) { 
-                console.log('❌ Travel fetch error:', e?.message); 
-            }
-
-            // Fetch comp leave approvals
-            try {
-                const compRes = await ApiService.get(`/api/method/hrms.api.get_comp_offs?employee=${empId}&for_approval=true&limit_page_length=500`);
-                if (compRes.success) {
-                    data.compLeaveApprovals = (compRes.data?.message || []).length;
-                    console.log('✅ Comp Leave Approvals fetched:', data.compLeaveApprovals, compRes.data?.message);
-                }
-            } catch (e) { 
-                console.log('❌ Comp leave fetch error:', e?.message); 
-            }
-
-            // Calculate total notifications
-            data.notifications = data.wfhApprovals + data.leaveApprovals + data.expenseApprovals + 
-                                data.travelApprovals + data.compLeaveApprovals;
-
-            console.log('📊 Final pending data:', data);
-            setPendingData(data);
         } catch (error) {
-            console.error('Pending approvals fetch error:', error);
+            console.error('❌ Error fetching pending approvals:', error?.message);
+            // Silently fail - don't show error to user
         }
     };
 
