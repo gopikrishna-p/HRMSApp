@@ -47,10 +47,18 @@ const AdminDashboard = ({ navigation }) => {
         notifications: 0,
     });
 
-    const handleLogout = async () => { await logout(); };
+    const handleLogout = async () => { 
+        await logout(); 
+    };
 
     useEffect(() => {
         fetchDashboardData();
+
+        // Cleanup on unmount to prevent memory leaks
+        return () => {
+            setLoading(false);
+            setRefreshing(false);
+        };
     }, []);
 
     const fetchDashboardData = async () => {
@@ -85,6 +93,12 @@ const AdminDashboard = ({ navigation }) => {
             // Get current employee ID (admin user's employee record)
             const empId = employee?.name;
             console.log('📋 Fetching approvals for employee:', empId);
+
+            // Skip if employee ID is missing or logout is in progress
+            if (!empId) {
+                console.log('⚠️ No employee ID, skipping approval fetch');
+                return;
+            }
 
             // Fetch WFH approvals
             try {

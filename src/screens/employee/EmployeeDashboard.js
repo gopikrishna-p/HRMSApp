@@ -122,6 +122,12 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                 period: 'current_month'
             });
 
+            // If we get a 403 or permission error, user is logged out - skip silently
+            if (response.status === 403 || response.message?.includes('not permitted')) {
+                console.log('⚠️ Permission denied - user likely logged out');
+                return;
+            }
+
             console.log('Analytics API Response:', JSON.stringify(response, null, 2));
 
             if (response.success && response.data) {
@@ -230,6 +236,12 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
             } else {
                 setLoading(false);
             }
+
+            // Cleanup on unmount to prevent memory leaks and API calls after logout
+            return () => {
+                setLoading(false);
+                setRefreshing(false);
+            };
         }, [employee?.name]);
 
     // Handle pull-to-refresh
