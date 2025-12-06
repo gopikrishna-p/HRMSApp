@@ -8,6 +8,7 @@ import {
     RefreshControl,
     Modal,
     FlatList,
+    ActivityIndicator,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { Text, useTheme } from 'react-native-paper';
@@ -17,25 +18,88 @@ import Section from '../../components/ui/Section';
 import ListItem from '../../components/ui/ListItem';
 import StatCard from '../../components/ui/StatCard';
 import Button from '../../components/common/Button';
+import ApiService from '../../services/api.service';
+import showToast from '../../utils/Toast';
 
 const AdminDashboard = ({ navigation }) => {
     const { logout, user, employee } = useAuth();
     const { custom } = useTheme();
+    const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const [stats, setStats] = useState({
+        totalEmployees: 0,
+        presentToday: 0,
+        absentToday: 0,
+        wfhToday: 0,
+        onLeave: 0,
+        lateArrivals: 0,
+        employeesOnHoliday: 0,
+        workingEmployees: 0,
+        attendanceRate: 0,
+    });
 
     const handleLogout = async () => { await logout(); };
 
+    useEffect(() => {
+        fetchDashboardStats();
+    }, []);
+
+    const fetchDashboardStats = async () => {
+        try {
+            setLoading(true);
+            const response = await ApiService.get('/api/method/hrms.api.get_employee_statistics');
+            if (response.success && response.data?.message) {
+                setStats(response.data.message);
+            } else {
+                showToast({
+                    type: 'error',
+                    text1: 'Error',
+                    text2: 'Failed to load dashboard stats',
+                });
+            }
+        } catch (error) {
+            console.error('Dashboard stats error:', error);
+            showToast({
+                type: 'error',
+                text1: 'Error',
+                text2: 'Failed to load dashboard statistics',
+            });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const onRefresh = async () => {
+        setRefreshing(true);
+        await fetchDashboardStats();
+        setRefreshing(false);
+    };
+
     const quickStats = [
-        { id: 1, icon: 'users', tint: custom.palette.primary, value: '125', label: 'Total Employees' },
-        { id: 2, icon: 'user-check', tint: custom.palette.success, value: '98', label: 'Present Today' },
-        { id: 3, icon: 'user-times', tint: custom.palette.danger, value: '12', label: 'Absent' },
-        { id: 4, icon: 'home', tint: custom.palette.warning, value: '15', label: 'WFH' },
+        { id: 1, icon: 'users', tint: custom.palette.primary, value: String(stats.totalEmployees), label: 'Total Employees' },
+        { id: 2, icon: 'user-check', tint: custom.palette.success, value: String(stats.presentToday), label: 'Present Today' },
+        { id: 3, icon: 'user-times', tint: custom.palette.danger, value: String(stats.absentToday), label: 'Absent' },
+        { id: 4, icon: 'home', tint: custom.palette.warning, value: String(stats.wfhToday), label: 'WFH' },
+        { id: 5, icon: 'umbrella-beach', tint: '#8B5CF6', value: String(stats.onLeave), label: 'On Leave' },
+        { id: 6, icon: 'clock', tint: '#F59E0B', value: String(stats.lateArrivals), label: 'Late Arrivals' },
+        { id: 7, icon: 'chart-pie', tint: '#EC4899', value: `${stats.attendanceRate}%`, label: 'Attendance Rate' },
     ];
 
     return (
         <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
             <AppHeader title="logo" canGoBack={false} rightIcon="bell" badge={5} onRightPress={() => navigation.navigate('AdminNotifications')} />
 
-            <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
+            {loading ? (
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                    <ActivityIndicator size="large" color={custom.palette.primary} />
+                    <Text style={{ marginTop: 12, color: custom.palette.textSecondary }}>Loading dashboard...</Text>
+                </View>
+            ) : (
+                <ScrollView 
+                    contentContainerStyle={{ padding: 16, paddingBottom: 36 }} 
+                    showsVerticalScrollIndicator={false}
+                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+                >
                 {/* Welcome */}
                 <View style={{
                     backgroundColor: '#FFF', padding: 20, borderRadius: 16, marginBottom: 14,
@@ -56,13 +120,52 @@ const AdminDashboard = ({ navigation }) => {
                     ) : null}
                 </View>
 
-                {/* Stats */}
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -4, marginBottom: 14 }}>
-                    {quickStats.map(s => (
-                        <View key={s.id} style={{ width: '50%', paddingHorizontal: 4, marginBottom: 8 }}>
-                            <StatCard icon={s.icon} tint={s.tint} value={s.value} label={s.label} />
-                        </View>
-                    ))}
+                {/* Stats - Compact Minimal Layout */}
+                <View style={{
+                    backgroundColor: '#FFF',
+                    borderRadius: 12,
+                    padding: 16,
+                    marginBottom: 14,
+                    elevation: 2,
+                    shadowColor: '#000',
+                    shadowOpacity: 0.08,
+                    shadowRadius: 3,
+                    shadowOffset: { width: 0, height: 1 }
+                }}>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+                        {quickStats.map(s => (
+                            <View key={s.id} style={{ 
+                                width: '32%', 
+                                marginBottom: 12,
+                                alignItems: 'center',
+                                paddingVertical: 8
+                            }}>
+                                <View style={{
+                                    backgroundColor: s.tint,
+                                    borderRadius: 8,
+                                    padding: 8,
+                                    marginBottom: 6
+                                }}>
+                                    <Icon name={s.icon} size={16} color="#FFF" />
+                                </View>
+                                <Text style={{
+                                    fontSize: 18,
+                                    fontWeight: '700',
+                                    color: '#000',
+                                    marginBottom: 2
+                                }}>
+                                    {s.value}
+                                </Text>
+                                <Text style={{
+                                    fontSize: 10,
+                                    color: custom.palette.textSecondary,
+                                    textAlign: 'center'
+                                }}>
+                                    {s.label}
+                                </Text>
+                            </View>
+                        ))}
+                    </View>
                 </View>
 
                 {/* Sections */}
@@ -115,11 +218,6 @@ const AdminDashboard = ({ navigation }) => {
                 <Section title="Projects Oversight" icon="project-diagram" tint="#14B8A6">
                     <ListItem title="View Projects" subtitle="Portfolio & status" leftIcon="folder-open"
                         tint="#14B8A6" onPress={() => navigation.navigate('ProjectsOverview')} />
-                    <ListItem title="Project Tasks" subtitle="Assign & track tasks" leftIcon="tasks"
-                        tint="#14B8A6" onPress={() => navigation.navigate('ProjectTasksScreen')} />
-                    <ListItem title="View Project Logs" subtitle="Progress & time entries" leftIcon="history"
-                        tint="#14B8A6" onPress={() => navigation.navigate('ProjectLogsScreen')} />
-
                 </Section>
 
                 <Section title="Notifications & Announcements" icon="bullhorn" tint="#F43F5E">
@@ -128,7 +226,8 @@ const AdminDashboard = ({ navigation }) => {
                 </Section>
 
                 <Button onPress={handleLogout} style={{ marginTop: 8 }}>Logout</Button>
-            </ScrollView>
+                </ScrollView>
+            )}
         </View>
     );
 };

@@ -48,8 +48,10 @@
             ├── AllAttendanceAnalyticsScreen.js
             ├── AttendanceAnalyticsScreen.js
             ├── AttendanceManagementScreen.js
+            ├── CompApprovalScreen.js
             ├── CreateNotificationScreen.js
             ├── EmployeeManagement.js
+            ├── ExpenseClaimApprovalScreen.js
             ├── LeaveApprovalsScreen.js
             ├── ManualCheckInOutScreen.js
             ├── ProjectLogsScreen.js
@@ -58,6 +60,7 @@
             ├── ReportsScreen.js
             ├── TodayAttendanceScreen.js
             ├── TodayEmployeeAnalyticsScreen.js
+            ├── TravelRequestApproval.js
             ├── WFHApprovalsScreen.js
             ├── WFHSettingsScreen.js
         └── 📁auth
@@ -66,14 +69,12 @@
             ├── SplashScreen.js
         └── 📁employee
             ├── AttendanceHistoryScreen.js
-            ├── AttendanceScreen.js
             ├── CheckInOutScreen.js
             ├── CompensatoryLeaveScreen.js
             ├── EmployeeDashboard.js
             ├── ExpenseClaimScreen.js
             ├── HolidayListScreen.js
             ├── LeaveApplicationScreen.js
-            ├── LeavesScreen.js
             ├── MyLogsScreen.js
             ├── MyProjectsScreen.js
             ├── MyTasksScreen.js
