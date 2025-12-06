@@ -8111,3 +8111,100 @@ def my_project_summary(project, limit_tasks=200, limit_logs=200):
         "logs": logs, 
         "members": members
     }
+
+
+# ============================================================================
+# EMPLOYEE PROFILE API
+# ============================================================================
+
+@frappe.whitelist()
+def get_employee_profile(employee: str) -> dict:
+    """
+    Get complete employee profile information.
+    Returns all main employee details for the profile screen.
+    
+    Args:
+        employee (str): Employee ID (e.g., 'EMP-00001')
+    
+    Returns:
+        dict: Employee profile data with all main fields
+    """
+    try:
+        # Validate employee exists
+        if not frappe.db.exists("Employee", employee):
+            frappe.throw(_("Employee not found: {0}").format(employee))
+        
+        # Get complete employee profile with all main fields
+        employee_data = frappe.db.get_value(
+            "Employee",
+            employee,
+            [
+                "name",
+                "employee_name",
+                "company_email",
+                "personal_email",
+                "cell_number",
+                "department",
+                "designation",
+                "company",
+                "date_of_joining",
+                "date_of_birth",
+                "gender",
+                "marital_status",
+                "blood_group",
+                "current_address",
+                "permanent_address",
+                "pan_number",
+                "bank_ac_no",
+                "bank_name",
+                "employment_type",
+                "status",
+                "reports_to",
+                "grade",
+                "default_shift",
+                "image",
+                "creation",
+                "modified",
+            ],
+            as_dict=True,
+        )
+        
+        if not employee_data:
+            frappe.throw(_("Unable to fetch employee profile"))
+        
+        frappe.logger().info(f"✅ Employee profile fetched for {employee}")
+        
+        return employee_data
+        
+    except Exception as e:
+        frappe.logger().error(f"❌ Error fetching employee profile: {str(e)}")
+        frappe.throw(_("Failed to fetch employee profile: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_current_employee_profile() -> dict:
+    """
+    Get the profile of the current logged-in employee.
+    Convenient method for employees to fetch their own profile.
+    
+    Returns:
+        dict: Current employee's profile data
+    """
+    try:
+        # Get current employee ID
+        current_user = frappe.session.user
+        employee_id = frappe.db.get_value(
+            "Employee",
+            {"user_id": current_user, "status": "Active"},
+            "name"
+        )
+        
+        if not employee_id:
+            frappe.throw(_("No active employee record found for this user"))
+        
+        # Return the employee profile
+        return get_employee_profile(employee_id)
+        
+    except Exception as e:
+        frappe.logger().error(f"❌ Error fetching current employee profile: {str(e)}")
+        frappe.throw(_("Failed to fetch your profile: {0}").format(str(e)))
