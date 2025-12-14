@@ -22,9 +22,13 @@ import {
     getProjectDetail,
     getAllEmployees,
     assignMembers,
+    updateProject,
+    deleteProject,
 } from '../../services/project.service';
+import AddProjectModal from '../../components/admin/AddProjectModal';
+import { Alert } from 'react-native';
 
-const EnhancedProjectCard = ({ project, onPress, onManageMembers }) => {
+const EnhancedProjectCard = ({ project, onPress, onManageMembers, onEdit, onDelete }) => {
     const getStatusColor = (status) => {
         switch (status) {
             case 'Open': return '#3B82F6';
@@ -94,7 +98,15 @@ const EnhancedProjectCard = ({ project, onPress, onManageMembers }) => {
                     <Icon name="users" size={12} color="#8B5CF6" />
                     <Text style={styles.membersButtonText}>Manage Team</Text>
                 </TouchableOpacity>
-                <Icon name="chevron-right" size={14} color="#9CA3AF" />
+                <View style={styles.cardActions}>
+                    <TouchableOpacity onPress={onEdit} style={styles.actionButton}>
+                        <Icon name="edit" size={14} color="#3B82F6" />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={onDelete} style={styles.actionButtonDelete}>
+                        <Icon name="trash-alt" size={14} color="#EF4444" />
+                    </TouchableOpacity>
+                    <Icon name="chevron-right" size={14} color="#9CA3AF" />
+                </View>
             </View>
         </TouchableOpacity>
     );
@@ -114,6 +126,16 @@ const ProjectsOverviewScreen = () => {
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [savingMembers, setSavingMembers] = useState(false);
     const [loadingMembers, setLoadingMembers] = useState(false);
+    const [addProjectModalVisible, setAddProjectModalVisible] = useState(false);
+
+    // Edit project state
+    const [editModalVisible, setEditModalVisible] = useState(false);
+    const [editProject, setEditProject] = useState(null);
+    const [editName, setEditName] = useState('');
+    const [editDescription, setEditDescription] = useState('');
+    const [editStatus, setEditStatus] = useState('Open');
+    const [editPriority, setEditPriority] = useState('Medium');
+    const [savingEdit, setSavingEdit] = useState(false);
 
     const fetch = useCallback(async () => {
         setLoading(true);
@@ -188,6 +210,66 @@ const ProjectsOverviewScreen = () => {
         }
     };
 
+    // Edit project handlers
+    const openEditModal = (project) => {
+        setEditProject(project);
+        setEditName(project.project_name || '');
+        setEditDescription(project.description || '');
+        setEditStatus(project.status || 'Open');
+        setEditPriority(project.priority || 'Medium');
+        setEditModalVisible(true);
+    };
+
+    const handleSaveEdit = async () => {
+        if (!editProject || !editName.trim()) {
+            Alert.alert('Validation Error', 'Project name is required');
+            return;
+        }
+
+        setSavingEdit(true);
+        try {
+            await updateProject(editProject.name, {
+                project_name: editName.trim(),
+                description: editDescription.trim() || null,
+                status: editStatus,
+                priority: editPriority,
+            });
+            Alert.alert('Success', 'Project updated successfully!');
+            setEditModalVisible(false);
+            fetch();
+        } catch (error) {
+            console.error('Update project error:', error);
+            Alert.alert('Error', error?.message || 'Failed to update project');
+        } finally {
+            setSavingEdit(false);
+        }
+    };
+
+    // Delete project handler
+    const handleDeleteProject = (project) => {
+        Alert.alert(
+            'Delete Project',
+            `Are you sure you want to delete "${project.project_name}"? This action cannot be undone.`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            await deleteProject(project.name);
+                            Alert.alert('Success', 'Project deleted successfully!');
+                            fetch();
+                        } catch (error) {
+                            console.error('Delete project error:', error);
+                            Alert.alert('Error', error?.message || 'Failed to delete project');
+                        }
+                    },
+                },
+            ]
+        );
+    };
+
     const renderItem = ({ item }) => (
         <EnhancedProjectCard
             project={item}
@@ -195,6 +277,8 @@ const ProjectsOverviewScreen = () => {
                 navigation.navigate('ProjectTasksScreen', { projectId: item.name, projectName: item.project_name })
             }
             onManageMembers={() => openMembers(item)}
+            onEdit={() => openEditModal(item)}
+            onDelete={() => handleDeleteProject(item)}
         />
     );
 
@@ -205,9 +289,12 @@ const ProjectsOverviewScreen = () => {
                     <Text style={styles.headerTitle}>Projects Overview</Text>
                     <Text style={styles.headerSubtitle}>{projects.length} project{projects.length !== 1 ? 's' : ''}</Text>
                 </View>
-                <View style={styles.headerIcon}>
-                    <Icon name="folder-open" size={24} color="#8B5CF6" />
-                </View>
+                <TouchableOpacity 
+                    onPress={() => setAddProjectModalVisible(true)}
+                    style={styles.addButton}
+                >
+                    <Icon name="plus" size={20} color="#FFFFFF" />
+                </TouchableOpacity>
             </View>
 
             <View style={styles.searchContainer}>
@@ -345,6 +432,147 @@ const ProjectsOverviewScreen = () => {
                     </View>
                 </View>
             </Modal>
+
+            {/* Add Project Modal */}
+            <AddProjectModal 
+                visible={addProjectModalVisible}
+                onClose={() => setAddProjectModalVisible(false)}
+                onProjectCreated={(newProject) => {
+                    // Refresh projects list
+                    fetch();
+                }}
+            />
+
+            {/* Edit Project Modal */}
+            <Modal visible={editModalVisible} animationType="slide" onRequestClose={() => setEditModalVisible(false)}>
+                <View style={styles.modalContainer}>
+                    <View style={styles.modalHeader}>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.modalTitle}>Edit Project</Text>
+                            {editProject && (
+                                <Text style={styles.modalSubtitle}>{editProject.name}</Text>
+                            )}
+                        </View>
+                        <TouchableOpacity onPress={() => setEditModalVisible(false)} style={styles.closeButton}>
+                            <Icon name="times" size={18} color="#6B7280" />
+                        </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.editFormContainer}>
+                        {/* Project Name */}
+                        <View style={styles.formGroup}>
+                            <Text style={styles.label}>Project Name *</Text>
+                            <View style={styles.inputContainer}>
+                                <Icon name="folder" size={16} color="#9CA3AF" />
+                                <RNTextInput
+                                    style={styles.formInput}
+                                    placeholder="Enter project name"
+                                    value={editName}
+                                    onChangeText={setEditName}
+                                    placeholderTextColor="#9CA3AF"
+                                    editable={!savingEdit}
+                                />
+                            </View>
+                        </View>
+
+                        {/* Description */}
+                        <View style={styles.formGroup}>
+                            <Text style={styles.label}>Description</Text>
+                            <View style={[styles.inputContainer, styles.textareaContainer]}>
+                                <Icon name="align-left" size={16} color="#9CA3AF" style={{ marginTop: 12 }} />
+                                <RNTextInput
+                                    style={[styles.formInput, styles.textarea]}
+                                    placeholder="Enter project description"
+                                    value={editDescription}
+                                    onChangeText={setEditDescription}
+                                    placeholderTextColor="#9CA3AF"
+                                    multiline={true}
+                                    numberOfLines={4}
+                                    editable={!savingEdit}
+                                />
+                            </View>
+                        </View>
+
+                        {/* Status */}
+                        <View style={styles.formGroup}>
+                            <Text style={styles.label}>Status</Text>
+                            <View style={styles.optionsContainer}>
+                                {['Open', 'Working', 'Completed', 'Cancelled'].map((s) => (
+                                    <TouchableOpacity
+                                        key={s}
+                                        onPress={() => setEditStatus(s)}
+                                        style={[
+                                            styles.optionButton,
+                                            editStatus === s && styles.optionButtonActive,
+                                        ]}
+                                        disabled={savingEdit}
+                                    >
+                                        <Text
+                                            style={[
+                                                styles.optionButtonText,
+                                                editStatus === s && styles.optionButtonTextActive,
+                                            ]}
+                                        >
+                                            {s}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                        </View>
+
+                        {/* Priority */}
+                        <View style={styles.formGroup}>
+                            <Text style={styles.label}>Priority</Text>
+                            <View style={styles.optionsContainer}>
+                                {['Low', 'Medium', 'High'].map((p) => (
+                                    <TouchableOpacity
+                                        key={p}
+                                        onPress={() => setEditPriority(p)}
+                                        style={[
+                                            styles.optionButton,
+                                            editPriority === p && styles.optionButtonActive,
+                                        ]}
+                                        disabled={savingEdit}
+                                    >
+                                        <Text
+                                            style={[
+                                                styles.optionButtonText,
+                                                editPriority === p && styles.optionButtonTextActive,
+                                            ]}
+                                        >
+                                            {p}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                        </View>
+                    </View>
+
+                    <View style={styles.modalActions}>
+                        <TouchableOpacity 
+                            onPress={() => setEditModalVisible(false)} 
+                            style={styles.cancelButton}
+                            disabled={savingEdit}
+                        >
+                            <Text style={styles.cancelButtonText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity 
+                            onPress={handleSaveEdit} 
+                            style={[styles.saveButton, savingEdit && styles.disabledButton]}
+                            disabled={savingEdit}
+                        >
+                            {savingEdit ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                                <>
+                                    <Icon name="check" size={14} color="#FFFFFF" />
+                                    <Text style={styles.saveButtonText}>Save Changes</Text>
+                                </>
+                            )}
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 };
@@ -386,6 +614,19 @@ const styles = StyleSheet.create({
         backgroundColor: '#8B5CF6' + '15',
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    addButton: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        backgroundColor: '#8B5CF6',
+        alignItems: 'center',
+        justifyContent: 'center',
+        elevation: 3,
+        shadowColor: '#8B5CF6',
+        shadowOpacity: 0.3,
+        shadowRadius: 4,
+        shadowOffset: { width: 0, height: 2 },
     },
     searchContainer: {
         padding: 16,
@@ -697,6 +938,92 @@ const styles = StyleSheet.create({
         fontSize: 15,
         fontWeight: '700',
         color: '#FFFFFF',
+    },
+    // Card action buttons
+    cardActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    actionButton: {
+        width: 32,
+        height: 32,
+        borderRadius: 8,
+        backgroundColor: '#3B82F6' + '15',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    actionButtonDelete: {
+        width: 32,
+        height: 32,
+        borderRadius: 8,
+        backgroundColor: '#EF4444' + '15',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    // Edit form styles
+    editFormContainer: {
+        flex: 1,
+        padding: 16,
+    },
+    formGroup: {
+        marginBottom: 20,
+    },
+    label: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: '#111827',
+        marginBottom: 8,
+    },
+    inputContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#FFFFFF',
+        borderRadius: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 12,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        gap: 10,
+    },
+    textareaContainer: {
+        alignItems: 'flex-start',
+    },
+    formInput: {
+        flex: 1,
+        fontSize: 15,
+        color: '#111827',
+        padding: 0,
+    },
+    textarea: {
+        textAlignVertical: 'top',
+        paddingTop: 8,
+        minHeight: 80,
+    },
+    optionsContainer: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 10,
+    },
+    optionButton: {
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderRadius: 10,
+        borderWidth: 2,
+        borderColor: '#E5E7EB',
+        backgroundColor: '#FFFFFF',
+    },
+    optionButtonActive: {
+        borderColor: '#8B5CF6',
+        backgroundColor: '#8B5CF6' + '15',
+    },
+    optionButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#6B7280',
+    },
+    optionButtonTextActive: {
+        color: '#8B5CF6',
     },
 });
 

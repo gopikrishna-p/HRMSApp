@@ -7,6 +7,98 @@ const unwrap = (res) => res?.data?.message ?? res?.data ?? res;
 const BASE = '/api/method/hrms.api';
 
 /**
+ * Create a new project using Frappe's standard doctype
+ */
+export const createProject = async ({ 
+    project_name, 
+    customer = null, 
+    company = null, 
+    description = null, 
+    expected_start_date = null, 
+    expected_end_date = null, 
+    priority = 'Medium' 
+} = {}) => {
+    try {
+        if (!project_name || !project_name.trim()) {
+            throw new Error('Project name is required');
+        }
+
+        const payload = {
+            doctype: 'Project',
+            project_name: project_name.trim(),
+            customer,
+            company,
+            description: description?.trim() || null,
+            expected_start_date,
+            expected_end_date,
+            priority,
+            status: 'Open',
+        };
+
+        console.log('Creating project:', payload);
+
+        // Use Frappe's doc.insert API
+        const res = await ApiService.post('/api/resource/Project', payload);
+        
+        const result = res?.data?.data || res?.data;
+        console.log('Project created:', result);
+
+        return result;
+    } catch (error) {
+        handleError(error, 'Create Project');
+    }
+};
+
+/**
+ * Update project details
+ */
+export const updateProject = async (projectId, updates = {}) => {
+    try {
+        if (!projectId) {
+            throw new Error('Project ID is required');
+        }
+
+        console.log('Updating project:', { projectId, updates });
+
+        const res = await ApiService.post(`${BASE}.update_project`, {
+            project: projectId,
+            ...updates,
+        });
+
+        const result = unwrap(res);
+        console.log('Project updated:', result);
+
+        return result;
+    } catch (error) {
+        handleError(error, 'Update Project');
+    }
+};
+
+/**
+ * Delete a project
+ */
+export const deleteProject = async (projectId) => {
+    try {
+        if (!projectId) {
+            throw new Error('Project ID is required');
+        }
+
+        console.log('Deleting project:', projectId);
+
+        const res = await ApiService.post(`${BASE}.delete_project`, {
+            project: projectId,
+        });
+
+        const result = unwrap(res);
+        console.log('Project deleted:', result);
+
+        return result;
+    } catch (error) {
+        handleError(error, 'Delete Project');
+    }
+};
+
+/**
  * Handle API errors consistently
  */
 const handleError = (error, context = '') => {
@@ -63,6 +155,28 @@ export const getProjectDetail = async (project) => {
 /** ============ Membership Management (Admin/HR/PM) ============ */
 
 /**
+ * Get all members of a project
+ */
+export const getProjectMembers = async (projectId) => {
+    try {
+        if (!projectId) {
+            throw new Error('Project ID is required');
+        }
+
+        const res = await ApiService.post(`${BASE}.get_project_members`, {
+            project: projectId,
+        });
+
+        const result = unwrap(res);
+        console.log('Project members:', result);
+
+        return result;
+    } catch (error) {
+        handleError(error, 'Get Project Members');
+    }
+};
+
+/**
  * Assign members to a project
  */
 export const assignMembers = async (project, employee_ids, role_in_project = 'Contributor') => {
@@ -103,8 +217,14 @@ export const removeMember = async (project, employee) => {
             throw new Error('Employee ID is required');
         }
 
+        console.log('Removing member:', { project, employee });
+
         const res = await ApiService.post(`${BASE}.remove_member`, { project, employee });
-        return unwrap(res);
+        const result = unwrap(res);
+
+        console.log('Remove member response:', result);
+
+        return result;
     } catch (error) {
         handleError(error, 'Remove Member');
     }
@@ -323,9 +443,15 @@ export const getProjectStats = async (projectId) => {
 };
 
 export default {
+    // Project management
+    createProject,
+    updateProject,
+    deleteProject,
+    
     // Employee functions
     listProjects,
     getProjectDetail,
+    getProjectMembers,
     listTasks,
     createTask,
     listProjectLogs,

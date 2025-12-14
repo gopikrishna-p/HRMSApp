@@ -8760,3 +8760,144 @@ def get_admin_pending_approvals(employee: str | None = None, limit_page_length: 
     except Exception as e:
         frappe.logger().error(f"❌ Error fetching admin pending approvals: {str(e)}")
         frappe.throw(_("Failed to fetch pending approvals: {0}").format(str(e)))
+
+
+# ---------------------- Project Management ----------------------
+@frappe.whitelist()
+def create_project(project_name, customer=None, company=None, description=None, 
+                   expected_start_date=None, expected_end_date=None, priority="Medium"):
+    """Create a new project"""
+    if not _is_priv():
+        frappe.throw(_("Not permitted to create projects"), frappe.PermissionError)
+    
+    if not project_name or not project_name.strip():
+        frappe.throw(_("Project name is required"))
+    
+    if not company:
+        company = frappe.get_value("Employee", _emp_of(frappe.session.user), "company")
+    
+    try:
+        # Create new project doc
+        project_doc = frappe.get_doc({
+            "doctype": "Project",
+            "project_name": project_name.strip(),
+            "status": "Open",
+            "company": company,
+            "customer": customer,
+            "description": description,
+            "expected_start_date": expected_start_date,
+            "expected_end_date": expected_end_date,
+            "priority": priority,
+        })
+        
+        project_doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+        
+        return {
+            "ok": True,
+            "message": _("Project created successfully"),
+            "project": {
+                "name": project_doc.name,
+                "project_name": project_doc.project_name,
+                "status": project_doc.status,
+                "company": project_doc.company,
+                "expected_start_date": str(project_doc.expected_start_date) if project_doc.expected_start_date else None,
+                "expected_end_date": str(project_doc.expected_end_date) if project_doc.expected_end_date else None,
+                "percent_complete": 0,
+            }
+        }
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.logger().error(f"Error creating project: {str(e)}")
+        frappe.throw(_("Failed to create project: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_project_members(project):
+    """Get all members of a specific project"""
+    if not frappe.db.exists("Project", project):
+        frappe.throw(_("Project {0} does not exist").format(project))
+    
+    members = frappe.get_all(
+        "Project Member",
+        filters={
+            "parent": project,
+            "parenttype": "Project",
+            "active": 1,
+        },
+        fields=["employee", "employee_name", "role_in_project", "user"],
+        order_by="creation asc"
+    )
+    
+    return {
+        "ok": True,
+        "project": project,
+        "members": members,
+        "count": len(members)
+    }
+
+
+@frappe.whitelist()
+def update_project(project, **kwargs):
+    """Update project details"""
+    if not _is_priv():
+        frappe.throw(_("Not permitted."), frappe.PermissionError)
+    
+    if not frappe.db.exists("Project", project):
+        frappe.throw(_("Project {0} does not exist").format(project))
+    
+    allowed_fields = [
+        "project_name", "description", "status", "priority",
+        "expected_start_date", "expected_end_date", "customer", "company"
+    ]
+    
+    doc = frappe.get_doc("Project", project)
+    doc.flags.ignore_permissions = True
+    
+    for field, value in kwargs.items():
+        if field in allowed_fields and value is not None:
+            setattr(doc, field, value)
+    
+    try:
+        doc.save(ignore_permissions=True)
+        frappe.db.commit()
+        
+        return {
+            "ok": True,
+            "message": _("Project updated successfully"),
+            "project": {
+                "name": doc.name,
+                "project_name": doc.project_name,
+                "status": doc.status,
+                "priority": doc.priority,
+                "description": doc.description,
+            }
+        }
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.logger().error(f"Error updating project: {str(e)}")
+        frappe.throw(_("Failed to update project: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def delete_project(project):
+    """Delete a project"""
+    if not _is_priv():
+        frappe.throw(_("Not permitted."), frappe.PermissionError)
+    
+    if not frappe.db.exists("Project", project):
+        frappe.throw(_("Project {0} does not exist").format(project))
+    
+    try:
+        frappe.delete_doc("Project", project, ignore_permissions=True)
+        frappe.db.commit()
+        
+        return {
+            "ok": True,
+            "message": _("Project deleted successfully"),
+            "project": project
+        }
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.logger().error(f"Error deleting project: {str(e)}")
+        frappe.throw(_("Failed to delete project: {0}").format(str(e)))
