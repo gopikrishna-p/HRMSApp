@@ -33,6 +33,40 @@ SUPPORTED_FIELD_TYPES = [
 ]
 
 
+def set_wfh_days(doc, method=None):
+	"""
+	Hook to calculate and set Work From Home (WFH) days in Salary Slip
+	based on attendance records within the salary slip period.
+	
+	This function is called as a before_validate hook on Salary Slip creation.
+	"""
+	try:
+		# Only process Salary Slip documents
+		if doc.doctype != "Salary Slip":
+			return
+		
+		# Get attendance records for the salary slip period
+		attendance_records = frappe.get_all(
+			"Attendance",
+			filters={
+				"employee": doc.employee,
+				"attendance_date": ["between", [doc.start_date, doc.end_date]],
+				"docstatus": 1,
+			},
+			fields=["attendance_date", "status"],
+		)
+		
+		# Count Work From Home days
+		wfh_days = sum(1 for a in attendance_records if a.status == "Work From Home")
+		
+		# Set the custom_wfh_days field
+		doc.custom_wfh_days = wfh_days
+		
+	except Exception as e:
+		# Log the error but don't throw to prevent salary slip creation failure
+		frappe.logger().warning(f"Failed to set WFH days for {doc.employee}: {str(e)}")
+
+
 @frappe.whitelist()
 def get_current_user_info() -> dict:
 	current_user = frappe.session.user
@@ -8640,12 +8674,12 @@ def get_admin_pending_approvals(employee: str | None = None, limit_page_length: 
             "total_pending": 0
         }
         
-        # Get leave applications pending for this approver
+        # Get leave applications pending for this approver - status must be 'Open'
         try:
             leave_apps = frappe.db.sql("""
                 SELECT name, employee, employee_name, from_date, to_date, total_leave_days, status
                 FROM `tabLeave Application`
-                WHERE docstatus = 0
+                WHERE status = 'Open'
                 AND (leave_approver = %s OR %s = 1)
                 ORDER BY creation DESC
                 LIMIT %s
@@ -8654,12 +8688,12 @@ def get_admin_pending_approvals(employee: str | None = None, limit_page_length: 
         except:
             pass
         
-        # Get expense claims pending for this approver
+        # Get expense claims pending for this approver - approval_status must be 'Draft'
         try:
             expense_claims = frappe.db.sql("""
                 SELECT name, employee, employee_name, total_claimed_amount, posting_date, approval_status
                 FROM `tabExpense Claim`
-                WHERE docstatus = 0
+                WHERE approval_status = 'Draft'
                 AND (expense_approver = %s OR %s = 1)
                 ORDER BY posting_date DESC
                 LIMIT %s
@@ -8681,13 +8715,14 @@ def get_admin_pending_approvals(employee: str | None = None, limit_page_length: 
         except:
             pass
         
-        # Get travel requests pending
+        # Get travel requests pending - status should be submitted (docstatus=1) with submission status 'Pending'
         try:
             travel_requests = frappe.db.sql("""
                 SELECT name, employee, employee_name, travel_type, purpose_of_travel, 
-                       travel_from_date, travel_to_date, docstatus
+                       travel_from_date, travel_to_date
                 FROM `tabTravel Request`
-                WHERE docstatus = 0
+                WHERE docstatus = 1
+                AND status = 'Pending'
                 ORDER BY creation DESC
                 LIMIT %s
             """, limit_page_length, as_dict=True)
@@ -8695,10 +8730,10 @@ def get_admin_pending_approvals(employee: str | None = None, limit_page_length: 
         except:
             pass
         
-        # Get comp leave requests pending
+        # Get comp leave requests pending - docstatus should be 0 (Draft/Pending)
         try:
             comp_leaves = frappe.db.sql("""
-                SELECT name, employee, employee_name, work_from_date, work_end_date, reason, docstatus
+                SELECT name, employee, employee_name, work_from_date, work_end_date, reason
                 FROM `tabCompensatory Leave Request`
                 WHERE docstatus = 0
                 ORDER BY creation DESC

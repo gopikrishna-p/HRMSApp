@@ -79,21 +79,30 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
             let filters = { limit: 500 };
             
             if (activeTab === 'pending') {
+                // Get only pending (Draft) expense claims
                 filters.approval_status = 'Draft';
             } else if (activeTab === 'history') {
-                // Load all for history
+                // Load all non-draft for history (Approved, Rejected, etc)
             }
 
+            console.log('📋 Loading expense claims with filters:', filters);
             const response = await apiService.getAdminExpenseClaims(filters);
+            console.log('📋 Response from getAdminExpenseClaims:', response);
             
             if (response.success && response.data?.message) {
                 const data = response.data.message;
+                console.log('📋 Claims loaded:', data.claims?.length || 0, 'claims, stats:', data.statistics);
                 setClaims(data.claims || []);
                 setStatistics(data.statistics || {});
+            } else {
+                console.error('❌ Failed to load claims:', response);
+                setClaims([]);
+                setStatistics({});
             }
         } catch (error) {
-            console.error('Error loading claims:', error);
-            Alert.alert('Error', 'Failed to load expense claims');
+            console.error('❌ Error loading claims:', error);
+            setClaims([]);
+            setStatistics({});
         } finally {
             setLoading(false);
         }

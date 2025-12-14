@@ -95,6 +95,12 @@ const CompApprovalScreen = ({ navigation }) => {
     const fetchPendingRequests = async () => {
         try {
             setLoading(true);
+            console.log('📋 Fetching pending comp leave requests with filters:', {
+                docstatus: 0,
+                department: filterDepartment || null,
+                employee: filterEmployee || null,
+            });
+            
             const response = await apiService.getAllCompLeaves({
                 docstatus: 0, // Pending only
                 department: filterDepartment || null,
@@ -102,17 +108,20 @@ const CompApprovalScreen = ({ navigation }) => {
                 limit: 100
             });
 
+            console.log('📋 Response from getAllCompLeaves:', response);
+            
             if (response.success && response.data?.message) {
                 const data = response.data.message;
                 const applications = data.requests || [];
+                console.log('✅ Pending comp leaves loaded:', applications.length, 'requests');
                 setPendingRequests(Array.isArray(applications) ? applications : []);
                 setStatistics(data.statistics || {});
             } else {
+                console.error('❌ Failed to fetch comp leaves:', response);
                 setPendingRequests([]);
             }
         } catch (error) {
-            console.error('Fetch pending requests error:', error);
-            Alert.alert('Error', 'Failed to load pending requests');
+            console.error('❌ Fetch pending comp leave requests error:', error);
             setPendingRequests([]);
         } finally {
             setLoading(false);

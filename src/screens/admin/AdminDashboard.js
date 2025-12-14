@@ -99,9 +99,18 @@ const AdminDashboard = ({ navigation }) => {
 
             // Use new comprehensive admin approval API
             const response = await ApiService.get(`/api/method/hrms.api.get_admin_pending_approvals?employee=${empId}&limit_page_length=500`);
+            console.log('📋 Raw response from get_admin_pending_approvals:', response);
             
             if (response.success && response.data?.message) {
                 const approvals = response.data.message;
+                console.log('✅ Raw approvals data:', {
+                    leave: approvals.leave_applications?.length || 0,
+                    expense: approvals.expense_claims?.length || 0,
+                    wfh: approvals.wfh_requests?.length || 0,
+                    travel: approvals.travel_requests?.length || 0,
+                    compLeave: approvals.comp_leave_requests?.length || 0,
+                });
+                
                 const data = {
                     wfhApprovals: approvals.wfh_requests?.length || 0,
                     leaveApprovals: approvals.leave_applications?.length || 0,

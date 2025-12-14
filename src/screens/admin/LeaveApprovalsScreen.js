@@ -106,18 +106,21 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                 leave_type: selectedLeaveType || null,
             };
 
+            console.log('📋 Fetching pending leaves with filters:', filters);
             const response = await apiService.getAllLeaves(filters);
+            console.log('📋 Response from getAllLeaves:', response);
             
             if (response.success && response.data?.message) {
                 const result = response.data.message;
+                console.log('✅ Pending leaves loaded:', result.applications?.length || 0, 'applications');
                 setPendingLeaves(Array.isArray(result.applications) ? result.applications : []);
                 setStatistics(result.statistics || null);
             } else {
+                console.error('❌ Failed to fetch leaves:', response);
                 setPendingLeaves([]);
             }
         } catch (error) {
-            console.error('Error fetching pending leaves:', error);
-            Alert.alert('Error', 'Failed to load pending leaves');
+            console.error('❌ Error fetching pending leaves:', error);
             setPendingLeaves([]);
         }
     };
@@ -132,6 +135,7 @@ const LeaveApprovalsScreen = ({ navigation }) => {
             };
 
             const response = await apiService.getAllLeaves(filters);
+            console.log('📋 History response:', response);
             
             if (response.success && response.data?.message) {
                 const result = response.data.message;
@@ -140,14 +144,15 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                 const history = applications.filter(
                     app => ['Approved', 'Rejected', 'Cancelled'].includes(app.status)
                 );
+                console.log('📋 History leaves loaded:', history.length, 'from', applications.length, 'total');
                 setHistoryLeaves(history);
                 setStatistics(result.statistics || null);
             } else {
+                console.error('❌ Failed to fetch history:', response);
                 setHistoryLeaves([]);
             }
         } catch (error) {
-            console.error('Error fetching history:', error);
-            Alert.alert('Error', 'Failed to load leave history');
+            console.error('❌ Error fetching history:', error);
             setHistoryLeaves([]);
         }
     };
