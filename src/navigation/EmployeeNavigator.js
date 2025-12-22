@@ -26,6 +26,7 @@ import MyTasksScreen from '../screens/employee/MyTasksScreen';
 import EmployeeStandupScreen from '../screens/employee/EmployeeStandupScreen';
 import EmployeeStandupUpdateScreen from '../screens/employee/EmployeeStandupUpdateScreen';
 import EmployeeStandupHistoryScreen from '../screens/employee/EmployeeStandupHistoryScreen';
+import EmployeeTodayStandupScreen from '../screens/employee/EmployeeTodayStandupScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -53,6 +54,7 @@ const EmployeeNavigator = () => {
             <Stack.Screen name="WFHRequest" component={WFHRequestScreen} options={{ title: 'WFH Request' }} />
 
             <Stack.Screen name="EmployeeStandup" component={EmployeeStandupScreen} options={{ title: "Today's Standup" }} />
+            <Stack.Screen name="EmployeeTodayStandup" component={EmployeeTodayStandupScreen} options={{ headerShown: false }} />
             <Stack.Screen name="EmployeeStandupUpdate" component={EmployeeStandupUpdateScreen} options={{ title: 'Update Standup' }} />
             <Stack.Screen name="EmployeeStandupHistory" component={EmployeeStandupHistoryScreen} options={{ title: 'Standup History' }} />
 

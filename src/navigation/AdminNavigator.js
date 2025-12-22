@@ -28,6 +28,7 @@ import ProjectTasksScreen from '../screens/admin/ProjectTasksScreen';
 
 import AdminNotifications from '../screens/admin/AdminNotifications';
 import AdminStandupHubScreen from '../screens/admin/AdminStandupHubScreen';
+import AdminTodayStandupScreen from '../screens/admin/AdminTodayStandupScreen';
 import AdminStandupListScreen from '../screens/admin/AdminStandupListScreen';
 import AdminStandupDetailScreen from '../screens/admin/AdminStandupDetailScreen';
 import AdminDepartmentStandupScreen from '../screens/admin/AdminDepartmentStandupScreen';
@@ -71,6 +72,7 @@ const AdminNavigator = () => {
             <Stack.Screen name="CreateNotification" component={CreateNotificationScreen} options={{ title: 'Create Notification' }} />
 
             <Stack.Screen name="AdminStandupHub" component={AdminStandupHubScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="AdminTodayStandup" component={AdminTodayStandupScreen} options={{ headerShown: false }} />
             <Stack.Screen name="AdminStandupList" component={AdminStandupListScreen} options={{ headerShown: false }} />
             <Stack.Screen name="AdminStandupDetail" component={AdminStandupDetailScreen} options={{ headerShown: false }} />
             <Stack.Screen name="AdminDepartmentStandup" component={AdminDepartmentStandupScreen} options={{ headerShown: false }} />

@@ -4,108 +4,111 @@ import {
   ScrollView,
   StyleSheet,
   Alert,
-  RefreshControl,
   FlatList,
+  RefreshControl,
   TouchableOpacity,
-  SectionList,
 } from 'react-native';
 import {
   Text,
-  TextInput,
-  Button,
   useTheme,
   ActivityIndicator,
-  Card,
   Chip,
   Divider,
-  SegmentedButtons,
 } from 'react-native-paper';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import AppHeader from '../../components/ui/AppHeader';
+import Section from '../../components/ui/Section';
+import ListItem from '../../components/ui/ListItem';
 import StandupService from '../../services/standup.service';
-import { formatDate } from '../../utils/helpers';
 
-const AdminDepartmentStandupScreen = ({ navigation, route }) => {
+const AdminDepartmentStandupScreen = ({ navigation }) => {
   const { custom } = useTheme();
-  const { department } = route.params || {};
 
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [summary, setSummary] = useState(null);
-  const [selectedDepartment, setSelectedDepartment] = useState(department || '');
-  const [dateRange, setDateRange] = useState('7days');
+  const [departmentData, setDepartmentData] = useState(null);
+  const [selectedDept, setSelectedDept] = useState(null);
   const [departments, setDepartments] = useState([]);
-  const [sortBy, setSortBy] = useState('completion'); // completion, name
+  const [sortBy, setSortBy] = useState('completion');
+  const [dateRange, setDateRange] = useState({
+    startDate: new Date(new Date().setDate(new Date().getDate() - 7)).toISOString().split('T')[0],
+    endDate: new Date().toISOString().split('T')[0],
+  });
 
-  // Calculate date range
-  const getDateRange = useCallback(() => {
-    const today = new Date();
-    let fromDate = new Date();
-
-    switch (dateRange) {
-      case '7days':
-        fromDate.setDate(today.getDate() - 7);
-        break;
-      case '30days':
-        fromDate.setDate(today.getDate() - 30);
-        break;
-      case 'today':
-        fromDate = new Date(today);
-        break;
-      default:
-        fromDate.setDate(today.getDate() - 7);
-    }
-
-    return {
-      from_date: fromDate.toISOString().split('T')[0],
-      to_date: today.toISOString().split('T')[0],
-    };
-  }, [dateRange]);
-
-  // Fetch department summary
   const fetchDepartmentSummary = useCallback(async () => {
-    if (!selectedDepartment) {
-      Alert.alert('Error', 'Please select a department');
-      return;
-    }
-
     setLoading(true);
     try {
-      const dateParams = getDateRange();
       const result = await StandupService.getDepartmentStandupSummary(
-        selectedDepartment,
-        dateParams.from_date,
-        dateParams.to_date
+        dateRange.startDate,
+        dateRange.endDate,
+        null // Get summary for all departments or current selected
       );
 
-      console.log('📊 Department summary fetched:', result);
-      setSummary(result.data || result);
+      console.log('📊 Department summary:', result);
+
+      // Handle different response structures from API
+      let deptSummary = {};
+      
+      if (result?.data?.employee_summary) {
+        // Single department response structure from API docs
+        // Response has: { department, from_date, to_date, employee_summary: [...], department_statistics }
+        const deptData = result.data;
+        deptSummary[deptData.department] = {
+          department: deptData.department,
+          employees: (deptData.employee_summary || []).map(emp => ({
+            name: emp.employee,
+            employee: emp.employee,
+            employee_name: emp.employee_name,
+            designation: emp.designation,
+            total_tasks: emp.total_tasks || 0,
+            completed_tasks: emp.completed_tasks || 0,
+            completion_rate: emp.completion_rate || 0,
+            tasks: emp.tasks || [],
+          })),
+          totalTasks: deptData.department_statistics?.total_tasks || 0,
+          completedTasks: deptData.department_statistics?.completed_tasks || 0,
+        };
+      } else if (Array.isArray(result?.data)) {
+        // Array of employees or departments response
+        const dataList = result.data;
+        if (dataList.length > 0 && dataList[0].department) {
+          // Array of employees grouped by department
+          dataList.forEach(item => {
+            if (!deptSummary[item.department]) {
+              deptSummary[item.department] = {
+                department: item.department,
+                employees: [],
+                totalTasks: 0,
+                completedTasks: 0,
+              };
+            }
+            deptSummary[item.department].employees.push(item);
+            deptSummary[item.department].totalTasks += item.total_tasks || 0;
+            deptSummary[item.department].completedTasks += item.completed_tasks || 0;
+          });
+        }
+      }
+
+      const deptList = Object.values(deptSummary);
+      console.log('✅ Processed departments:', deptList);
+      
+      setDepartments(deptList);
+      setDepartmentData(deptList);
+
+      if (deptList.length > 0 && !selectedDept) {
+        setSelectedDept(deptList[0]);
+      }
     } catch (error) {
-      console.error('❌ Error fetching summary:', error);
-      Alert.alert('Error', 'Failed to load summary: ' + (error.message || 'Unknown error'));
+      console.error('❌ Error fetching department summary:', error);
+      Alert.alert('Error', 'Failed to load department data');
     } finally {
       setLoading(false);
     }
-  }, [selectedDepartment, getDateRange]);
-
-  // Fetch available departments
-  const fetchDepartments = useCallback(async () => {
-    try {
-      // This would normally come from an API or storage
-      // For now, we'll use common department names
-      const commonDepts = ['Software - DS', 'HR', 'Finance', 'Operations', 'Sales'];
-      setDepartments(commonDepts);
-    } catch (error) {
-      console.error('Error fetching departments:', error);
-    }
-  }, []);
+  }, [dateRange, selectedDept]);
 
   useEffect(() => {
-    fetchDepartments();
-    if (selectedDepartment) {
-      fetchDepartmentSummary();
-    }
-  }, []);
+    fetchDepartmentSummary();
+  }, [fetchDepartmentSummary]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -113,242 +116,111 @@ const AdminDepartmentStandupScreen = ({ navigation, route }) => {
     setRefreshing(false);
   }, [fetchDepartmentSummary]);
 
-  // Sort employee summary
-  const getSortedEmployees = useCallback(() => {
-    if (!summary?.employee_summary) return [];
+  const getCompletionPercentage = (completed, total) => {
+    return total > 0 ? Math.round((completed / total) * 100) : 0;
+  };
 
-    const employees = [...summary.employee_summary];
+  const getSortedEmployees = (employees) => {
+    const sorted = [...employees];
     if (sortBy === 'completion') {
-      return employees.sort((a, b) => b.completion_rate - a.completion_rate);
-    } else {
-      return employees.sort((a, b) =>
-        a.employee.localeCompare(b.employee)
+      return sorted.sort(
+        (a, b) =>
+          getCompletionPercentage(b.completed_tasks, b.total_tasks) -
+          getCompletionPercentage(a.completed_tasks, a.total_tasks)
       );
+    } else if (sortBy === 'name') {
+      return sorted.sort((a, b) => a.employee_name.localeCompare(b.employee_name));
     }
-  }, [summary, sortBy])();
+    return sorted;
+  };
 
-  // Render employee card
-  const renderEmployeeCard = ({ item: employee }) => (
-    <Card
+  const renderDepartmentTab = ({ item }) => (
+    <TouchableOpacity
       style={[
-        styles.employeeCard,
-        { backgroundColor: custom.palette.surface },
+        styles.deptTab,
+        selectedDept?.department === item.department && styles.deptTabActive,
+        {
+          borderBottomColor:
+            selectedDept?.department === item.department
+              ? custom.palette.primary
+              : '#E5E7EB',
+        },
       ]}
+      onPress={() => setSelectedDept(item)}
     >
-      <Card.Content>
-        {/* Employee Header */}
-        <View style={styles.employeeHeader}>
-          <View style={styles.employeeInfo}>
-            <Text style={styles.employeeName}>{employee.employee}</Text>
-            <Text style={styles.employeeDesignation}>
-              {employee.designation}
-            </Text>
-          </View>
-          <View style={styles.completionBadge}>
-            <Text style={styles.completionValue}>
-              {employee.completion_rate}%
-            </Text>
-            <View
-              style={[
-                styles.completionIndicator,
-                {
-                  backgroundColor:
-                    employee.completion_rate >= 80
-                      ? '#10B981'
-                      : employee.completion_rate >= 50
-                      ? '#F59E0B'
-                      : '#EF4444',
-                },
-              ]}
-            />
-          </View>
-        </View>
-
-        <Divider style={styles.divider} />
-
-        {/* Task Stats */}
-        <View style={styles.statsRow}>
-          <View style={styles.stat}>
-            <Icon
-              name="tasks"
-              size={14}
-              color={custom.palette.primary}
-              style={{ marginRight: 6 }}
-            />
-            <Text style={styles.statText}>
-              {employee.total_tasks} Total
-            </Text>
-          </View>
-
-          <View style={styles.stat}>
-            <Icon
-              name="check-circle"
-              size={14}
-              color="#10B981"
-              style={{ marginRight: 6 }}
-            />
-            <Text style={[styles.statText, { color: '#10B981' }]}>
-              {employee.completed_tasks} Done
-            </Text>
-          </View>
-
-          <View style={styles.stat}>
-            <Icon
-              name="hourglass-half"
-              size={14}
-              color="#F59E0B"
-              style={{ marginRight: 6 }}
-            />
-            <Text style={[styles.statText, { color: '#F59E0B' }]}>
-              {employee.total_tasks - employee.completed_tasks} Pending
-            </Text>
-          </View>
-        </View>
-
-        {/* Tasks Preview */}
-        {employee.tasks && employee.tasks.length > 0 && (
-          <>
-            <Divider style={[styles.divider, { marginVertical: 8 }]} />
-            <View style={styles.tasksPreview}>
-              <Text style={styles.tasksLabel}>Recent Tasks:</Text>
-              {employee.tasks.slice(0, 3).map((task, idx) => (
-                <View key={idx} style={styles.taskItem}>
-                  <View style={styles.taskIndicator}>
-                    <Icon
-                      name={
-                        task.task_status === 'Completed'
-                          ? 'check'
-                          : 'circle'
-                      }
-                      size={10}
-                      color={
-                        task.task_status === 'Completed'
-                          ? '#10B981'
-                          : custom.palette.primary
-                      }
-                    />
-                  </View>
-                  <View style={styles.taskInfo}>
-                    <Text
-                      style={styles.taskTitle}
-                      numberOfLines={1}
-                    >
-                      {task.task_title}
-                    </Text>
-                    <Text style={styles.taskDate}>
-                      {formatDate(task.standup_date)}
-                    </Text>
-                  </View>
-                  <View
-                    style={[
-                      styles.progressBadge,
-                      {
-                        backgroundColor:
-                          task.completion_percentage >= 80
-                            ? '#D1FAE5'
-                            : task.completion_percentage >= 50
-                            ? '#FEF3C7'
-                            : '#FEE2E2',
-                      },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.progressText,
-                        {
-                          color:
-                            task.completion_percentage >= 80
-                              ? '#065F46'
-                              : task.completion_percentage >= 50
-                              ? '#92400E'
-                              : '#7F1D1D',
-                        },
-                      ]}
-                    >
-                      {task.completion_percentage}%
-                    </Text>
-                  </View>
-                </View>
-              ))}
-              {employee.tasks.length > 3 && (
-                <Text style={styles.moreText}>
-                  +{employee.tasks.length - 3} more tasks
-                </Text>
-              )}
-            </View>
-          </>
-        )}
-      </Card.Content>
-    </Card>
+      <Text
+        style={[
+          styles.deptTabText,
+          selectedDept?.department === item.department && {
+            color: custom.palette.primary,
+            fontWeight: '700',
+          },
+        ]}
+      >
+        {item.department}
+      </Text>
+      <Text
+        style={[
+          styles.deptTabBadge,
+          selectedDept?.department === item.department && {
+            backgroundColor: custom.palette.primary,
+            color: '#FFF',
+          },
+        ]}
+      >
+        {item.employees?.length || 0}
+      </Text>
+    </TouchableOpacity>
   );
 
-  if (!selectedDepartment) {
+  const renderEmployeeItem = ({ item }) => {
+    const completion = getCompletionPercentage(item.completed_tasks, item.total_tasks);
+    const statusColor =
+      completion >= 80 ? '#10B981' : completion >= 50 ? '#F59E0B' : '#EF4444';
+
     return (
-      <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
-        <AppHeader
-          title="Department Standup Summary"
-          canGoBack={true}
-          onBack={() => navigation.goBack()}
-        />
-
-        <ScrollView style={styles.container}>
-          <View style={styles.selectContainer}>
-            <Text style={styles.selectLabel}>Select Department:</Text>
-            <View style={styles.departmentGrid}>
-              {departments.map(dept => (
-                <TouchableOpacity
-                  key={dept}
-                  style={[
-                    styles.deptButton,
-                    selectedDepartment === dept &&
-                    styles.deptButtonActive,
-                  ]}
-                  onPress={() => {
-                    setSelectedDepartment(dept);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.deptButtonText,
-                      selectedDepartment === dept &&
-                      styles.deptButtonTextActive,
-                    ]}
-                  >
-                    {dept}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Button
-              mode="contained"
-              onPress={fetchDepartmentSummary}
-              disabled={!selectedDepartment}
-              loading={loading}
-              style={styles.loadButton}
-              buttonColor={custom.palette.primary}
+      <ListItem
+        title={item.employee_name}
+        subtitle={`${item.completed_tasks}/${item.total_tasks} tasks`}
+        leftIcon="user"
+        tint={custom.palette.primary}
+        rightContent={
+          <View style={styles.employeeStatus}>
+            <View
+              style={[
+                styles.completionBadge,
+                { borderColor: statusColor },
+              ]}
             >
-              Load Summary
-            </Button>
+              <Text style={[styles.completionText, { color: statusColor }]}>
+                {completion}%
+              </Text>
+            </View>
           </View>
-        </ScrollView>
-      </View>
+        }
+      />
     );
-  }
+  };
 
-  if (loading && !summary) {
+  const renderEmptyState = () => (
+    <View style={styles.emptyContainer}>
+      <Icon name="inbox" size={48} color="#D1D5DB" />
+      <Text style={styles.emptyText}>No department data</Text>
+      <Text style={styles.emptySubtext}>Try adjusting the date range</Text>
+    </View>
+  );
+
+  if (loading && !departmentData) {
     return (
       <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
         <AppHeader
-          title="Department Standup Summary"
+          title="Department Summary"
           canGoBack={true}
           onBack={() => navigation.goBack()}
         />
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
           <ActivityIndicator size="large" color={custom.palette.primary} />
-          <Text style={{ marginTop: 12, color: '#6B7280' }}>
-            Loading summary...
-          </Text>
+          <Text style={{ marginTop: 12, color: '#6B7280' }}>Loading department data...</Text>
         </View>
       </View>
     );
@@ -357,16 +229,13 @@ const AdminDepartmentStandupScreen = ({ navigation, route }) => {
   return (
     <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
       <AppHeader
-        title={`${selectedDepartment} - Standup Summary`}
+        title="Department Summary"
         canGoBack={true}
-        onBack={() => {
-          setSelectedDepartment('');
-          setSummary(null);
-          navigation.goBack();
-        }}
+        onBack={() => navigation.goBack()}
       />
 
       <ScrollView
+        style={styles.container}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -374,109 +243,147 @@ const AdminDepartmentStandupScreen = ({ navigation, route }) => {
             colors={[custom.palette.primary]}
           />
         }
-        style={styles.container}
       >
-        {/* Date Range & Filters */}
-        <View style={styles.filtersContainer}>
-          <Text style={styles.filterLabel}>Date Range</Text>
-          <SegmentedButtons
-            value={dateRange}
-            onValueChange={setDateRange}
-            buttons={[
-              { value: 'today', label: 'Today' },
-              { value: '7days', label: '7 Days' },
-              { value: '30days', label: '30 Days' },
-            ]}
-            style={styles.segmentedButtons}
-          />
-
-          <View style={styles.filterRow}>
-            <Text style={styles.filterLabel}>Sort By</Text>
-            <SegmentedButtons
-              value={sortBy}
-              onValueChange={setSortBy}
-              buttons={[
-                { value: 'completion', label: 'Completion' },
-                { value: 'name', label: 'Name' },
-              ]}
-              style={styles.sortButtons}
+        {/* Department Tabs */}
+        {departments.length > 0 && (
+          <View style={styles.deptTabsContainer}>
+            <FlatList
+              data={departments}
+              renderItem={renderDepartmentTab}
+              keyExtractor={item => item.department}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.deptTabsList}
             />
-          </View>
-        </View>
-
-        {/* Department Statistics */}
-        {summary?.department_statistics && (
-          <View style={[styles.statsCard, { backgroundColor: '#ECFDF5' }]}>
-            <Text style={[styles.statsTitle, { color: '#065F46' }]}>
-              📊 Department Statistics
-            </Text>
-            <View style={styles.statsGrid}>
-              <View style={styles.statCard}>
-                <Text style={styles.statNumber}>
-                  {summary.department_statistics.total_employees}
-                </Text>
-                <Text style={styles.statLabel}>Employees</Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={styles.statNumber}>
-                  {summary.department_statistics.total_tasks}
-                </Text>
-                <Text style={styles.statLabel}>Total Tasks</Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={[styles.statNumber, { color: '#10B981' }]}>
-                  {summary.department_statistics.completed_tasks}
-                </Text>
-                <Text style={styles.statLabel}>Completed</Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={[styles.statNumber, { color: '#3B82F6' }]}>
-                  {summary.department_statistics.overall_completion_rate}%
-                </Text>
-                <Text style={styles.statLabel}>Overall Comp.</Text>
-              </View>
-            </View>
           </View>
         )}
 
-        {/* Date Range Info */}
-        <View style={styles.dateInfoContainer}>
-          <Icon
-            name="calendar-alt"
-            size={14}
-            color="#6B7280"
-            style={{ marginRight: 6 }}
-          />
-          <Text style={styles.dateInfoText}>
-            {summary?.from_date} to {summary?.to_date}
-          </Text>
-        </View>
+        {/* Overall Statistics */}
+        {selectedDept && (
+          <Section title="Department Statistics" icon="chart-bar" tint={custom.palette.primary}>
+            <View style={styles.statsBox}>
+              <View style={styles.statsRow}>
+                <View style={styles.statItem}>
+                  <Icon name="users" size={18} color={custom.palette.primary} />
+                  <Text style={styles.statValue}>{selectedDept.employees?.length || 0}</Text>
+                  <Text style={styles.statLabel}>Employees</Text>
+                </View>
+                <Divider style={{ height: 50, width: 1 }} />
+                <View style={styles.statItem}>
+                  <Icon name="tasks" size={18} color="#8B5CF6" />
+                  <Text style={[styles.statValue, { color: '#8B5CF6' }]}>
+                    {selectedDept.totalTasks}
+                  </Text>
+                  <Text style={styles.statLabel}>Total Tasks</Text>
+                </View>
+                <Divider style={{ height: 50, width: 1 }} />
+                <View style={styles.statItem}>
+                  <Icon name="check-circle" size={18} color="#10B981" />
+                  <Text style={[styles.statValue, { color: '#10B981' }]}>
+                    {selectedDept.completedTasks}
+                  </Text>
+                  <Text style={styles.statLabel}>Completed</Text>
+                </View>
+              </View>
+
+              {/* Completion Rate */}
+              <View style={styles.completionRateContainer}>
+                <View style={styles.rateHeader}>
+                  <Text style={styles.rateLabel}>Department Completion Rate</Text>
+                  <Chip
+                    style={{
+                      backgroundColor:
+                        getCompletionPercentage(
+                          selectedDept.completedTasks,
+                          selectedDept.totalTasks
+                        ) >= 80
+                          ? '#D1FAE5'
+                          : '#FEF3C7',
+                    }}
+                    textStyle={{
+                      color:
+                        getCompletionPercentage(
+                          selectedDept.completedTasks,
+                          selectedDept.totalTasks
+                        ) >= 80
+                          ? '#065F46'
+                          : '#92400E',
+                      fontWeight: '600',
+                    }}
+                  >
+                    {getCompletionPercentage(
+                      selectedDept.completedTasks,
+                      selectedDept.totalTasks
+                    )}
+                    %
+                  </Chip>
+                </View>
+                <View style={styles.progressBar}>
+                  <View
+                    style={[
+                      styles.progressFill,
+                      {
+                        width: `${getCompletionPercentage(
+                          selectedDept.completedTasks,
+                          selectedDept.totalTasks
+                        )}%`,
+                      },
+                    ]}
+                  />
+                </View>
+              </View>
+            </View>
+          </Section>
+        )}
 
         {/* Employees List */}
-        <View style={styles.employeesSection}>
-          <Text style={styles.sectionTitle}>
-            👥 Employees ({getSortedEmployees.length})
-          </Text>
-
-          {getSortedEmployees.length > 0 ? (
-            <FlatList
-              data={getSortedEmployees}
-              renderItem={renderEmployeeCard}
-              keyExtractor={item => item.employee}
-              scrollEnabled={false}
-              contentContainerStyle={styles.listContainer}
-            />
-          ) : (
-            <View style={styles.emptyContainer}>
-              <Icon
-                name="inbox"
-                size={48}
-                color="#D1D5DB"
-              />
-              <Text style={styles.emptyText}>No employee data found</Text>
+        {selectedDept && selectedDept.employees && selectedDept.employees.length > 0 && (
+          <Section title="Employees" icon="user-friends" tint={custom.palette.primary}>
+            {/* Sort Options */}
+            <View style={styles.sortContainer}>
+              <Text style={styles.sortLabel}>Sort by:</Text>
+              <View style={styles.sortChips}>
+                <Chip
+                  selected={sortBy === 'completion'}
+                  onPress={() => setSortBy('completion')}
+                  style={[
+                    styles.sortChip,
+                    sortBy === 'completion' && {
+                      backgroundColor: custom.palette.primary,
+                    },
+                  ]}
+                  textStyle={sortBy === 'completion' ? { color: '#FFF' } : {}}
+                >
+                  Completion
+                </Chip>
+                <Chip
+                  selected={sortBy === 'name'}
+                  onPress={() => setSortBy('name')}
+                  style={[
+                    styles.sortChip,
+                    sortBy === 'name' && {
+                      backgroundColor: custom.palette.primary,
+                    },
+                  ]}
+                  textStyle={sortBy === 'name' ? { color: '#FFF' } : {}}
+                >
+                  Name
+                </Chip>
+              </View>
             </View>
-          )}
-        </View>
+
+            <FlatList
+              data={getSortedEmployees(selectedDept.employees)}
+              renderItem={renderEmployeeItem}
+              keyExtractor={item => item.name}
+              scrollEnabled={false}
+            />
+          </Section>
+        )}
+
+        {(!selectedDept || !selectedDept.employees || selectedDept.employees.length === 0) && (
+          renderEmptyState()
+        )}
       </ScrollView>
     </View>
   );
@@ -485,233 +392,149 @@ const AdminDepartmentStandupScreen = ({ navigation, route }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 16,
+    paddingBottom: 20,
   },
-  selectContainer: {
-    paddingVertical: 32,
-  },
-  selectLabel: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#1F2937',
-    marginBottom: 16,
-  },
-  departmentGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    marginBottom: 24,
-  },
-  deptButton: {
-    flex: 1,
-    minWidth: '48%',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    backgroundColor: '#F9FAFB',
-    alignItems: 'center',
-  },
-  deptButtonActive: {
-    backgroundColor: '#DBEAFE',
-    borderColor: '#3B82F6',
-  },
-  deptButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#6B7280',
-  },
-  deptButtonTextActive: {
-    color: '#1E40AF',
-  },
-  loadButton: {
-    marginTop: 16,
-  },
-  filtersContainer: {
-    marginBottom: 16,
-    paddingBottom: 16,
+  deptTabsContainer: {
+    backgroundColor: '#FFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
-  filterLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 8,
+  deptTabsList: {
+    paddingHorizontal: 16,
   },
-  segmentedButtons: {
-    marginBottom: 12,
-  },
-  filterRow: {
-    marginTop: 12,
-  },
-  sortButtons: {
-    marginTop: 8,
-  },
-  statsCard: {
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderLeftWidth: 4,
-    borderLeftColor: '#10B981',
-  },
-  statsTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    marginBottom: 12,
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  statCard: {
-    flex: 1,
-    alignItems: 'center',
-    marginHorizontal: 4,
-  },
-  statNumber: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#065F46',
-  },
-  statLabel: {
-    fontSize: 11,
-    color: '#059669',
-    marginTop: 4,
-  },
-  dateInfoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  deptTab: {
+    paddingVertical: 12,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 8,
-    marginBottom: 16,
-  },
-  dateInfoText: {
-    fontSize: 12,
-    color: '#6B7280',
-  },
-  employeesSection: {
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#1F2937',
-    marginBottom: 12,
-  },
-  listContainer: {
-    paddingBottom: 20,
-  },
-  employeeCard: {
-    marginBottom: 12,
-    borderRadius: 8,
-    elevation: 2,
-  },
-  employeeHeader: {
+    marginRight: 8,
+    borderBottomWidth: 2,
+    borderBottomColor: '#E5E7EB',
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 8,
-  },
-  employeeInfo: {
-    flex: 1,
-  },
-  employeeName: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#1F2937',
-  },
-  employeeDesignation: {
-    fontSize: 11,
-    color: '#6B7280',
-    marginTop: 2,
-  },
-  completionBadge: {
     alignItems: 'center',
+    gap: 6,
   },
-  completionValue: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1F2937',
+  deptTabActive: {
+    borderBottomColor: '#3B82F6',
   },
-  completionIndicator: {
-    width: 24,
-    height: 4,
-    borderRadius: 2,
-    marginTop: 4,
+  deptTabText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#6B7280',
   },
-  divider: {
-    marginVertical: 8,
+  deptTabBadge: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#6B7280',
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 12,
+  },
+  statsBox: {
+    backgroundColor: '#FFF',
+    borderRadius: 8,
+    padding: 12,
   },
   statsRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-  },
-  stat: {
-    flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 16,
   },
-  statText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  tasksPreview: {
-    paddingVertical: 8,
-  },
-  tasksLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#6B7280',
-    marginBottom: 8,
-  },
-  taskItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  taskIndicator: {
-    marginRight: 8,
-  },
-  taskInfo: {
+  statItem: {
     flex: 1,
+    alignItems: 'center',
   },
-  taskTitle: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#374151',
+  statValue: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginTop: 6,
+    color: '#1F2937',
   },
-  taskDate: {
-    fontSize: 10,
-    color: '#9CA3AF',
+  statLabel: {
+    fontSize: 11,
+    color: '#6B7280',
     marginTop: 2,
   },
-  progressBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+  completionRateContainer: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 12,
+  },
+  rateHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  rateLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  progressBar: {
+    height: 8,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#10B981',
     borderRadius: 4,
   },
-  progressText: {
-    fontSize: 10,
-    fontWeight: 'bold',
+  sortContainer: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    backgroundColor: '#FFF',
+    marginBottom: 8,
+    borderRadius: 8,
   },
-  moreText: {
+  sortLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  sortChips: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  sortChip: {
+    backgroundColor: '#FFF',
+    borderColor: '#E5E7EB',
+    borderWidth: 1,
+  },
+  employeeStatus: {
+    alignItems: 'flex-end',
+  },
+  completionBadge: {
+    width: 50,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  completionText: {
     fontSize: 11,
-    color: '#9CA3AF',
-    fontStyle: 'italic',
-    marginTop: 6,
+    fontWeight: '700',
   },
   emptyContainer: {
     alignItems: 'center',
-    paddingVertical: 32,
+    justifyContent: 'center',
+    paddingVertical: 60,
   },
   emptyText: {
-    fontSize: 14,
-    color: '#6B7280',
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
     marginTop: 12,
+  },
+  emptySubtext: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 4,
   },
 });
 

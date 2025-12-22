@@ -1,6 +1,34 @@
 import ApiService from './api.service';
 
 class StandupService {
+  // ============== HELPER METHODS ==============
+
+  /**
+   * Normalize standup data from API response to common format
+   * @param {object} apiData - Raw data from API
+   */
+  _normalizeStandupData(apiData) {
+    if (!apiData) return null;
+
+    return {
+      name: apiData.standup_id || apiData.name,
+      standup_id: apiData.standup_id || apiData.name,
+      employee_name: apiData.employee_name,
+      department: apiData.department,
+      date: apiData.standup_date || apiData.date,
+      standup_date: apiData.standup_date || apiData.date,
+      time: apiData.standup_time || apiData.time,
+      remarks: apiData.remarks || apiData.manager_remarks,
+      manager_remarks: apiData.remarks || apiData.manager_remarks,
+      status: apiData.is_submitted ? 'Submitted' : 'Draft',
+      is_submitted: apiData.is_submitted,
+      docstatus: apiData.docstatus,
+      tasks: apiData.tasks || [],
+      task_count: apiData.tasks?.length || 0,
+      statistics: apiData.statistics,
+    };
+  }
+
   // ============== EMPLOYEE APIs ==============
 
   /**
@@ -134,7 +162,19 @@ class StandupService {
       
       if (frappeResponse?.status === 'success' && frappeResponse?.data) {
         console.log('✅ All standups fetched successfully');
-        return frappeResponse;
+        
+        // Normalize the standup items in the list
+        const normalizedData = {
+          ...frappeResponse.data,
+          standups: (frappeResponse.data.standups || []).map(standup => 
+            this._normalizeStandupData(standup)
+          ),
+        };
+        
+        return {
+          ...frappeResponse,
+          data: normalizedData,
+        };
       }
       
       throw new Error(frappeResponse?.message || 'Failed to fetch all standups');
@@ -181,7 +221,16 @@ class StandupService {
       
       if (apiResponse?.status === 'success' && apiResponse?.data) {
         console.log('✅ Standup detail fetched successfully');
-        return apiResponse;
+        
+        // Normalize the data to consistent format
+        const normalizedData = this._normalizeStandupData(apiResponse.data);
+        console.log('✅ Normalized standup data:', normalizedData);
+        
+        return {
+          status: 'success',
+          data: normalizedData,
+          message: apiResponse.message,
+        };
       }
       
       // If response has error structure
@@ -258,35 +307,64 @@ class StandupService {
 
   /**
    * Get department standup summary (Admin only)
-   * @param {string} department - Department name
-   * @param {string} fromDate - Filter from date
-   * @param {string} toDate - Filter to date
+   * Per API docs: GET /api/method/hrms.api.get_department_standup_summary?department=X&from_date=Y&to_date=Z
+   * @param {string} fromDate - Filter from date (YYYY-MM-DD)
+   * @param {string} toDate - Filter to date (YYYY-MM-DD)
+   * @param {string} department - Department name (optional for getting all departments summary)
    */
-  async getDepartmentStandupSummary(department, fromDate = null, toDate = null) {
+  async getDepartmentStandupSummary(fromDate = null, toDate = null, department = null) {
     try {
-      const params = { department };
+      const params = {};
       if (fromDate) params.from_date = fromDate;
       if (toDate) params.to_date = toDate;
+      if (department) params.department = department;
 
       console.log('🏢 Fetching department standup summary:', params);
-      const response = await ApiService.get('/api/method/hrms.api.get_department_standup_summary', {
-        params,
-      });
+      
+      // Use GET with query params as per API docs
+      const response = await ApiService.get('/api/method/hrms.api.get_department_standup_summary', { params });
+      
+      console.log('📨 Department summary raw response:', response);
       
       if (response.success === false) {
+        console.error('❌ API returned error:', response.message);
         throw new Error(response.message || 'Failed to fetch department standup summary');
       }
 
       const frappeResponse = response.data?.message || response.data;
       
+      console.log('📦 Frappe response:', frappeResponse);
+      
       if (frappeResponse?.status === 'success' && frappeResponse?.data) {
         console.log('✅ Department standup summary fetched successfully');
+        
+        // Handle both department-specific and all-departments response
+        const data = frappeResponse.data;
+        
+        // If it's a single department response with employee_summary
+        if (data.employee_summary) {
+          console.log('✅ Single department response with employee summary');
+          return frappeResponse;
+        }
+        
+        // If it's all departments (array)
+        if (Array.isArray(data)) {
+          console.log('✅ All departments response (array format)');
+          return { data, status: 'success', message: frappeResponse.message };
+        }
+        
         return frappeResponse;
+      } else if (Array.isArray(frappeResponse)) {
+        // Handle case where response is directly an array
+        console.log('✅ Department standup summary fetched (array format)');
+        return { data: frappeResponse, status: 'success' };
       }
       
+      console.error('⚠️ Unexpected response format:', frappeResponse);
       throw new Error(frappeResponse?.message || 'Failed to fetch department standup summary');
     } catch (error) {
-      console.error('❌ Error fetching department standup summary:', error.message);
+      console.error('❌ Error fetching department standup summary:', error);
+      console.error('📋 Error details:', error.response?.data || error.message);
       throw error;
     }
   }
