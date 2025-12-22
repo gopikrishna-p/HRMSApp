@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, ScrollView, StyleSheet, Alert, FlatList } from 'react-native';
-import { Text, Card, useTheme, ActivityIndicator, Button, Chip } from 'react-native-paper';
+import { View, ScrollView, StyleSheet, Alert, FlatList, RefreshControl } from 'react-native';
+import { Text, useTheme, Button, ActivityIndicator, Chip } from 'react-native-paper';
 import Icon from 'react-native-vector-icons/FontAwesome5';
+import AppHeader from '../../components/ui/AppHeader';
 import StandupService from '../../services/standup.service';
 import { formatDate } from '../../utils/helpers';
 
@@ -9,10 +10,10 @@ const AdminDepartmentStandupScreen = ({ navigation }) => {
   const { custom } = useTheme();
 
   const [loading, setLoading] = useState(false);
-  const [departments, setDepartments] = useState([]);
   const [selectedDept, setSelectedDept] = useState(null);
   const [summary, setSummary] = useState(null);
   const [dateRange, setDateRange] = useState('week');
+  const [refreshing, setRefreshing] = useState(false);
 
   const availableDepts = [
     'Software - DS',
@@ -64,93 +65,99 @@ const AdminDepartmentStandupScreen = ({ navigation }) => {
     }
   }, [selectedDept, dateRange, fetchDepartmentSummary]);
 
+  const onRefresh = useCallback(async () => {
+    if (selectedDept) {
+      setRefreshing(true);
+      await fetchDepartmentSummary(selectedDept);
+      setRefreshing(false);
+    }
+  }, [selectedDept, fetchDepartmentSummary]);
+
   const renderEmployeeItem = ({ item }) => (
-    <Card style={styles.employeeCard}>
-      <Card.Content>
-        {/* Employee Info */}
-        <View style={styles.employeeHeader}>
-          <View>
-            <Text style={styles.employeeName}>{item.employee_name}</Text>
-            <Text style={styles.designation}>{item.designation}</Text>
-          </View>
+    <View style={styles.employeeCard}>
+      <View style={styles.employeeHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.employeeName}>{item.employee_name}</Text>
+          <Text style={styles.designation}>{item.designation}</Text>
         </View>
+        <Chip
+          icon={item.completion_rate >= 50 ? 'check' : 'alert'}
+          style={{
+            backgroundColor: item.completion_rate >= 50 ? '#D1FAE5' : '#FEF3C7',
+          }}
+          textStyle={{
+            color: item.completion_rate >= 50 ? '#059669' : '#92400E',
+            fontWeight: '600',
+          }}
+          mode="flat"
+          size="small"
+        >
+          {item.completion_rate}%
+        </Chip>
+      </View>
 
-        {/* Stats Row */}
-        <View style={styles.statsRow}>
-          <View style={styles.stat}>
-            <Text style={styles.statLabel}>Tasks</Text>
-            <Text style={styles.statValue}>{item.total_tasks}</Text>
-          </View>
+      <View style={styles.progressBar}>
+        <View 
+          style={[
+            styles.progressFill,
+            { 
+              width: `${item.completion_rate}%`,
+              backgroundColor: item.completion_rate >= 50 ? '#10B981' : '#F59E0B'
+            }
+          ]}
+        />
+      </View>
 
-          <View style={styles.stat}>
-            <Text style={styles.statLabel}>Completed</Text>
-            <Text style={[styles.statValue, { color: '#10B981' }]}>{item.completed_tasks}</Text>
-          </View>
-
-          <View style={styles.stat}>
-            <Text style={styles.statLabel}>Completion Rate</Text>
-            <Text style={[styles.statValue, { color: custom.palette.primary }]}>
-              {item.completion_rate}%
-            </Text>
-          </View>
+      {item.recent_tasks && item.recent_tasks.length > 0 && (
+        <View style={styles.recentTasks}>
+          <Text style={styles.recentTasksLabel}>Recent</Text>
+          <Text style={styles.recentTasksText} numberOfLines={2}>
+            {item.recent_tasks[0]}
+          </Text>
         </View>
-
-        {/* Progress Bar */}
-        <View style={styles.progressContainer}>
-          <View
-            style={[
-              styles.progressBar,
-              {
-                width: `${item.completion_rate}%`,
-                backgroundColor: item.completion_rate >= 80 ? '#10B981' : custom.palette.primary,
-              },
-            ]}
-          />
-        </View>
-
-        {/* Recent Tasks */}
-        {item.tasks && item.tasks.length > 0 && (
-          <View style={styles.tasksSection}>
-            <Text style={styles.tasksSectionTitle}>Recent Tasks</Text>
-            {item.tasks.slice(0, 2).map((task, idx) => (
-              <View key={idx} style={styles.taskItem}>
-                <Text style={styles.taskDate}>{formatDate(task.standup_date)}</Text>
-                <Text style={styles.taskTitle} numberOfLines={1}>
-                  {task.task_title}
-                </Text>
-                <Chip
-                  size={12}
-                  style={{
-                    backgroundColor: task.task_status === 'Completed' ? '#D1FAE5' : '#FEF3C7',
-                    marginTop: 4,
-                  }}
-                  textStyle={{
-                    color: task.task_status === 'Completed' ? '#065F46' : '#92400E',
-                    fontSize: 9,
-                  }}
-                >
-                  {task.task_status}
-                </Chip>
-              </View>
-            ))}
-          </View>
-        )}
-      </Card.Content>
-    </Card>
+      )}
+    </View>
   );
 
   return (
-    <ScrollView style={[styles.container, { backgroundColor: custom.palette.background }]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Icon name="sitemap" size={24} color={custom.palette.primary} />
-        <Text style={styles.headerTitle}>Department Standups</Text>
-      </View>
+    <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
+      <AppHeader 
+        title="Department Standups"
+        canGoBack={true}
+        onBack={() => navigation.goBack()}
+      />
+      <ScrollView
+        style={styles.container}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        {/* Date Range Filter */}
+        <View style={styles.filterSection}>
+          <Text style={styles.filterLabel}>Date Range</Text>
+          <View style={styles.filterButtons}>
+            <Button
+              mode={dateRange === 'week' ? 'contained' : 'outlined'}
+              onPress={() => setDateRange('week')}
+              style={styles.dateFilterBtn}
+              labelStyle={{ fontSize: 12 }}
+              compact
+            >
+              7 Days
+            </Button>
+            <Button
+              mode={dateRange === 'month' ? 'contained' : 'outlined'}
+              onPress={() => setDateRange('month')}
+              style={styles.dateFilterBtn}
+              labelStyle={{ fontSize: 12 }}
+              compact
+            >
+              30 Days
+            </Button>
+          </View>
+        </View>
 
-      {/* Department Selection */}
-      <Card style={styles.deptCard}>
-        <Card.Content>
-          <Text style={styles.label}>Select Department</Text>
+        {/* Department Selection */}
+        <View style={styles.deptSelectionCard}>
+          <Text style={styles.deptSelectionLabel}>Select Department</Text>
           <View style={styles.deptButtonsGrid}>
             {availableDepts.map((dept) => (
               <Button
@@ -158,101 +165,64 @@ const AdminDepartmentStandupScreen = ({ navigation }) => {
                 mode={selectedDept === dept ? 'contained' : 'outlined'}
                 onPress={() => setSelectedDept(dept)}
                 style={styles.deptButton}
-                labelStyle={{ fontSize: 11 }}
+                labelStyle={{ fontSize: 10 }}
+                compact
               >
                 {dept}
               </Button>
             ))}
           </View>
-        </Card.Content>
-      </Card>
+        </View>
 
-      {selectedDept && (
-        <>
-          {/* Date Range Filter */}
-          <View style={styles.dateFilterRow}>
-            <Button
-              mode={dateRange === 'week' ? 'contained' : 'outlined'}
-              onPress={() => setDateRange('week')}
-              style={styles.dateButton}
-              labelStyle={{ fontSize: 11 }}
-            >
-              Last 7 Days
-            </Button>
-            <Button
-              mode={dateRange === 'month' ? 'contained' : 'outlined'}
-              onPress={() => setDateRange('month')}
-              style={styles.dateButton}
-              labelStyle={{ fontSize: 11 }}
-            >
-              Last 30 Days
-            </Button>
-          </View>
-
-          {loading ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color={custom.palette.primary} />
-            </View>
-          ) : summary ? (
-            <>
-              {/* Department Stats */}
-              {summary.department_statistics && (
+        {/* Summary Section */}
+        {selectedDept && (
+          <>
+            {loading ? (
+              <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+                <ActivityIndicator size="large" color={custom.palette.primary} />
+                <Text style={{ marginTop: 12, color: '#6B7280' }}>Loading summary...</Text>
+              </View>
+            ) : summary ? (
+              <>
+                {/* Statistics Cards */}
                 <View style={styles.statsGrid}>
-                  <Card style={styles.statCard}>
-                    <Card.Content>
-                      <Text style={styles.statNumber}>
-                        {summary.department_statistics.total_employees}
-                      </Text>
-                      <Text style={styles.statName}>Employees</Text>
-                    </Card.Content>
-                  </Card>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statNumber}>{summary.total_employees}</Text>
+                    <Text style={styles.statName}>Employees</Text>
+                  </View>
 
-                  <Card style={styles.statCard}>
-                    <Card.Content>
-                      <Text style={[styles.statNumber, { color: '#10B981' }]}>
-                        {summary.department_statistics.completed_tasks}
-                      </Text>
-                      <Text style={styles.statName}>Completed</Text>
-                    </Card.Content>
-                  </Card>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statNumber}>{summary.submitted_count}</Text>
+                    <Text style={styles.statName}>Submitted</Text>
+                  </View>
 
-                  <Card style={styles.statCard}>
-                    <Card.Content>
-                      <Text style={[styles.statNumber, { color: custom.palette.primary }]}>
-                        {summary.department_statistics.overall_completion_rate}%
-                      </Text>
-                      <Text style={styles.statName}>Overall</Text>
-                    </Card.Content>
-                  </Card>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statNumber}>{summary.avg_completion}%</Text>
+                    <Text style={styles.statName}>Avg Progress</Text>
+                  </View>
                 </View>
-              )}
 
-              {/* Employees List */}
-              {summary.employee_summary && summary.employee_summary.length > 0 ? (
-                <>
-                  <Text style={styles.employeesTitle}>
-                    Team Members ({summary.employee_summary.length})
-                  </Text>
+                {/* Employee List */}
+                <View style={styles.employeeListSection}>
+                  <Text style={styles.listTitle}>Team Performance</Text>
                   <FlatList
-                    data={summary.employee_summary}
+                    data={summary.employees || []}
                     renderItem={renderEmployeeItem}
-                    keyExtractor={(item) => item.employee}
+                    keyExtractor={(item) => item.employee_id}
                     scrollEnabled={false}
                     ItemSeparatorComponent={() => <View style={styles.separator} />}
                   />
-                </>
-              ) : (
-                <Card style={styles.emptyCard}>
-                  <Card.Content>
-                    <Text style={styles.emptyText}>No data available for this department</Text>
-                  </Card.Content>
-                </Card>
-              )}
-            </>
-          ) : null}
-        </>
-      )}
-    </ScrollView>
+                </View>
+              </>
+            ) : (
+              <View style={styles.emptyStateContainer}>
+                <Text style={styles.emptyMessage}>No data available for this department</Text>
+              </View>
+            )}
+          </>
+        )}
+      </ScrollView>
+    </View>
   );
 };
 
@@ -260,56 +230,80 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 16,
+    paddingBottom: 32,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  // Filter Section
+  filterSection: {
     marginBottom: 16,
   },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    marginLeft: 8,
-  },
-  deptCard: {
-    marginBottom: 16,
-  },
-  label: {
+  filterLabel: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#6B7280',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  filterButtons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  dateFilterBtn: {
+    flex: 1,
+    borderRadius: 8,
+  },
+  // Department Selection
+  deptSelectionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  deptSelectionLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#6B7280',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
     marginBottom: 12,
   },
   deptButtonsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'space-between',
+    gap: 8,
   },
   deptButton: {
-    width: '48%',
-    marginBottom: 8,
-  },
-  dateFilterRow: {
-    flexDirection: 'row',
-    marginBottom: 16,
-    justifyContent: 'space-between',
-  },
-  dateButton: {
     flex: 1,
-    marginHorizontal: 4,
+    minWidth: 90,
+    borderRadius: 8,
   },
-  loadingContainer: {
-    paddingVertical: 32,
-    alignItems: 'center',
-  },
+  // Statistics Grid
   statsGrid: {
     flexDirection: 'row',
-    marginBottom: 16,
+    marginBottom: 20,
     justifyContent: 'space-between',
+    gap: 8,
   },
   statCard: {
     flex: 1,
-    marginHorizontal: 4,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
   },
   statNumber: {
     fontSize: 18,
@@ -318,93 +312,97 @@ const styles = StyleSheet.create({
   },
   statName: {
     fontSize: 11,
-    color: '#6B7280',
-    marginTop: 4,
-  },
-  employeesTitle: {
-    fontSize: 14,
     fontWeight: '600',
+    color: '#6B7280',
+    marginTop: 6,
+    textAlign: 'center',
+  },
+  // Employee List Section
+  employeeListSection: {
+    marginBottom: 24,
+  },
+  listTitle: {
+    fontSize: 14,
+    fontWeight: '700',
     color: '#111827',
     marginBottom: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
+  // Employee Card
   employeeCard: {
-    marginBottom: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
   },
   employeeHeader: {
-    marginBottom: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 10,
   },
   employeeName: {
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '700',
     color: '#111827',
   },
   designation: {
     fontSize: 11,
+    fontWeight: '500',
     color: '#6B7280',
-    marginTop: 2,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    marginBottom: 12,
-  },
-  stat: {
-    flex: 1,
-  },
-  statLabel: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#6B7280',
-  },
-  statValue: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
     marginTop: 4,
   },
-  progressContainer: {
+  progressBar: {
     height: 6,
     backgroundColor: '#E5E7EB',
     borderRadius: 3,
     overflow: 'hidden',
-    marginBottom: 12,
+    marginBottom: 10,
   },
-  progressBar: {
+  progressFill: {
     height: '100%',
+    borderRadius: 3,
   },
-  tasksSection: {
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
+  recentTasks: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#6366F1',
   },
-  tasksSectionTitle: {
+  recentTasksLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#6B7280',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  recentTasksText: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#6B7280',
-    marginBottom: 8,
-  },
-  taskItem: {
-    marginBottom: 8,
-  },
-  taskDate: {
-    fontSize: 10,
-    color: '#9CA3AF',
-  },
-  taskTitle: {
-    fontSize: 11,
     color: '#111827',
-    marginVertical: 2,
+    lineHeight: 14,
   },
   separator: {
-    height: 4,
+    height: 8,
   },
-  emptyCard: {
-    marginVertical: 32,
+  // Empty State
+  emptyStateContainer: {
+    alignItems: 'center',
+    paddingVertical: 60,
   },
-  emptyText: {
-    fontSize: 12,
-    color: '#6B7280',
-    textAlign: 'center',
+  emptyMessage: {
+    fontSize: 14,
+    color: '#9CA3AF',
   },
 });
 

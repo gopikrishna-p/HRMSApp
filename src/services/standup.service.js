@@ -80,7 +80,7 @@ class StandupService {
       throw new Error(response.data?.message || 'Failed to update standup task');
     } catch (error) {
       console.error('Error updating standup task:', error);
-      throw error;
+      throw new Error(`Failed to update standup task: ${error.message}`);
     }
   }
 

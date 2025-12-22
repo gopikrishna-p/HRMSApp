@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, ScrollView, StyleSheet, Alert } from 'react-native';
-import { Text, Card, TextInput, Button, useTheme, SegmentedButtons, Chip, ActivityIndicator } from 'react-native-paper';
+import { View, ScrollView, StyleSheet, Alert, RefreshControl, TouchableOpacity } from 'react-native';
+import { Text, TextInput, Button, useTheme, Chip, ActivityIndicator } from 'react-native-paper';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { useAuth } from '../../context/AuthContext';
+import AppHeader from '../../components/ui/AppHeader';
 import StandupService from '../../services/standup.service';
 import { formatDate } from '../../utils/helpers';
 
@@ -11,6 +12,7 @@ const EmployeeStandupScreen = ({ navigation }) => {
   const { custom } = useTheme();
 
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [todayStandup, setTodayStandup] = useState(null);
   const [taskTitle, setTaskTitle] = useState('');
   const [plannedOutput, setPlannedOutput] = useState('');
@@ -44,6 +46,12 @@ const EmployeeStandupScreen = ({ navigation }) => {
 
   useEffect(() => {
     fetchTodayStandup();
+  }, [fetchTodayStandup]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchTodayStandup();
+    setRefreshing(false);
   }, [fetchTodayStandup]);
 
   const handleSubmitTask = async () => {
@@ -80,14 +88,15 @@ const EmployeeStandupScreen = ({ navigation }) => {
 
   if (loading && !todayStandup) {
     return (
-      <View style={[styles.container, { backgroundColor: custom.palette.background }]}>
-        <View style={styles.header}>
-          <Icon name="calendar-day" size={24} color={custom.palette.primary} />
-          <Text style={styles.headerTitle}>Today's Standup</Text>
-        </View>
+      <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
+        <AppHeader 
+          title="Today's Standup"
+          canGoBack={true}
+          onBack={() => navigation.goBack()}
+        />
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
           <ActivityIndicator size="large" color={custom.palette.primary} />
-          <Text style={{ marginTop: 12, color: custom.palette.textSecondary }}>Loading standup...</Text>
+          <Text style={{ marginTop: 12, color: '#6B7280' }}>Loading standup...</Text>
         </View>
       </View>
     );
@@ -95,69 +104,66 @@ const EmployeeStandupScreen = ({ navigation }) => {
 
   if (!todayStandup) {
     return (
-      <View style={[styles.container, { backgroundColor: custom.palette.background }]}>
-        <View style={styles.header}>
-          <Icon name="calendar-day" size={24} color={custom.palette.primary} />
-          <Text style={styles.headerTitle}>Today's Standup</Text>
-        </View>
-        <Card style={styles.errorCard}>
-          <Card.Content>
-            <Icon name="exclamation-circle" size={32} color={custom.palette.warning} />
-            <Text style={[styles.label, { marginTop: 12 }]}>Unable to Load</Text>
-            <Text style={[styles.value, { marginTop: 4 }]}>Could not fetch standup data</Text>
+      <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
+        <AppHeader 
+          title="Today's Standup"
+          canGoBack={true}
+          onBack={() => navigation.goBack()}
+        />
+        <ScrollView style={styles.container}>
+          <View style={styles.errorContainer}>
+            <View style={styles.errorIconBox}>
+              <Icon name="exclamation-circle" size={40} color="#EF4444" />
+            </View>
+            <Text style={styles.errorTitle}>Unable to Load</Text>
+            <Text style={styles.errorMessage}>Could not fetch standup data</Text>
             <Button
               mode="contained"
               onPress={fetchTodayStandup}
-              style={{ marginTop: 16 }}
+              style={styles.retryBtn}
             >
               Try Again
             </Button>
-          </Card.Content>
-        </Card>
+          </View>
+        </ScrollView>
       </View>
     );
   }
 
   return (
-    <ScrollView style={[styles.container, { backgroundColor: custom.palette.background }]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Icon name="calendar-day" size={24} color={custom.palette.primary} />
-        <Text style={styles.headerTitle}>Today's Standup</Text>
-      </View>
-
-      {todayStandup && (
-        <Card style={styles.statusCard}>
-          <Card.Content>
-            <Text style={styles.label}>Date</Text>
-            <Text style={styles.value}>{formatDate(todayStandup.standup_date)}</Text>
-
-            <Text style={[styles.label, { marginTop: 8 }]}>Status</Text>
+    <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
+      <ScrollView 
+        style={styles.container}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        {/* Status Card */}
+        <View style={styles.statusSection}>
+          <View style={styles.statusHeader}>
+            <View>
+              <Text style={styles.statusDate}>{formatDate(todayStandup.standup_date)}</Text>
+              <Text style={styles.statusLabel}>Today's Standup</Text>
+            </View>
             <Chip
               icon={submitted ? 'check' : 'clock-outline'}
               style={{
-                marginTop: 4,
                 backgroundColor: submitted ? '#D1FAE5' : '#FEF3C7',
               }}
-              textStyle={{ color: submitted ? '#065F46' : '#92400E' }}
+              textStyle={{ color: submitted ? '#059669' : '#92400E', fontWeight: '600' }}
+              mode="flat"
             >
               {submitted ? 'Submitted' : 'Draft'}
             </Chip>
+          </View>
+        </View>
 
-            {todayStandup.total_tasks > 0 && (
-              <>
-                <Text style={[styles.label, { marginTop: 8 }]}>Tasks for Today</Text>
-                <Text style={styles.value}>{todayStandup.total_tasks}</Text>
-              </>
-            )}
-          </Card.Content>
-        </Card>
-      )}
+        {/* Form Section - Only show if not submitted and no task created yet */}
+        {!submitted && todayStandup && !todayStandup.employee_task && (
+          <View style={styles.formSection}>
+            <View style={styles.sectionHeader}>
+              <Icon name="pencil-alt" size={18} color={custom.palette.primary} />
+              <Text style={styles.sectionTitle}>Submit Your Morning Task</Text>
+            </View>
 
-      {!submitted && todayStandup && !todayStandup.employee_task && (
-        <Card style={styles.formCard}>
-          <Card.Title title="Submit Morning Task" />
-          <Card.Content>
             <TextInput
               label="Task Title"
               value={taskTitle}
@@ -166,6 +172,8 @@ const EmployeeStandupScreen = ({ navigation }) => {
               mode="outlined"
               style={styles.input}
               editable={!loading}
+              outlineColor="#E5E7EB"
+              activeOutlineColor={custom.palette.primary}
             />
 
             <TextInput
@@ -176,8 +184,10 @@ const EmployeeStandupScreen = ({ navigation }) => {
               mode="outlined"
               multiline
               numberOfLines={4}
-              style={[styles.input, { marginTop: 12 }]}
+              style={[styles.input, { marginTop: 12, textAlignVertical: 'top' }]}
               editable={!loading}
+              outlineColor="#E5E7EB"
+              activeOutlineColor={custom.palette.primary}
             />
 
             <Button
@@ -186,70 +196,102 @@ const EmployeeStandupScreen = ({ navigation }) => {
               loading={loading}
               disabled={loading || !taskTitle.trim() || !plannedOutput.trim()}
               style={styles.submitBtn}
-              labelStyle={{ fontSize: 14 }}
+              labelStyle={{ fontSize: 16, fontWeight: '600' }}
             >
               Submit Task
             </Button>
-          </Card.Content>
-        </Card>
-      )}
+          </View>
+        )}
 
-      {todayStandup && todayStandup.employee_task && !submitted && (
-        <Card style={styles.taskCard}>
-          <Card.Title title="Your Task for Today" />
-          <Card.Content>
-            <Text style={styles.label}>Task Title</Text>
-            <Text style={[styles.value, { marginBottom: 12 }]}>
-              {todayStandup.employee_task.task_title}
-            </Text>
-
-            <Text style={styles.label}>Planned Output</Text>
-            <Text style={[styles.value, { marginBottom: 16, lineHeight: 18 }]}>
-              {todayStandup.employee_task.planned_output}
-            </Text>
-
-            <Text style={styles.label}>Current Completion</Text>
-            <Text style={[styles.value, { marginBottom: 12 }]}>
-              {todayStandup.employee_task.completion_percentage}%
-            </Text>
-
-            <Button
-              mode="contained"
-              onPress={() => navigation.navigate('EmployeeStandupUpdate')}
-              style={styles.updateBtn}
-              labelStyle={{ fontSize: 14 }}
-            >
-              Update in Evening
-            </Button>
-          </Card.Content>
-        </Card>
-      )}
-
-      {submitted && (
-        <Card style={styles.submittedCard}>
-          <Card.Content>
-            <View style={styles.centerContent}>
-              <Icon name="check-circle" size={48} color={custom.palette.success} />
-              <Text style={[styles.submittedText, { marginTop: 12 }]}>
-                Your standup has been submitted
-              </Text>
-              <Text style={styles.submittedSubtext}>
-                You can update it in the evening
-              </Text>
+        {/* Task Details - Show existing task */}
+        {todayStandup && todayStandup.employee_task && (
+          <View style={styles.taskSection}>
+            <View style={styles.sectionHeader}>
+              <Icon name="tasks" size={18} color={custom.palette.primary} />
+              <Text style={styles.sectionTitle}>Your Task for Today</Text>
             </View>
+
+            <View style={styles.taskCard}>
+              <Text style={styles.taskLabel}>Task Title</Text>
+              <Text style={styles.taskValue}>
+                {todayStandup.employee_task.task_title}
+              </Text>
+
+              <Text style={[styles.taskLabel, { marginTop: 12 }]}>Planned Output</Text>
+              <Text style={[styles.taskValue, { lineHeight: 20 }]}>
+                {todayStandup.employee_task.planned_output}
+              </Text>
+
+              <View style={styles.progressContainer}>
+                <View style={styles.progressHeader}>
+                  <Text style={styles.taskLabel}>Progress</Text>
+                  <Text style={styles.progressValue}>
+                    {todayStandup.employee_task.completion_percentage}%
+                  </Text>
+                </View>
+                <View style={styles.progressBar}>
+                  <View 
+                    style={[
+                      styles.progressFill,
+                      { 
+                        width: `${todayStandup.employee_task.completion_percentage}%`,
+                        backgroundColor: custom.palette.primary
+                      }
+                    ]}
+                  />
+                </View>
+              </View>
+
+              {!submitted && (
+                <Button
+                  mode="contained"
+                  onPress={() => navigation.navigate('EmployeeStandupUpdate')}
+                  style={styles.updateBtn}
+                  labelStyle={{ fontSize: 14, fontWeight: '600' }}
+                >
+                  Update in Evening
+                </Button>
+              )}
+            </View>
+          </View>
+        )}
+
+        {/* Success State - Submitted */}
+        {submitted && (
+          <View style={styles.successSection}>
+            <View style={styles.successIconBox}>
+              <Icon name="check-circle" size={48} color="#10B981" />
+            </View>
+            <Text style={styles.successTitle}>Standup Submitted!</Text>
+            <Text style={styles.successMessage}>
+              Your standup for today has been submitted successfully
+            </Text>
+
+            {todayStandup && todayStandup.employee_task && (
+              <View style={[styles.taskCard, { marginTop: 16 }]}>
+                <Text style={styles.taskLabel}>Today's Task</Text>
+                <Text style={styles.taskValue} numberOfLines={2}>
+                  {todayStandup.employee_task.task_title}
+                </Text>
+                <Text style={[styles.taskLabel, { marginTop: 8 }]}>Progress</Text>
+                <Text style={styles.progressValue}>
+                  {todayStandup.employee_task.completion_percentage}%
+                </Text>
+              </View>
+            )}
 
             <Button
               mode="outlined"
               onPress={() => navigation.navigate('EmployeeStandupHistory')}
-              style={styles.historyBtn}
-              labelStyle={{ fontSize: 12 }}
+              style={styles.viewHistoryBtn}
+              labelStyle={{ fontSize: 14, color: custom.palette.primary }}
             >
               View History
             </Button>
-          </Card.Content>
-        </Card>
-      )}
-    </ScrollView>
+          </View>
+        )}
+      </ScrollView>
+    </View>
   );
 };
 
@@ -257,74 +299,199 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 16,
+    paddingBottom: 32,
   },
-  header: {
+  // Status Section
+  statusSection: {
+    marginBottom: 24,
+  },
+  statusHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  statusDate: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  statusLabel: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    marginTop: 4,
+  },
+  // Error State
+  errorContainer: {
+    alignItems: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 32,
+  },
+  errorIconBox: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#FEE2E2',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 8,
+  },
+  errorMessage: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  retryBtn: {
+    minWidth: 120,
+    marginTop: 16,
+  },
+  // Form Section
+  formSection: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
   },
-  headerTitle: {
-    fontSize: 20,
+  sectionTitle: {
+    fontSize: 16,
     fontWeight: '700',
-    marginLeft: 8,
-  },
-  statusCard: {
-    marginBottom: 16,
-  },
-  errorCard: {
-    marginTop: 16,
-    alignItems: 'center',
-    paddingVertical: 24,
-  },
-  label: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#6B7280',
-    textTransform: 'uppercase',
-  },
-  value: {
-    fontSize: 14,
-    fontWeight: '500',
-    marginTop: 4,
     color: '#111827',
-  },
-  formCard: {
-    marginBottom: 16,
-  },
-  taskCard: {
-    marginBottom: 16,
-    borderColor: '#14B8A6',
-    borderWidth: 1,
+    marginLeft: 8,
   },
   input: {
     marginBottom: 0,
+    backgroundColor: '#FFFFFF',
   },
   submitBtn: {
     marginTop: 16,
+    paddingVertical: 4,
   },
-  updateBtn: {
-    marginTop: 8,
+  // Task Section
+  taskSection: {
+    marginBottom: 24,
   },
-  submittedCard: {
-    backgroundColor: '#F0FDF4',
-    borderColor: '#D1FAE5',
+  taskCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
     borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  centerContent: {
-    alignItems: 'center',
+  taskLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#6B7280',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
-  submittedText: {
+  taskValue: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#047857',
+    color: '#111827',
+    marginTop: 6,
   },
-  submittedSubtext: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginTop: 4,
-  },
-  historyBtn: {
+  progressContainer: {
     marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  progressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  progressValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#6366F1',
+  },
+  progressBar: {
+    height: 8,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  updateBtn: {
+    marginTop: 16,
+    paddingVertical: 4,
+  },
+  // Success State
+  successSection: {
+    backgroundColor: '#F0FDF4',
+    borderRadius: 12,
+    padding: 24,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: '#D1FAE5',
+    alignItems: 'center',
+  },
+  successIconBox: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#E0F2FE',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  successTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#059669',
+    marginBottom: 8,
+  },
+  successMessage: {
+    fontSize: 14,
+    color: '#4B5563',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  viewHistoryBtn: {
+    marginTop: 16,
+    borderColor: '#6366F1',
   },
 });
 

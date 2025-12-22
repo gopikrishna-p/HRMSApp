@@ -1,10 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, ScrollView, StyleSheet, Alert, FlatList, RefreshControl } from 'react-native';
-import { Text, Card, useTheme, ActivityIndicator, Chip, Button, Searchbar, Divider } from 'react-native-paper';
-import Icon from 'react-native-vector-icons/FontAwesome5';
-import { useAuth } from '../../context/AuthContext';
+import { Text, useTheme, Chip, Button, Searchbar, ActivityIndicator } from 'react-native-paper';
+import AppHeader from '../../components/ui/AppHeader';
 import StandupService from '../../services/standup.service';
-import { formatDate, formatTime } from '../../utils/helpers';
+import { formatDate } from '../../utils/helpers';
 
 const AdminAllStandupsScreen = ({ navigation }) => {
   const { custom } = useTheme();
@@ -13,7 +12,7 @@ const AdminAllStandupsScreen = ({ navigation }) => {
   const [standups, setStandups] = useState([]);
   const [stats, setStats] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [dateRange, setDateRange] = useState('week'); // week, month
+  const [dateRange, setDateRange] = useState('week');
 
   const fetchAllStandups = useCallback(async () => {
     setLoading(true);
@@ -55,172 +54,161 @@ const AdminAllStandupsScreen = ({ navigation }) => {
 
   useEffect(() => {
     fetchAllStandups();
-  }, [fetchAllStandups]);
+  }, [dateRange, fetchAllStandups]);
 
-  const filteredStandups = standups.filter((standup) => {
-    const query = searchQuery.toLowerCase();
-    return (
-      formatDate(standup.standup_date).toLowerCase().includes(query) ||
-      standup.standup_id.toLowerCase().includes(query)
-    );
-  });
+  const filteredStandups = standups.filter((s) =>
+    searchQuery === '' ||
+    formatDate(s.standup_date).toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (s.employee_name || '').toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   const renderStandupItem = ({ item }) => (
-    <Card
-      style={styles.card}
-      onPress={() => navigation.navigate('AdminStandupDetail', { standupId: item.standup_id })}
-    >
-      <Card.Content>
-        <View style={styles.cardHeader}>
-          <View style={styles.dateContainer}>
-            <Icon name="calendar" size={16} color={custom.palette.primary} />
-            <Text style={styles.date}>{formatDate(item.standup_date)}</Text>
-          </View>
-          <Chip
-            size={12}
-            icon={item.is_submitted ? 'check' : 'clock-outline'}
-            style={{
-              backgroundColor: item.is_submitted ? '#D1FAE5' : '#FEF3C7',
-            }}
-            textStyle={{
-              color: item.is_submitted ? '#065F46' : '#92400E',
-              fontSize: 10,
-            }}
-          >
-            {item.is_submitted ? 'Submitted' : 'Draft'}
-          </Chip>
+    <View style={styles.itemCard}>
+      <View style={styles.itemHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.employeeName}>{item.employee_name}</Text>
+          <Text style={styles.itemDate}>{formatDate(item.standup_date)}</Text>
         </View>
-
-        <Text style={styles.standupId}>{item.standup_id}</Text>
-
-        <View style={styles.taskStats}>
-          <View style={styles.stat}>
-            <Icon name="tasks" size={12} color={custom.palette.primary} />
-            <Text style={styles.statText}>{item.total_tasks} tasks</Text>
-          </View>
-          {item.tasks.length > 0 && (
-            <View style={styles.stat}>
-              <Icon name="users" size={12} color={custom.palette.secondary} />
-              <Text style={styles.statText}>{item.tasks.length} employees</Text>
-            </View>
-          )}
-        </View>
-
-        {item.remarks && (
-          <Text style={styles.remarks} numberOfLines={2}>
-            💬 {item.remarks}
-          </Text>
-        )}
-
-        <Button
-          mode="text"
-          compact
-          onPress={() => navigation.navigate('AdminStandupDetail', { standupId: item.standup_id })}
-          labelStyle={{ fontSize: 11 }}
+        <Chip
+          icon={item.is_submitted ? 'check' : 'clock-outline'}
+          style={{
+            backgroundColor: item.is_submitted ? '#D1FAE5' : '#FEF3C7',
+          }}
+          textStyle={{ color: item.is_submitted ? '#059669' : '#92400E', fontWeight: '600' }}
+          mode="flat"
+          size="small"
         >
-          View Details
-        </Button>
-      </Card.Content>
-    </Card>
+          {item.is_submitted ? 'Done' : 'Draft'}
+        </Chip>
+      </View>
+
+      {item.employee_task && (
+        <View style={styles.taskPreview}>
+          <Text style={styles.taskTitle} numberOfLines={2}>{item.employee_task.task_title}</Text>
+          <View style={styles.taskMeta}>
+            <Text style={styles.metaItem}>
+              Progress: <Text style={styles.metaBold}>{item.employee_task.completion_percentage}%</Text>
+            </Text>
+            <Text style={styles.metaItem}>
+              Tasks: <Text style={styles.metaBold}>{item.total_tasks}</Text>
+            </Text>
+          </View>
+        </View>
+      )}
+
+      <Button
+        mode="text"
+        onPress={() => navigation.navigate('AdminStandupDetail', { standupId: item.standup_id })}
+        style={styles.viewBtn}
+        labelStyle={{ fontSize: 12, color: custom.palette.primary }}
+      >
+        View Details →
+      </Button>
+    </View>
   );
 
   if (loading && standups.length === 0) {
     return (
-      <View style={[styles.container, { backgroundColor: custom.palette.background }]}>
-        <ActivityIndicator size="large" color={custom.palette.primary} />
+      <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
+        <AppHeader 
+          title="All Standups"
+          canGoBack={true}
+          onBack={() => navigation.goBack()}
+        />
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator size="large" color={custom.palette.primary} />
+          <Text style={{ marginTop: 12, color: '#6B7280' }}>Loading standups...</Text>
+        </View>
       </View>
     );
   }
 
   return (
-    <ScrollView
-      style={[styles.container, { backgroundColor: custom.palette.background }]}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-    >
-      {/* Header */}
-      <View style={styles.header}>
-        <Icon name="list" size={24} color={custom.palette.primary} />
-        <Text style={styles.headerTitle}>All Standups</Text>
-      </View>
-
-      {/* Statistics */}
-      {stats && (
-        <View style={styles.statsGrid}>
-          <Card style={styles.statCard}>
-            <Card.Content>
+    <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
+      <AppHeader 
+        title="All Standups"
+        canGoBack={true}
+        onBack={() => navigation.goBack()}
+      />
+      <ScrollView
+        style={styles.container}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        {/* Statistics Grid */}
+        {stats && (
+          <View style={styles.statsGrid}>
+            <View style={styles.statCard}>
               <Text style={styles.statNumber}>{stats.total_standups}</Text>
               <Text style={styles.statName}>Total</Text>
-            </Card.Content>
-          </Card>
+            </View>
 
-          <Card style={styles.statCard}>
-            <Card.Content>
-              <Text style={[styles.statNumber, { color: '#10B981' }]}>{stats.completed_tasks}</Text>
-              <Text style={styles.statName}>Completed</Text>
-            </Card.Content>
-          </Card>
+            <View style={styles.statCard}>
+              <Text style={styles.statNumber}>{stats.submitted_count}</Text>
+              <Text style={styles.statName}>Submitted</Text>
+            </View>
 
-          <Card style={styles.statCard}>
-            <Card.Content>
-              <Text style={[styles.statNumber, { color: '#F59E0B' }]}>{stats.total_tasks}</Text>
-              <Text style={styles.statName}>Tasks</Text>
-            </Card.Content>
-          </Card>
+            <View style={styles.statCard}>
+              <Text style={styles.statNumber}>{stats.pending_count}</Text>
+              <Text style={styles.statName}>Pending</Text>
+            </View>
+          </View>
+        )}
+
+        {/* Date Range Filter */}
+        <View style={styles.filterSection}>
+          <Text style={styles.filterLabel}>Date Range</Text>
+          <View style={styles.filterButtons}>
+            <Button
+              mode={dateRange === 'week' ? 'contained' : 'outlined'}
+              onPress={() => setDateRange('week')}
+              style={styles.dateFilterBtn}
+              labelStyle={{ fontSize: 12 }}
+              compact
+            >
+              7 Days
+            </Button>
+            <Button
+              mode={dateRange === 'month' ? 'contained' : 'outlined'}
+              onPress={() => setDateRange('month')}
+              style={styles.dateFilterBtn}
+              labelStyle={{ fontSize: 12 }}
+              compact
+            >
+              30 Days
+            </Button>
+          </View>
         </View>
-      )}
 
-      {/* Filters */}
-      <View style={styles.filterSection}>
+        {/* Search Bar */}
         <Searchbar
-          placeholder="Search by date or ID"
+          placeholder="Search by date or employee..."
           onChangeText={setSearchQuery}
           value={searchQuery}
           style={styles.searchbar}
-          mode="bar"
+          iconColor={custom.palette.primary}
+          placeholderTextColor="#9CA3AF"
         />
 
-        <View style={styles.dateFilterRow}>
-          <Button
-            mode={dateRange === 'week' ? 'contained' : 'outlined'}
-            onPress={() => setDateRange('week')}
-            style={styles.dateFilterBtn}
-            labelStyle={{ fontSize: 11 }}
-          >
-            Last 7 Days
-          </Button>
-          <Button
-            mode={dateRange === 'month' ? 'contained' : 'outlined'}
-            onPress={() => setDateRange('month')}
-            style={styles.dateFilterBtn}
-            labelStyle={{ fontSize: 11 }}
-          >
-            Last 30 Days
-          </Button>
-        </View>
-      </View>
-
-      {/* Standups List */}
-      {filteredStandups.length > 0 ? (
-        <FlatList
-          data={filteredStandups}
-          renderItem={renderStandupItem}
-          keyExtractor={(item) => item.standup_id}
-          scrollEnabled={false}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
-        />
-      ) : (
-        <Card style={styles.emptyCard}>
-          <Card.Content>
-            <View style={styles.centerContent}>
-              <Icon name="inbox" size={48} color={custom.palette.warning} />
-              <Text style={[styles.emptyText, { marginTop: 12 }]}>
-                {searchQuery ? 'No results found' : 'No standups'}
-              </Text>
-            </View>
-          </Card.Content>
-        </Card>
-      )}
-    </ScrollView>
+        {/* Standups List */}
+        {filteredStandups.length > 0 ? (
+          <View style={styles.listSection}>
+            <FlatList
+              data={filteredStandups}
+              renderItem={renderStandupItem}
+              keyExtractor={(item) => item.standup_id}
+              scrollEnabled={false}
+              ItemSeparatorComponent={() => <View style={styles.separator} />}
+            />
+          </View>
+        ) : (
+          <View style={styles.emptyStateContainer}>
+            <Text style={styles.emptyMessage}>
+              {searchQuery ? 'No results found' : 'No standups'}
+            </Text>
+          </View>
+        )}
+      </ScrollView>
+    </View>
   );
 };
 
@@ -228,110 +216,142 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 16,
+    paddingBottom: 32,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    marginLeft: 8,
-  },
+  // Statistics Grid
   statsGrid: {
     flexDirection: 'row',
-    marginBottom: 16,
+    marginBottom: 24,
     justifyContent: 'space-between',
+    gap: 8,
   },
   statCard: {
     flex: 1,
-    marginHorizontal: 4,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
   },
   statNumber: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '700',
     color: '#6366F1',
   },
   statName: {
     fontSize: 11,
+    fontWeight: '600',
     color: '#6B7280',
-    marginTop: 4,
+    marginTop: 6,
   },
+  // Filter Section
   filterSection: {
     marginBottom: 16,
   },
-  searchbar: {
+  filterLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#6B7280',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
     marginBottom: 8,
   },
-  dateFilterRow: {
+  filterButtons: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: 8,
   },
   dateFilterBtn: {
     flex: 1,
-    marginHorizontal: 4,
+    borderRadius: 8,
   },
-  card: {
-    marginBottom: 8,
+  searchbar: {
+    marginBottom: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
-  cardHeader: {
+  // List Section
+  listSection: {
+    marginBottom: 24,
+  },
+  // Item Card
+  itemCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  itemHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
+    alignItems: 'flex-start',
+    marginBottom: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
   },
-  dateContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  date: {
-    fontSize: 13,
-    fontWeight: '600',
-    marginLeft: 6,
+  employeeName: {
+    fontSize: 14,
+    fontWeight: '700',
     color: '#111827',
   },
-  standupId: {
+  itemDate: {
     fontSize: 12,
     fontWeight: '500',
     color: '#6B7280',
-    marginBottom: 8,
+    marginTop: 4,
   },
-  taskStats: {
+  taskPreview: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+  },
+  taskTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 6,
+  },
+  taskMeta: {
     flexDirection: 'row',
-    marginBottom: 8,
+    justifyContent: 'space-between',
+    gap: 8,
   },
-  stat: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginRight: 16,
-  },
-  statText: {
+  metaItem: {
     fontSize: 11,
     color: '#6B7280',
-    marginLeft: 4,
   },
-  remarks: {
-    fontSize: 11,
-    color: '#6B7280',
-    fontStyle: 'italic',
-    marginBottom: 8,
-    lineHeight: 16,
+  metaBold: {
+    fontWeight: '700',
+    color: '#111827',
+  },
+  viewBtn: {
+    marginTop: 4,
   },
   separator: {
-    height: 4,
+    height: 8,
   },
-  emptyCard: {
-    marginVertical: 32,
-  },
-  centerContent: {
+  // Empty State
+  emptyStateContainer: {
     alignItems: 'center',
-    paddingVertical: 32,
+    paddingVertical: 60,
   },
-  emptyText: {
+  emptyMessage: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#6B7280',
+    color: '#9CA3AF',
   },
 });
 
