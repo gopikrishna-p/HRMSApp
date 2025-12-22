@@ -504,6 +504,15 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                             tint={custom.palette.primary} onPress={() => navigation.navigate('WFHRequest')} />
                     </Section>
 
+                    <Section title="Daily Standup" icon="comments" tint="#14B8A6">
+                        <ListItem title="Today's Standup" subtitle="Submit morning task & update evening" leftIcon="tasks"
+                            tint="#14B8A6" onPress={() => navigation.navigate('EmployeeStandup')} />
+                        <ListItem title="Update Standup" subtitle="Update today's progress & status" leftIcon="edit"
+                            tint="#14B8A6" onPress={() => navigation.navigate('EmployeeStandupUpdate')} />
+                        <ListItem title="Standup History" subtitle="View past standups & performance" leftIcon="history"
+                            tint="#14B8A6" onPress={() => navigation.navigate('EmployeeStandupHistory')} />
+                    </Section>
+
                     <Section title="Leaves" icon="umbrella-beach" tint={custom.palette.success}>
                         <ListItem title="Holiday List" subtitle="View company holidays" leftIcon="calendar-alt"
                             tint={custom.palette.success} onPress={() => navigation.navigate('HolidayList')} />

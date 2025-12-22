@@ -4,7 +4,7 @@ from frappe import _
 from frappe.model import get_permitted_fields
 from frappe.model.workflow import get_workflow_name
 from frappe.query_builder import Order
-from frappe.utils import add_days, date_diff, getdate, strip_html, nowdate, cint, now_datetime
+from frappe.utils import add_days, date_diff, getdate, strip_html, nowdate, cint, now_datetime, today
 import json
 from datetime import timedelta
 from geopy.distance import geodesic
@@ -8901,3 +8901,1223 @@ def delete_project(project):
         frappe.db.rollback()
         frappe.logger().error(f"Error deleting project: {str(e)}")
         frappe.throw(_("Failed to delete project: {0}").format(str(e)))
+
+
+# ---------------------- Attendance Management ----------------------
+@frappe.whitelist()
+def mark_attendance_app(employee=None, attendance_date=None, status="Present", shift=None):
+    """Mark attendance from mobile app"""
+    try:
+        # Get current employee if not specified
+        if not employee:
+            employee = _emp_of(frappe.session.user)
+        
+        if not employee:
+            frappe.throw(_("No employee found for current user"))
+        
+        # Validate employee is active
+        emp_status = frappe.db.get_value("Employee", employee, "status")
+        if emp_status != "Active":
+            frappe.throw(_("Cannot mark attendance for inactive employee"))
+        
+        if not attendance_date:
+            attendance_date = today()
+        
+        if not status:
+            status = "Present"
+        
+        # Validate status
+        valid_statuses = ["Present", "Absent", "On Leave", "Half Day", "Work From Home"]
+        if status not in valid_statuses:
+            frappe.throw(_("Invalid status. Must be one of: {0}").format(", ".join(valid_statuses)))
+        
+        # Check if attendance already exists
+        existing = frappe.db.get_value(
+            "Attendance",
+            {"employee": employee, "attendance_date": attendance_date, "docstatus": ["<", 2]},
+            "name"
+        )
+        
+        if existing:
+            # Update existing
+            att_doc = frappe.get_doc("Attendance", existing)
+            att_doc.status = status
+            att_doc.shift = shift
+            att_doc.flags.ignore_permissions = True
+            att_doc.save()
+        else:
+            # Create new
+            att_doc = frappe.get_doc({
+                "doctype": "Attendance",
+                "employee": employee,
+                "attendance_date": attendance_date,
+                "status": status,
+                "shift": shift,
+            })
+            att_doc.flags.ignore_permissions = True
+            att_doc.insert()
+            att_doc.submit()
+        
+        frappe.db.commit()
+        
+        return {
+            "ok": True,
+            "message": _("Attendance marked successfully"),
+            "attendance": {
+                "name": att_doc.name,
+                "employee": att_doc.employee,
+                "employee_name": att_doc.employee_name,
+                "attendance_date": str(att_doc.attendance_date),
+                "status": att_doc.status,
+                "shift": att_doc.shift,
+            }
+        }
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.logger().error(f"Error marking attendance: {str(e)}")
+        frappe.throw(_("Failed to mark attendance: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_my_attendance(from_date=None, to_date=None, limit=30):
+    """Get attendance records for current employee"""
+    employee = _emp_of(frappe.session.user)
+    
+    if not employee:
+        return {"ok": False, "attendance": [], "message": "No employee found"}
+    
+    if not from_date:
+        from_date = add_days(today(), -30)
+    if not to_date:
+        to_date = today()
+    
+    attendance = frappe.get_all(
+        "Attendance",
+        filters={
+            "employee": employee,
+            "attendance_date": ["between", [from_date, to_date]],
+            "docstatus": ["<", 2],
+        },
+        fields=["name", "employee", "employee_name", "attendance_date", "status", "shift", "leave_type"],
+        order_by="attendance_date desc",
+        limit_page_length=int(limit)
+    )
+    
+    return {
+        "ok": True,
+        "attendance": attendance,
+        "count": len(attendance),
+        "employee": employee,
+    }
+
+
+@frappe.whitelist()
+def get_attendance_summary(employee=None, from_date=None, to_date=None):
+    """Get attendance summary for current month/period"""
+    if not employee:
+        employee = _emp_of(frappe.session.user)
+    
+    if not employee:
+        frappe.throw(_("No employee found"))
+    
+    if not from_date:
+        from_date = add_days(today(), -30)
+    if not to_date:
+        to_date = today()
+    
+    records = frappe.get_all(
+        "Attendance",
+        filters={
+            "employee": employee,
+            "attendance_date": ["between", [from_date, to_date]],
+            "docstatus": ["<", 2],
+        },
+        fields=["status"],
+        order_by="attendance_date"
+    )
+    
+    summary = {
+        "present": 0,
+        "absent": 0,
+        "on_leave": 0,
+        "half_day": 0,
+        "work_from_home": 0,
+        "total": 0,
+    }
+    
+    for record in records:
+        status = record.get("status", "").lower().replace(" ", "_")
+        if status in summary:
+            summary[status] += 1
+        summary["total"] += 1
+    
+    return {
+        "ok": True,
+        "employee": employee,
+        "from_date": str(from_date),
+        "to_date": str(to_date),
+        "summary": summary,
+    }
+
+
+@frappe.whitelist()
+def get_today_attendance_status(employee=None):
+    """Get today's attendance status for current employee"""
+    if not employee:
+        employee = _emp_of(frappe.session.user)
+    
+    if not employee:
+        return {"ok": False, "status": None, "message": "No employee found"}
+    
+    att_date = today()
+    
+    attendance = frappe.db.get_value(
+        "Attendance",
+        {"employee": employee, "attendance_date": att_date, "docstatus": ["<", 2]},
+        ["name", "status", "shift"],
+        as_dict=True
+    )
+    
+    if attendance:
+        return {
+            "ok": True,
+            "status": attendance.get("status"),
+            "shift": attendance.get("shift"),
+            "attendance_id": attendance.get("name"),
+            "marked": True,
+        }
+    else:
+        return {
+            "ok": True,
+            "status": None,
+            "shift": None,
+            "attendance_id": None,
+            "marked": False,
+        }
+
+
+@frappe.whitelist()
+def admin_get_attendance(employee=None, from_date=None, to_date=None, limit=500):
+    """Admin: Get attendance records for active employees only"""
+    if not _is_priv():
+        frappe.throw(_("Not permitted."), frappe.PermissionError)
+    
+    if not from_date:
+        from_date = add_days(today(), -60)
+    if not to_date:
+        to_date = today()
+    
+    # Build query to only get attendance for active employees
+    vals = {
+        "from_date": from_date,
+        "to_date": to_date,
+        "limit": int(limit)
+    }
+    
+    cond = """
+        a.attendance_date BETWEEN %(from_date)s AND %(to_date)s
+        AND a.docstatus < 2
+        AND e.status = 'Active'
+    """
+    
+    if employee:
+        cond += " AND a.employee = %(employee)s"
+        vals["employee"] = employee
+    
+    attendance = frappe.db.sql(f"""
+        SELECT a.name, a.employee, a.employee_name, a.attendance_date, 
+               a.status, a.shift, a.leave_type
+        FROM `tabAttendance` a
+        INNER JOIN `tabEmployee` e ON a.employee = e.name
+        WHERE {cond}
+        ORDER BY a.attendance_date DESC
+        LIMIT %(limit)s
+    """, vals, as_dict=True)
+    
+    # Convert date objects to strings for JSON serialization
+    for att in attendance:
+        if att.get("attendance_date"):
+            att["attendance_date"] = str(att["attendance_date"])
+    
+    return {
+        "ok": True,
+        "attendance": attendance,
+        "count": len(attendance),
+    }
+
+
+@frappe.whitelist()
+def get_all_active_employees():
+    """Get all active employees for admin attendance marking"""
+    if not _is_priv():
+        frappe.throw(_("Not permitted."), frappe.PermissionError)
+    
+    employees = frappe.get_all(
+        "Employee",
+        filters={"status": "Active"},
+        fields=["name", "employee_name", "department", "designation", "company"],
+        order_by="employee_name asc"
+    )
+    
+    return {
+        "ok": True,
+        "employees": employees,
+        "count": len(employees)
+    }
+
+
+@frappe.whitelist()
+def admin_mark_attendance(employee, attendance_date=None, status="Present", shift=None):
+    """Admin: Mark attendance for a specific active employee"""
+    if not _is_priv():
+        frappe.throw(_("Not permitted."), frappe.PermissionError)
+    
+    if not employee:
+        frappe.throw(_("Employee is required"))
+    
+    # Validate employee exists and is active
+    emp_data = frappe.db.get_value("Employee", employee, ["name", "status", "employee_name"], as_dict=True)
+    
+    if not emp_data:
+        frappe.throw(_("Employee not found"))
+    
+    if emp_data.status != "Active":
+        frappe.throw(_("Cannot mark attendance for inactive employee: {0}").format(emp_data.employee_name))
+    
+    if not attendance_date:
+        attendance_date = today()
+    
+    if not status:
+        status = "Present"
+    
+    # Validate status
+    valid_statuses = ["Present", "Absent", "On Leave", "Half Day", "Work From Home"]
+    if status not in valid_statuses:
+        frappe.throw(_("Invalid status. Must be one of: {0}").format(", ".join(valid_statuses)))
+    
+    try:
+        # Check if attendance already exists
+        existing = frappe.db.get_value(
+            "Attendance",
+            {"employee": employee, "attendance_date": attendance_date, "docstatus": ["<", 2]},
+            "name"
+        )
+        
+        if existing:
+            # Update existing
+            att_doc = frappe.get_doc("Attendance", existing)
+            att_doc.status = status
+            att_doc.shift = shift
+            att_doc.flags.ignore_permissions = True
+            att_doc.save()
+        else:
+            # Create new
+            att_doc = frappe.get_doc({
+                "doctype": "Attendance",
+                "employee": employee,
+                "attendance_date": attendance_date,
+                "status": status,
+                "shift": shift,
+            })
+            att_doc.flags.ignore_permissions = True
+            att_doc.insert()
+            att_doc.submit()
+        
+        frappe.db.commit()
+        
+        return {
+            "ok": True,
+            "message": _("Attendance marked successfully for {0}").format(emp_data.employee_name),
+            "attendance": {
+                "name": att_doc.name,
+                "employee": att_doc.employee,
+                "employee_name": att_doc.employee_name,
+                "attendance_date": str(att_doc.attendance_date),
+                "status": att_doc.status,
+                "shift": att_doc.shift,
+            }
+        }
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.logger().error(f"Error marking attendance: {str(e)}")
+        frappe.throw(_("Failed to mark attendance: {0}").format(str(e)))
+
+
+
+
+def get_employee_by_user():
+	"""Helper function to get employee ID for current user."""
+	current_user = frappe.session.user
+	employee_id = frappe.db.get_value(
+		"Employee",
+		{"user_id": current_user, "status": "Active"},
+		"name"
+	)
+	return employee_id
+
+
+# ============================================================================
+# EMPLOYEE STANDUP APIs
+# ============================================================================
+
+@frappe.whitelist()
+def get_or_create_today_standup() -> dict:
+	"""
+	Get today's Daily Standup or create it if doesn't exist.
+	Used by employees to view/edit their standup for today.
+	
+	Returns:
+		Dict with standup details, tasks, and employee info
+	"""
+	try:
+		current_employee = get_employee_by_user()
+		if not current_employee:
+			frappe.throw(_("No employee record found for current user"))
+		
+		standup_date = getdate()
+		
+		# Try to get existing standup for today
+		existing_standup = frappe.db.get_value(
+			"Daily Standup",
+			{"standup_date": standup_date},
+			"name"
+		)
+		
+		if existing_standup:
+			standup = frappe.get_doc("Daily Standup", existing_standup)
+		else:
+			# Create new standup for today
+			standup = frappe.get_doc({
+				"doctype": "Daily Standup",
+				"standup_date": standup_date,
+				"standup_time": now_datetime(),
+			})
+			standup.insert(ignore_permissions=True)
+			frappe.db.commit()
+		
+		# Get employee's task for this standup
+		employee_task = None
+		if standup.standup_tasks:
+			for task in standup.standup_tasks:
+				if task.employee == current_employee:
+					employee_task = {
+						"idx": task.idx,
+						"employee": task.employee,
+						"task_title": task.task_title,
+						"planned_output": task.planned_output,
+						"actual_work_done": task.actual_work_done,
+						"completion_percentage": task.completion_percentage,
+						"task_status": task.task_status,
+						"carry_forward": task.carry_forward,
+						"next_working_date": str(task.next_working_date) if task.next_working_date else None,
+					}
+					break
+		
+		return {
+			"status": "success",
+			"data": {
+				"standup_id": standup.name,
+				"standup_date": str(standup.standup_date),
+				"standup_time": str(standup.standup_time),
+				"is_submittable": standup.docstatus == 0,  # Can edit if draft
+				"is_submitted": standup.docstatus == 1,  # Locked if submitted
+				"docstatus": standup.docstatus,
+				"remarks": standup.remarks,
+				"employee_task": employee_task,
+				"total_tasks": len(standup.standup_tasks) if standup.standup_tasks else 0,
+			},
+			"message": _("Standup fetched successfully"),
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get/Create Standup Error: {str(e)}\n{frappe.get_traceback()}", "Daily Standup")
+		return {
+			"status": "error",
+			"message": str(e),
+			"data": None,
+		}
+
+
+@frappe.whitelist()
+def submit_employee_standup_task(
+	standup_id: str,
+	task_title: str,
+	planned_output: str,
+	completion_percentage: int = 0,
+) -> dict:
+	"""
+	Employee submits their daily standup task (morning entry).
+	Creates or updates task for current employee in the standup.
+	
+	Args:
+		standup_id: Daily Standup ID
+		task_title: Short title of the task
+		planned_output: What employee plans to complete today
+		completion_percentage: Initial completion % (optional, defaults to 0)
+	
+	Returns:
+		Dict with task details and standup status
+	"""
+	try:
+		# Get current employee
+		current_employee = get_employee_by_user()
+		if not current_employee:
+			frappe.throw(_("No employee record found for current user"))
+		
+		# Get standup
+		standup = frappe.get_doc("Daily Standup", standup_id)
+		
+		# Check if standup is submitted (cannot add tasks)
+		if standup.docstatus == 1:
+			frappe.throw(_("This standup is already submitted and cannot be modified"))
+		
+		# Validate inputs
+		if not task_title or not task_title.strip():
+			frappe.throw(_("Task title is required"))
+		
+		if not planned_output or not planned_output.strip():
+			frappe.throw(_("Planned output is required"))
+		
+		# Check if employee already has a task in this standup
+		existing_task = None
+		task_idx = None
+		
+		if standup.standup_tasks:
+			for idx, task in enumerate(standup.standup_tasks):
+				if task.employee == current_employee:
+					existing_task = task
+					task_idx = idx
+					break
+		
+		# Add or update task
+		if existing_task:
+			# Update existing task
+			existing_task.task_title = task_title
+			existing_task.planned_output = planned_output
+			existing_task.completion_percentage = min(100, max(0, cint(completion_percentage)))
+		else:
+			# Add new task
+			standup.append("standup_tasks", {
+				"employee": current_employee,
+				"employee_name": frappe.get_value("Employee", current_employee, "employee_name"),
+				"task_title": task_title,
+				"planned_output": planned_output,
+				"actual_work_done": "",
+				"completion_percentage": min(100, max(0, cint(completion_percentage))),
+				"task_status": "Draft",
+				"carry_forward": 0,
+				"next_working_date": None,
+			})
+		
+		# Save standup
+		standup.save(ignore_permissions=True)
+		frappe.db.commit()
+		
+		# Get updated task
+		employee_task = None
+		if standup.standup_tasks:
+			for task in standup.standup_tasks:
+				if task.employee == current_employee:
+					employee_task = {
+						"idx": task.idx,
+						"employee": task.employee,
+						"task_title": task.task_title,
+						"planned_output": task.planned_output,
+						"actual_work_done": task.actual_work_done,
+						"completion_percentage": task.completion_percentage,
+						"task_status": task.task_status,
+						"carry_forward": task.carry_forward,
+						"next_working_date": str(task.next_working_date) if task.next_working_date else None,
+					}
+					break
+		
+		return {
+			"status": "success",
+			"message": _("Standup task submitted successfully"),
+			"data": {
+				"standup_id": standup.name,
+				"standup_date": str(standup.standup_date),
+				"employee": current_employee,
+				"employee_task": employee_task,
+				"total_tasks": len(standup.standup_tasks) if standup.standup_tasks else 0,
+			},
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Submit Standup Task Error: {str(e)}\n{frappe.get_traceback()}", "Standup Task")
+		frappe.throw(_("Failed to submit standup task: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def update_employee_standup_task(
+	standup_id: str,
+	actual_work_done: str,
+	completion_percentage: int,
+	task_status: str = "Draft",
+	carry_forward: int = 0,
+	next_working_date: str | None = None,
+) -> dict:
+	"""
+	Employee updates their standup task with actual work done (evening entry).
+	
+	Args:
+		standup_id: Daily Standup ID
+		actual_work_done: What was actually completed
+		completion_percentage: Task progress (0-100)
+		task_status: Task status (Draft, Completed)
+		carry_forward: 1 if task continues to next day, 0 otherwise
+		next_working_date: Date to continue (required if carry_forward=1)
+	
+	Returns:
+		Dict with updated task details
+	"""
+	try:
+		# Get current employee
+		current_employee = get_employee_by_user()
+		if not current_employee:
+			frappe.throw(_("No employee record found for current user"))
+		
+		# Get standup
+		standup = frappe.get_doc("Daily Standup", standup_id)
+		
+		# Check if standup is submitted (cannot edit unless allowed)
+		if standup.docstatus == 1:
+			frappe.throw(_("This standup is already submitted. Contact administrator to unlock."))
+		
+		# Validate inputs
+		if not actual_work_done or not actual_work_done.strip():
+			frappe.throw(_("Actual work done is required"))
+		
+		completion_percentage = min(100, max(0, cint(completion_percentage)))
+		
+		# Validate task status
+		valid_statuses = ["Draft", "Completed"]
+		if task_status not in valid_statuses:
+			frappe.throw(_("Invalid task status. Must be Draft or Completed"))
+		
+		# Auto-set completion % if completed
+		if task_status == "Completed":
+			completion_percentage = 100
+			carry_forward = 0
+			next_working_date = None
+		
+		# Validate carry forward logic
+		if carry_forward and not next_working_date:
+			frappe.throw(_("Next working date is required when carry_forward is enabled"))
+		
+		# Find and update employee's task
+		task_found = False
+		
+		if standup.standup_tasks:
+			for task in standup.standup_tasks:
+				if task.employee == current_employee:
+					task.actual_work_done = actual_work_done
+					task.completion_percentage = completion_percentage
+					task.task_status = task_status
+					task.carry_forward = cint(carry_forward)
+					task.next_working_date = getdate(next_working_date) if next_working_date else None
+					task_found = True
+					break
+		
+		if not task_found:
+			frappe.throw(_("Employee does not have a task in this standup"))
+		
+		# Save standup
+		standup.save(ignore_permissions=True)
+		frappe.db.commit()
+		
+		# Get updated task
+		employee_task = None
+		if standup.standup_tasks:
+			for task in standup.standup_tasks:
+				if task.employee == current_employee:
+					employee_task = {
+						"idx": task.idx,
+						"employee": task.employee,
+						"task_title": task.task_title,
+						"planned_output": task.planned_output,
+						"actual_work_done": task.actual_work_done,
+						"completion_percentage": task.completion_percentage,
+						"task_status": task.task_status,
+						"carry_forward": task.carry_forward,
+						"next_working_date": str(task.next_working_date) if task.next_working_date else None,
+					}
+					break
+		
+		return {
+			"status": "success",
+			"message": _("Standup task updated successfully"),
+			"data": {
+				"standup_id": standup.name,
+				"standup_date": str(standup.standup_date),
+				"employee": current_employee,
+				"employee_task": employee_task,
+			},
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Update Standup Task Error: {str(e)}\n{frappe.get_traceback()}", "Standup Task Update")
+		frappe.throw(_("Failed to update standup task: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_employee_standup_history(
+	employee: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+	limit: int = 30,
+) -> dict:
+	"""
+	Get standup history for an employee with their tasks.
+	
+	Args:
+		employee: Employee ID (if None, uses current user's employee)
+		from_date: Filter from this date
+		to_date: Filter to this date
+		limit: Maximum number of standups
+	
+	Returns:
+		Dict with standups and employee's tasks in each
+	"""
+	try:
+		# If no employee, get current user's employee
+		if not employee:
+			employee = get_employee_by_user()
+			if not employee:
+				frappe.throw(_("No employee record found for current user"))
+		
+		# Set date range
+		if not from_date:
+			from_date = add_days(getdate(), -30)
+		if not to_date:
+			to_date = getdate()
+		
+		# Get all standups in date range
+		standups = frappe.get_all(
+			"Daily Standup",
+			filters={
+				"standup_date": ["between", [from_date, to_date]],
+			},
+			fields=["name", "standup_date", "standup_time", "remarks", "docstatus"],
+			order_by="standup_date desc",
+			limit=limit,
+		)
+		
+		# Fetch tasks for each standup and filter by employee
+		standup_list = []
+		for standup in standups:
+			standup_doc = frappe.get_doc("Daily Standup", standup.name)
+			
+			# Find employee's task in this standup
+			employee_task = None
+			if standup_doc.standup_tasks:
+				for task in standup_doc.standup_tasks:
+					if task.employee == employee:
+						employee_task = {
+							"idx": task.idx,
+							"employee": task.employee,
+							"task_title": task.task_title,
+							"planned_output": task.planned_output,
+							"actual_work_done": task.actual_work_done,
+							"completion_percentage": task.completion_percentage,
+							"task_status": task.task_status,
+							"carry_forward": task.carry_forward,
+							"next_working_date": str(task.next_working_date) if task.next_working_date else None,
+						}
+						break
+			
+			if employee_task:  # Only include standups where employee has a task
+				standup_list.append({
+					"standup_id": standup.name,
+					"standup_date": str(standup.standup_date),
+					"standup_time": str(standup.standup_time),
+					"remarks": standup.remarks,
+					"docstatus": standup.docstatus,
+					"is_submitted": standup.docstatus == 1,
+					"employee_task": employee_task,
+				})
+		
+		return {
+			"status": "success",
+			"data": {
+				"employee": employee,
+				"from_date": str(from_date),
+				"to_date": str(to_date),
+				"standups": standup_list,
+				"total_standups": len(standup_list),
+			},
+			"message": _("Standup history fetched successfully"),
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Standup History Error: {str(e)}\n{frappe.get_traceback()}", "Standup History")
+		return {
+			"status": "error",
+			"message": str(e),
+			"data": None,
+		}
+
+
+# ============================================================================
+# ADMIN STANDUP MANAGEMENT APIs
+# ============================================================================
+
+@frappe.whitelist()
+def get_all_standups(
+	from_date: str | None = None,
+	to_date: str | None = None,
+	department: str | None = None,
+	limit: int = 100,
+) -> dict:
+	"""
+	Get all standups with filters (Admin only).
+	
+	Args:
+		from_date: Filter from this date
+		to_date: Filter to this date
+		department: Filter by department
+		limit: Maximum number of standups
+	
+	Returns:
+		Dict with standups and comprehensive statistics
+	"""
+	try:
+		# Check if user is admin
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin:
+			frappe.throw(_("You do not have permission to view all standups"))
+		
+		# Set date range
+		if not from_date:
+			from_date = add_days(getdate(), -30)
+		if not to_date:
+			to_date = getdate()
+		
+		# Get all standups in date range
+		filters = {
+			"standup_date": ["between", [from_date, to_date]],
+		}
+		
+		standups = frappe.get_all(
+			"Daily Standup",
+			filters=filters,
+			fields=["name", "standup_date", "standup_time", "remarks", "docstatus"],
+			order_by="standup_date desc",
+			limit=limit,
+		)
+		
+		# Enrich with task details and optional department filter
+		standup_list = []
+		for standup in standups:
+			standup_doc = frappe.get_doc("Daily Standup", standup.name)
+			
+			# Get task details
+			tasks = []
+			if standup_doc.standup_tasks:
+				for task in standup_doc.standup_tasks:
+					# Get employee's department
+					emp_dept = frappe.get_value("Employee", task.employee, "department")
+					
+					# Filter by department if specified
+					if department and emp_dept != department:
+						continue
+					
+					tasks.append({
+						"idx": task.idx,
+						"employee": task.employee,
+						"department": emp_dept,
+						"task_title": task.task_title,
+						"planned_output": task.planned_output,
+						"actual_work_done": task.actual_work_done,
+						"completion_percentage": task.completion_percentage,
+						"task_status": task.task_status,
+						"carry_forward": task.carry_forward,
+						"next_working_date": str(task.next_working_date) if task.next_working_date else None,
+					})
+			
+			# Only include standup if has tasks (or no department filter applied)
+			if tasks or not department:
+				standup_list.append({
+					"standup_id": standup.name,
+					"standup_date": str(standup.standup_date),
+					"standup_time": str(standup.standup_time),
+					"remarks": standup.remarks,
+					"docstatus": standup.docstatus,
+					"is_submitted": standup.docstatus == 1,
+					"total_tasks": len(standup_doc.standup_tasks) if standup_doc.standup_tasks else 0,
+					"tasks": tasks,
+				})
+		
+		# Calculate statistics
+		stats = {
+			"total_standups": len(standup_list),
+			"submitted_standups": sum(1 for s in standup_list if s["is_submitted"]),
+			"draft_standups": sum(1 for s in standup_list if not s["is_submitted"]),
+			"total_tasks": sum(s["total_tasks"] for s in standup_list),
+			"completed_tasks": sum(
+				sum(1 for t in s["tasks"] if t["task_status"] == "Completed")
+				for s in standup_list
+			),
+			"pending_tasks": sum(
+				sum(1 for t in s["tasks"] if t["task_status"] == "Draft")
+				for s in standup_list
+			),
+		}
+		
+		return {
+			"status": "success",
+			"data": {
+				"from_date": str(from_date),
+				"to_date": str(to_date),
+				"standups": standup_list,
+				"statistics": stats,
+			},
+			"message": _("Standups fetched successfully"),
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get All Standups Error: {str(e)}\n{frappe.get_traceback()}", "Admin Standups")
+		return {
+			"status": "error",
+			"message": str(e),
+			"data": None,
+		}
+
+
+@frappe.whitelist()
+def get_standup_detail(standup_id: str) -> dict:
+	"""
+	Get detailed view of a specific standup with all tasks (Admin).
+	
+	Args:
+		standup_id: Daily Standup ID
+	
+	Returns:
+		Dict with complete standup details and all tasks
+	"""
+	try:
+		# Check if user is admin
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin:
+			frappe.throw(_("You do not have permission to view this standup"))
+		
+		# Get standup
+		standup = frappe.get_doc("Daily Standup", standup_id)
+		
+		# Get all tasks with employee details
+		tasks = []
+		if standup.standup_tasks:
+			for task in standup.standup_tasks:
+				emp_doc = frappe.get_doc("Employee", task.employee)
+				tasks.append({
+					"idx": task.idx,
+					"employee": task.employee,
+					"department": emp_doc.department,
+					"designation": emp_doc.designation,
+					"task_title": task.task_title,
+					"planned_output": task.planned_output,
+					"actual_work_done": task.actual_work_done,
+					"completion_percentage": task.completion_percentage,
+					"task_status": task.task_status,
+					"carry_forward": task.carry_forward,
+					"next_working_date": str(task.next_working_date) if task.next_working_date else None,
+				})
+		
+		# Calculate statistics
+		stats = {
+			"total_tasks": len(tasks),
+			"completed_tasks": sum(1 for t in tasks if t["task_status"] == "Completed"),
+			"pending_tasks": sum(1 for t in tasks if t["task_status"] == "Draft"),
+			"avg_completion": round(sum(t["completion_percentage"] for t in tasks) / len(tasks), 1) if tasks else 0,
+			"carry_forward_count": sum(1 for t in tasks if t["carry_forward"]),
+		}
+		
+		return {
+			"status": "success",
+			"data": {
+				"standup_id": standup.name,
+				"standup_date": str(standup.standup_date),
+				"standup_time": str(standup.standup_time),
+				"remarks": standup.remarks,
+				"docstatus": standup.docstatus,
+				"is_submitted": standup.docstatus == 1,
+				"tasks": tasks,
+				"statistics": stats,
+			},
+			"message": _("Standup detail fetched successfully"),
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Standup Detail Error: {str(e)}\n{frappe.get_traceback()}", "Standup Detail")
+		return {
+			"status": "error",
+			"message": str(e),
+			"data": None,
+		}
+
+
+@frappe.whitelist()
+def submit_standup(standup_id: str, remarks: str | None = None) -> dict:
+	"""
+	Submit/finalize a standup (Admin only).
+	Locks the standup from further editing.
+	
+	Args:
+		standup_id: Daily Standup ID
+		remarks: Optional manager remarks/notes
+	
+	Returns:
+		Dict with submission status
+	"""
+	try:
+		# Check if user is admin
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin:
+			frappe.throw(_("You do not have permission to submit standups"))
+		
+		# Get standup
+		standup = frappe.get_doc("Daily Standup", standup_id)
+		
+		# Check if already submitted
+		if standup.docstatus == 1:
+			frappe.throw(_("This standup is already submitted"))
+		
+		# Check if standup has tasks
+		if not standup.standup_tasks or len(standup.standup_tasks) == 0:
+			frappe.throw(_("Standup must have at least one task before submission"))
+		
+		# Update remarks if provided
+		if remarks:
+			standup.remarks = remarks
+		
+		# Submit standup
+		standup.submit()
+		frappe.db.commit()
+		
+		# Calculate statistics
+		stats = {
+			"total_tasks": len(standup.standup_tasks),
+			"completed_tasks": sum(1 for t in standup.standup_tasks if t.task_status == "Completed"),
+			"pending_tasks": sum(1 for t in standup.standup_tasks if t.task_status == "Draft"),
+		}
+		
+		return {
+			"status": "success",
+			"message": _("Standup submitted successfully"),
+			"data": {
+				"standup_id": standup.name,
+				"standup_date": str(standup.standup_date),
+				"docstatus": standup.docstatus,
+				"is_submitted": True,
+				"statistics": stats,
+			},
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Submit Standup Error: {str(e)}\n{frappe.get_traceback()}", "Standup Submit")
+		frappe.throw(_("Failed to submit standup: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def amend_standup(standup_id: str) -> dict:
+	"""
+	Unlock a submitted standup for editing (Admin only).
+	Creates an amended copy that can be edited.
+	
+	Args:
+		standup_id: Daily Standup ID (must be submitted)
+	
+	Returns:
+		Dict with amended standup details
+	"""
+	try:
+		# Check if user is admin
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin:
+			frappe.throw(_("You do not have permission to amend standups"))
+		
+		# Get standup
+		standup = frappe.get_doc("Daily Standup", standup_id)
+		
+		# Check if submitted
+		if standup.docstatus != 1:
+			frappe.throw(_("Only submitted standups can be amended"))
+		
+		# Cancel the original standup (required for amendment in Frappe)
+		standup.flags.ignore_permissions = True
+		standup.cancel()
+		frappe.db.commit()
+		
+		# Create a new draft document with same data, linking to original via amended_from
+		amended_doc = frappe.get_doc({
+			"doctype": "Daily Standup",
+			"standup_date": standup.standup_date,
+			"standup_time": standup.standup_time,
+			"remarks": standup.remarks,
+			"amended_from": standup.name,
+			"docstatus": 0,
+		})
+		
+		# Copy all tasks from original standup
+		if standup.standup_tasks:
+			for task in standup.standup_tasks:
+				amended_doc.append("standup_tasks", {
+					"employee": task.employee,
+					"task_title": task.task_title,
+					"planned_output": task.planned_output,
+					"actual_work_done": task.actual_work_done,
+					"completion_percentage": task.completion_percentage,
+					"task_status": task.task_status,
+					"carry_forward": task.carry_forward,
+					"next_working_date": task.next_working_date,
+				})
+		
+		amended_doc.flags.ignore_permissions = True
+		amended_doc.insert(ignore_permissions=True)
+		frappe.db.commit()
+		
+		return {
+			"status": "success",
+			"message": _("Standup unlocked for editing"),
+			"data": {
+				"original_standup_id": standup.name,
+				"amended_standup_id": amended_doc.name,
+				"standup_date": str(amended_doc.standup_date),
+				"docstatus": amended_doc.docstatus,
+			},
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Amend Standup Error: {str(e)}\n{frappe.get_traceback()}", "Standup Amend")
+		frappe.throw(_("Failed to amend standup: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_department_standup_summary(
+	department: str,
+	from_date: str | None = None,
+	to_date: str | None = None,
+) -> dict:
+	"""
+	Get standup summary for a specific department.
+	Shows all employees' standups and their completion status.
+	
+	Args:
+		department: Department name
+		from_date: Filter from this date
+		to_date: Filter to this date
+	
+	Returns:
+		Dict with department standup analytics
+	"""
+	try:
+		# Check if user is admin
+		user_roles = frappe.get_roles()
+		is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+		
+		if not is_admin:
+			frappe.throw(_("You do not have permission to view department standups"))
+		
+		# Validate department exists
+		if not frappe.db.exists("Department", department):
+			frappe.throw(_("Department {0} does not exist").format(department))
+		
+		# Set date range
+		if not from_date:
+			from_date = add_days(getdate(), -7)
+		if not to_date:
+			to_date = getdate()
+		
+		# Get all employees in department
+		employees = frappe.get_all(
+			"Employee",
+			filters={
+				"department": department,
+				"status": "Active",
+			},
+			fields=["name", "employee_name", "designation"],
+			order_by="employee_name asc",
+		)
+		
+		# Get all standups in date range (exclude cancelled standups - docstatus=2)
+		standups = frappe.get_all(
+			"Daily Standup",
+			filters={
+				"standup_date": ["between", [from_date, to_date]],
+				"docstatus": ["!=", 2],  # Exclude cancelled standups
+			},
+			fields=["name", "standup_date", "docstatus"],
+		)
+		
+		# Build summary for each employee
+		employee_summary = []
+		for emp in employees:
+			emp_tasks = []
+			task_count = 0
+			completed_count = 0
+			
+			for standup in standups:
+				standup_doc = frappe.get_doc("Daily Standup", standup.name)
+				
+				# Find employee's task
+				if standup_doc.standup_tasks:
+					for task in standup_doc.standup_tasks:
+						if task.employee == emp.name:
+							emp_tasks.append({
+								"standup_date": str(standup.standup_date),
+								"task_title": task.task_title,
+								"task_status": task.task_status,
+								"completion_percentage": task.completion_percentage,
+								"actual_work_done": task.actual_work_done[:100] if task.actual_work_done else "",  # Truncate
+							})
+							task_count += 1
+							if task.task_status == "Completed":
+								completed_count += 1
+			
+			if task_count > 0:  # Only include if employee has tasks
+				employee_summary.append({
+					"employee": emp.name,
+					"employee_name": emp.employee_name,
+					"designation": emp.designation,
+					"total_tasks": task_count,
+					"completed_tasks": completed_count,
+					"completion_rate": round((completed_count / task_count * 100), 1) if task_count > 0 else 0,
+					"tasks": emp_tasks,
+				})
+		
+		# Calculate department stats
+		total_tasks = sum(e["total_tasks"] for e in employee_summary)
+		total_completed = sum(e["completed_tasks"] for e in employee_summary)
+		
+		return {
+			"status": "success",
+			"data": {
+				"department": department,
+				"from_date": str(from_date),
+				"to_date": str(to_date),
+				"employee_summary": employee_summary,
+				"department_statistics": {
+					"total_employees": len(employee_summary),
+					"total_tasks": total_tasks,
+					"completed_tasks": total_completed,
+					"overall_completion_rate": round((total_completed / total_tasks * 100), 1) if total_tasks > 0 else 0,
+				},
+			},
+			"message": _("Department standup summary fetched successfully"),
+		}
+		
+	except Exception as e:
+		frappe.log_error(f"Get Department Standup Summary Error: {str(e)}\n{frappe.get_traceback()}", "Department Standup")
+		return {
+			"status": "error",
+			"message": str(e),
+			"data": None,
+		}

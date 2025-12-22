@@ -27,6 +27,9 @@ import ProjectLogsScreen from '../screens/admin/ProjectLogsScreen';
 import ProjectTasksScreen from '../screens/admin/ProjectTasksScreen';
 
 import AdminNotifications from '../screens/admin/AdminNotifications';
+import AdminAllStandupsScreen from '../screens/admin/AdminAllStandupsScreen';
+import AdminStandupDetailScreen from '../screens/admin/AdminStandupDetailScreen';
+import AdminDepartmentStandupScreen from '../screens/admin/AdminDepartmentStandupScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -65,6 +68,10 @@ const AdminNavigator = () => {
             <Stack.Screen name="ExpenseClaimApproval" component={ExpenseClaimApprovalScreen} options={{ title: 'Expense Claim Approvals' }} />
             <Stack.Screen name="TravelRequestApproval" component={TravelRequestApproval} options={{ title: 'Travel Request Approvals' }} />
             <Stack.Screen name="CreateNotification" component={CreateNotificationScreen} options={{ title: 'Create Notification' }} />
+
+            <Stack.Screen name="AdminAllStandups" component={AdminAllStandupsScreen} options={{ title: 'All Standups' }} />
+            <Stack.Screen name="AdminStandupDetail" component={AdminStandupDetailScreen} options={{ title: 'Standup Detail' }} />
+            <Stack.Screen name="AdminDepartmentStandup" component={AdminDepartmentStandupScreen} options={{ title: 'Department Standups' }} />
 
             <Stack.Screen name="ProjectsOverview" component={ProjectsOverviewScreen} options={{ title: 'Projects Overview' }} />
             <Stack.Screen name="ProjectLogsScreen" component={ProjectLogsScreen} options={{ title: 'Project Logs' }} />

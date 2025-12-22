@@ -23,6 +23,10 @@ import ProfileScreen from '../screens/employee/ProfileScreen';
 import EmployeeDashboard from '../screens/employee/EmployeeDashboard';
 import MyTasksScreen from '../screens/employee/MyTasksScreen';
 
+import EmployeeStandupScreen from '../screens/employee/EmployeeStandupScreen';
+import EmployeeStandupUpdateScreen from '../screens/employee/EmployeeStandupUpdateScreen';
+import EmployeeStandupHistoryScreen from '../screens/employee/EmployeeStandupHistoryScreen';
+
 const Stack = createNativeStackNavigator();
 
 const EmployeeNavigator = () => {
@@ -47,6 +51,10 @@ const EmployeeNavigator = () => {
             <Stack.Screen name="CheckInOut" component={CheckInOutScreen} options={{ title: 'Check In/Out' }} />
             <Stack.Screen name="AttendanceHistory" component={AttendanceHistoryScreen} options={{ title: 'Attendance History' }} />
             <Stack.Screen name="WFHRequest" component={WFHRequestScreen} options={{ title: 'WFH Request' }} />
+
+            <Stack.Screen name="EmployeeStandup" component={EmployeeStandupScreen} options={{ title: "Today's Standup" }} />
+            <Stack.Screen name="EmployeeStandupUpdate" component={EmployeeStandupUpdateScreen} options={{ title: 'Update Standup' }} />
+            <Stack.Screen name="EmployeeStandupHistory" component={EmployeeStandupHistoryScreen} options={{ title: 'Standup History' }} />
 
             <Stack.Screen name="HolidayList" component={HolidayListScreen} options={{ title: 'Holiday List' }} />
             <Stack.Screen name="LeaveApplication" component={LeaveApplicationScreen} options={{ title: 'Apply Leave' }} />
