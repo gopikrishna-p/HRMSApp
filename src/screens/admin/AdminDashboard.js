@@ -275,10 +275,8 @@ const AdminDashboard = ({ navigation }) => {
                 </Section>
 
                 <Section title="Daily Standups" icon="comments" tint="#14B8A6">
-                    <ListItem title="All Standups" subtitle="View all team standups" leftIcon="list-alt"
-                        tint="#14B8A6" onPress={() => navigation.navigate('AdminAllStandups')} />
-                    <ListItem title="Department Standups" subtitle="Analytics by department" leftIcon="sitemap"
-                        tint="#14B8A6" onPress={() => navigation.navigate('AdminDepartmentStandup')} />
+                    <ListItem title="Standup Management" subtitle="View & manage all standups" leftIcon="list-alt"
+                        tint="#14B8A6" onPress={() => navigation.navigate('AdminStandupHub')} />
                 </Section>
 
                 <Section title="Leave Management" icon="umbrella-beach" tint="#8B5CF6">

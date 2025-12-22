@@ -1,32 +1,60 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, ScrollView, StyleSheet, Alert, FlatList, RefreshControl } from 'react-native';
-import { Text, useTheme, Chip, Button, TextInput, Dialog, Portal, ActivityIndicator } from 'react-native-paper';
+import {
+  View,
+  ScrollView,
+  StyleSheet,
+  Alert,
+  RefreshControl,
+  TouchableOpacity,
+} from 'react-native';
+import {
+  Text,
+  TextInput,
+  Button,
+  useTheme,
+  Card,
+  ActivityIndicator,
+  Divider,
+  Dialog,
+  Portal,
+  Chip,
+} from 'react-native-paper';
+import Icon from 'react-native-vector-icons/FontAwesome5';
 import AppHeader from '../../components/ui/AppHeader';
 import StandupService from '../../services/standup.service';
 import { formatDate } from '../../utils/helpers';
 
-const AdminStandupDetailScreen = ({ route, navigation }) => {
-  const { standupId } = route.params;
+const AdminStandupDetailScreen = ({ navigation, route }) => {
   const { custom } = useTheme();
+  const { standupId } = route.params;
 
   const [loading, setLoading] = useState(false);
-  const [standup, setStandup] = useState(null);
-  const [submittingStandup, setSubmittingStandup] = useState(false);
-  const [showRemarksDialog, setShowRemarksDialog] = useState(false);
-  const [remarks, setRemarks] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [standup, setStandup] = useState(null);
+  const [remarks, setRemarks] = useState('');
+  const [dialogVisible, setDialogVisible] = useState(false);
+  const [dialogType, setDialogType] = useState(''); // submit, amend, remarks
+  const [submitting, setSubmitting] = useState(false);
 
   const fetchStandupDetail = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await StandupService.getStandupDetail(standupId);
-      if (result?.data) {
-        setStandup(result.data);
-        setRemarks(result.data.remarks || '');
+      if (!standupId) {
+        throw new Error('Standup ID not provided');
       }
+      
+      console.log('📋 Fetching details for standup:', standupId);
+      const result = await StandupService.getStandupDetail(standupId);
+      console.log('📋 Standup detail response:', result);
+      
+      const standupData = result.data || result;
+      console.log('📋 Extracted standup data:', standupData);
+      
+      setStandup(standupData);
+      setRemarks(standupData?.remarks || '');
     } catch (error) {
-      console.error('Error:', error);
-      Alert.alert('Error', 'Failed to load standup detail');
+      console.error('❌ Error fetching standup detail:', error);
+      Alert.alert('Error', 'Failed to load standup: ' + (error.message || 'Unknown error'));
     } finally {
       setLoading(false);
     }
@@ -43,46 +71,152 @@ const AdminStandupDetailScreen = ({ route, navigation }) => {
   }, [fetchStandupDetail]);
 
   const handleSubmitStandup = async () => {
-    setSubmittingStandup(true);
+    setSubmitting(true);
     try {
-      await StandupService.submitStandup(standupId, remarks.trim() || null);
+      await StandupService.submitStandup(standupId, remarks || null);
       Alert.alert('Success', 'Standup submitted successfully!');
-      setShowRemarksDialog(false);
+      setDialogVisible(false);
       await fetchStandupDetail();
     } catch (error) {
       console.error('Error:', error);
       Alert.alert('Error', error.message || 'Failed to submit standup');
     } finally {
-      setSubmittingStandup(false);
+      setSubmitting(false);
     }
   };
 
   const handleAmendStandup = async () => {
-    setSubmittingStandup(true);
+    setSubmitting(true);
     try {
-      await StandupService.amendStandup(standupId, remarks.trim() || null);
-      Alert.alert('Success', 'Standup amended successfully!');
-      setShowRemarksDialog(false);
-      await fetchStandupDetail();
+      const result = await StandupService.amendStandup(standupId);
+      Alert.alert(
+        'Success',
+        `Standup unlocked for editing.\nNew ID: ${result.data?.amended_standup_id}`
+      );
+      setDialogVisible(false);
+      navigation.goBack();
     } catch (error) {
       console.error('Error:', error);
       Alert.alert('Error', error.message || 'Failed to amend standup');
     } finally {
-      setSubmittingStandup(false);
+      setSubmitting(false);
     }
   };
 
-  if (loading) {
+  const renderTaskCard = task => (
+    <Card
+      key={`${task.idx}_${task.employee}`}
+      style={[styles.taskCard, { backgroundColor: custom.palette.surface }]}
+    >
+      <Card.Content>
+        {/* Task Header */}
+        <View style={styles.taskHeader}>
+          <View style={styles.employeeInfo}>
+            <Text style={styles.employeeName}>{task.employee}</Text>
+            <Text style={styles.taskDepartment}>{task.department}</Text>
+          </View>
+          <Chip
+            icon={task.task_status === 'Completed' ? 'check' : 'clock'}
+            style={{
+              backgroundColor:
+                task.task_status === 'Completed' ? '#D1FAE5' : '#FEF3C7',
+            }}
+            textStyle={{
+              color:
+                task.task_status === 'Completed' ? '#065F46' : '#92400E',
+              fontWeight: '600',
+            }}
+          >
+            {task.task_status}
+          </Chip>
+        </View>
+
+        <Divider style={styles.divider} />
+
+        {/* Task Title & Planned Output */}
+        <View style={styles.taskContent}>
+          <View style={styles.contentSection}>
+            <Text style={styles.sectionLabel}>
+              📌 Task Title
+            </Text>
+            <Text style={styles.sectionValue}>{task.task_title}</Text>
+          </View>
+
+          <View style={styles.contentSection}>
+            <Text style={styles.sectionLabel}>
+              🎯 Planned Output
+            </Text>
+            <Text style={styles.sectionValue}>{task.planned_output}</Text>
+          </View>
+
+          {task.actual_work_done && (
+            <View style={styles.contentSection}>
+              <Text style={styles.sectionLabel}>
+                ✅ Actual Work Done
+              </Text>
+              <Text style={styles.sectionValue}>{task.actual_work_done}</Text>
+            </View>
+          )}
+        </View>
+
+        <Divider style={styles.divider} />
+
+        {/* Progress Metrics */}
+        <View style={styles.metricsContainer}>
+          <View style={styles.metricItem}>
+            <Text style={styles.metricLabel}>Completion %</Text>
+            <View style={styles.progressBarContainer}>
+              <View
+                style={[
+                  styles.progressBar,
+                  {
+                    width: `${task.completion_percentage}%`,
+                    backgroundColor:
+                      task.completion_percentage >= 80
+                        ? '#10B981'
+                        : task.completion_percentage >= 50
+                        ? '#F59E0B'
+                        : '#EF4444',
+                  },
+                ]}
+              />
+            </View>
+            <Text style={styles.metricValue}>
+              {task.completion_percentage}%
+            </Text>
+          </View>
+
+          {task.carry_forward === 1 && (
+            <View style={styles.carryForwardBadge}>
+              <Icon
+                name="arrow-right"
+                size={12}
+                color="#6366F1"
+                style={{ marginRight: 4 }}
+              />
+              <Text style={styles.carryForwardText}>
+                Carry Forward to {task.next_working_date}
+              </Text>
+            </View>
+          )}
+        </View>
+      </Card.Content>
+    </Card>
+  );
+
+  if (loading && !standup) {
     return (
       <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
-        <AppHeader 
-          title="Standup Details"
+        <AppHeader
+          title="Standup Detail"
           canGoBack={true}
           onBack={() => navigation.goBack()}
         />
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
           <ActivityIndicator size="large" color={custom.palette.primary} />
-          <Text style={{ marginTop: 12, color: '#6B7280' }}>Loading details...</Text>
+          <Text style={{ marginTop: 12, color: '#6B7280' }}>
+            Loading standup...
+          </Text>
         </View>
       </View>
     );
@@ -91,13 +225,13 @@ const AdminStandupDetailScreen = ({ route, navigation }) => {
   if (!standup) {
     return (
       <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
-        <AppHeader 
-          title="Standup Details"
+        <AppHeader
+          title="Standup Detail"
           canGoBack={true}
           onBack={() => navigation.goBack()}
         />
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <Text style={{ fontSize: 14, color: '#6B7280' }}>Failed to load standup</Text>
+          <Text style={{ color: '#6B7280' }}>Failed to load standup</Text>
         </View>
       </View>
     );
@@ -105,191 +239,243 @@ const AdminStandupDetailScreen = ({ route, navigation }) => {
 
   return (
     <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
-      <AppHeader 
-        title="Standup Details"
+      <AppHeader
+        title="Standup Detail"
         canGoBack={true}
         onBack={() => navigation.goBack()}
       />
-      <ScrollView 
+
+      <ScrollView
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[custom.palette.primary]}
+          />
+        }
         style={styles.container}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {/* Header Info Card */}
-        <View style={styles.headerCard}>
-          <View style={styles.headerRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.headerLabel}>Employee</Text>
-              <Text style={styles.headerValue}>{standup.employee_name}</Text>
+        {/* Standup Header */}
+        <View style={[styles.headerCard, { backgroundColor: custom.palette.surface }]}>
+          <View style={styles.headerTop}>
+            <View>
+              <Text style={styles.headerDate}>
+                📅 {formatDate(standup.standup_date)}
+              </Text>
+              <Text style={styles.headerTime}>⏰ {standup.standup_time}</Text>
             </View>
             <Chip
-              icon={standup.is_submitted ? 'check' : 'clock-outline'}
+              icon={standup.is_submitted ? 'check-circle' : 'pencil'}
               style={{
-                backgroundColor: standup.is_submitted ? '#D1FAE5' : '#FEF3C7',
+                backgroundColor: standup.is_submitted
+                  ? '#D1FAE5'
+                  : '#FEF3C7',
               }}
-              textStyle={{ color: standup.is_submitted ? '#059669' : '#92400E', fontWeight: '600' }}
-              mode="flat"
+              textStyle={{
+                color: standup.is_submitted ? '#065F46' : '#92400E',
+                fontWeight: '600',
+              }}
             >
               {standup.is_submitted ? 'Submitted' : 'Draft'}
             </Chip>
           </View>
 
-          <View style={styles.infoGrid}>
-            <View style={styles.infoItem}>
-              <Text style={styles.infoLabel}>Date</Text>
-              <Text style={styles.infoValue}>{formatDate(standup.standup_date)}</Text>
+          <Divider style={styles.divider} />
+
+          {/* Statistics */}
+          <View style={styles.statsContainer}>
+            <View style={styles.statBox}>
+              <Icon
+                name="tasks"
+                size={18}
+                color={custom.palette.primary}
+              />
+              <View style={styles.statContent}>
+                <Text style={styles.statValue}>
+                  {standup.statistics?.total_tasks || 0}
+                </Text>
+                <Text style={styles.statLabel}>Total Tasks</Text>
+              </View>
             </View>
-            <View style={styles.infoItem}>
-              <Text style={styles.infoLabel}>Department</Text>
-              <Text style={styles.infoValue}>{standup.department}</Text>
+
+            <View style={styles.statBox}>
+              <Icon
+                name="check-circle"
+                size={18}
+                color="#10B981"
+              />
+              <View style={styles.statContent}>
+                <Text style={[styles.statValue, { color: '#10B981' }]}>
+                  {standup.statistics?.completed_tasks || 0}
+                </Text>
+                <Text style={styles.statLabel}>Completed</Text>
+              </View>
+            </View>
+
+            <View style={styles.statBox}>
+              <Icon
+                name="hourglass-half"
+                size={18}
+                color="#F59E0B"
+              />
+              <View style={styles.statContent}>
+                <Text style={[styles.statValue, { color: '#F59E0B' }]}>
+                  {standup.statistics?.pending_tasks || 0}
+                </Text>
+                <Text style={styles.statLabel}>Pending</Text>
+              </View>
+            </View>
+
+            <View style={styles.statBox}>
+              <Icon
+                name="percentage"
+                size={18}
+                color="#3B82F6"
+              />
+              <View style={styles.statContent}>
+                <Text style={[styles.statValue, { color: '#3B82F6' }]}>
+                  {standup.statistics?.avg_completion || 0}%
+                </Text>
+                <Text style={styles.statLabel}>Avg Comp.</Text>
+              </View>
             </View>
           </View>
+
+          {standup.remarks && (
+            <>
+              <Divider style={styles.divider} />
+              <View>
+                <Text style={styles.remarksLabel}>Manager Remarks</Text>
+                <Text style={styles.remarksText}>{standup.remarks}</Text>
+              </View>
+            </>
+          )}
         </View>
 
-        {/* Statistics Card */}
-        {standup.employee_tasks && standup.employee_tasks.length > 0 && (
-          <View style={styles.statsCard}>
-            <Text style={styles.cardTitle}>Tasks Summary</Text>
-            <View style={styles.statsRow}>
-              <View style={styles.statItem}>
-                <Text style={styles.statLabel}>Total Tasks</Text>
-                <Text style={styles.statValue}>{standup.employee_tasks.length}</Text>
-              </View>
-              <View style={styles.statItem}>
-                <Text style={styles.statLabel}>Completed</Text>
-                <Text style={styles.statValue}>
-                  {standup.employee_tasks.filter(t => t.task_status === 'Completed').length}
-                </Text>
-              </View>
-              <View style={styles.statItem}>
-                <Text style={styles.statLabel}>Avg Progress</Text>
-                <Text style={styles.statValue}>
-                  {Math.round(
-                    standup.employee_tasks.reduce((sum, t) => sum + t.completion_percentage, 0) /
-                    standup.employee_tasks.length
-                  )}%
-                </Text>
-              </View>
-            </View>
-          </View>
-        )}
-
-        {/* Tasks Section */}
-        {standup.employee_tasks && standup.employee_tasks.length > 0 && (
-          <View style={styles.tasksSection}>
-            <Text style={styles.sectionTitle}>Tasks Details</Text>
-            <FlatList
-              data={standup.employee_tasks}
-              renderItem={({ item: task }) => (
-                <View style={styles.taskCard}>
-                  <Text style={styles.taskTitle}>{task.task_title}</Text>
-
-                  <Text style={[styles.label, { marginTop: 10 }]}>Planned Output</Text>
-                  <Text style={styles.text}>{task.planned_output}</Text>
-
-                  {task.actual_work_done && (
-                    <>
-                      <Text style={[styles.label, { marginTop: 10 }]}>Actual Work Done</Text>
-                      <Text style={styles.text}>{task.actual_work_done}</Text>
-                    </>
-                  )}
-
-                  <View style={styles.taskMeta}>
-                    <View style={styles.metaItem}>
-                      <Text style={styles.label}>Completion</Text>
-                      <Text style={styles.metaValue}>{task.completion_percentage}%</Text>
-                    </View>
-                    <View style={styles.metaItem}>
-                      <Text style={styles.label}>Status</Text>
-                      <Chip
-                        style={{
-                          backgroundColor: task.task_status === 'Completed' ? '#D1FAE5' : '#FEF3C7',
-                          marginTop: 4,
-                        }}
-                        textStyle={{
-                          color: task.task_status === 'Completed' ? '#065F46' : '#92400E',
-                          fontSize: 10,
-                          fontWeight: '600',
-                        }}
-                        size="small"
-                        mode="flat"
-                      >
-                        {task.task_status}
-                      </Chip>
-                    </View>
-                  </View>
-                </View>
-              )}
-              keyExtractor={(item) => item.name}
-              scrollEnabled={false}
-              ItemSeparatorComponent={() => <View style={styles.taskSeparator} />}
-            />
-          </View>
-        )}
-
-        {/* Remarks Card */}
-        {standup.remarks && (
-          <View style={styles.remarksCard}>
-            <Text style={styles.remarksLabel}>Manager Remarks</Text>
-            <Text style={styles.remarksText}>{standup.remarks}</Text>
-          </View>
-        )}
+        {/* Tasks List */}
+        <View style={styles.tasksSection}>
+          <Text style={styles.sectionTitle}>
+            📋 Tasks ({standup.tasks?.length || 0})
+          </Text>
+          {standup.tasks && standup.tasks.length > 0 ? (
+            standup.tasks.map(task => renderTaskCard(task))
+          ) : (
+            <Text style={styles.noTasksText}>No tasks in this standup</Text>
+          )}
+        </View>
 
         {/* Action Buttons */}
-        {!standup.is_submitted && (
-          <Button
-            mode="contained"
-            onPress={() => setShowRemarksDialog(true)}
-            style={styles.submitBtn}
-            labelStyle={{ fontSize: 16, fontWeight: '600' }}
-          >
-            Submit Standup
-          </Button>
-        )}
+        <View style={styles.actionsContainer}>
+          {!standup.is_submitted ? (
+            <>
+              <Button
+                mode="contained"
+                icon="check"
+                onPress={() => {
+                  setDialogType('submit');
+                  setDialogVisible(true);
+                }}
+                style={styles.actionButton}
+                buttonColor="#10B981"
+              >
+                Submit Standup
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                mode="outlined"
+                icon="pencil"
+                onPress={() => {
+                  setDialogType('amend');
+                  setDialogVisible(true);
+                }}
+                style={styles.actionButton}
+              >
+                Amend (Unlock)
+              </Button>
+            </>
+          )}
 
-        {standup.is_submitted && (
           <Button
             mode="outlined"
-            onPress={() => setShowRemarksDialog(true)}
-            style={styles.amendBtn}
-            labelStyle={{ fontSize: 16, fontWeight: '600', color: custom.palette.primary }}
+            icon="arrow-left"
+            onPress={() => navigation.goBack()}
+            style={styles.actionButton}
           >
-            Amend Standup
+            Back
           </Button>
-        )}
-
-        <View style={{ height: 24 }} />
+        </View>
       </ScrollView>
 
-      {/* Dialog for Remarks */}
+      {/* Dialog: Submit or Add Remarks */}
       <Portal>
-        <Dialog visible={showRemarksDialog} onDismiss={() => setShowRemarksDialog(false)}>
-          <Dialog.Title>
-            {standup.is_submitted ? 'Amend Standup' : 'Submit Standup'}
-          </Dialog.Title>
+        <Dialog
+          visible={dialogVisible && dialogType === 'submit'}
+          onDismiss={() => setDialogVisible(false)}
+        >
+          <Dialog.Title>Submit Standup</Dialog.Title>
           <Dialog.Content>
+            <Text style={styles.dialogText}>
+              Add manager remarks (optional):
+            </Text>
             <TextInput
-              label="Manager Remarks (Optional)"
+              mode="outlined"
+              label="Remarks"
               value={remarks}
               onChangeText={setRemarks}
-              placeholder="Add any remarks or feedback..."
-              mode="outlined"
               multiline
               numberOfLines={4}
-              style={{ marginTop: 8, textAlignVertical: 'top' }}
-              editable={!submittingStandup}
+              style={styles.remarksInput}
+              placeholder="Enter any manager remarks or feedback..."
             />
           </Dialog.Content>
           <Dialog.Actions>
-            <Button onPress={() => setShowRemarksDialog(false)} disabled={submittingStandup}>
+            <Button
+              onPress={() => setDialogVisible(false)}
+              disabled={submitting}
+            >
               Cancel
             </Button>
             <Button
-              mode="contained"
-              onPress={standup.is_submitted ? handleAmendStandup : handleSubmitStandup}
-              loading={submittingStandup}
-              disabled={submittingStandup}
+              onPress={handleSubmitStandup}
+              loading={submitting}
+              buttonColor="#10B981"
+              textColor="#fff"
             >
-              {standup.is_submitted ? 'Amend' : 'Submit'}
+              Submit
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+
+        {/* Dialog: Amend */}
+        <Dialog
+          visible={dialogVisible && dialogType === 'amend'}
+          onDismiss={() => setDialogVisible(false)}
+        >
+          <Dialog.Title>Unlock for Editing</Dialog.Title>
+          <Dialog.Content>
+            <Text style={styles.dialogText}>
+              Are you sure you want to unlock this submitted standup for editing?
+            </Text>
+            <Text style={[styles.dialogText, { marginTop: 8, color: '#6B7280' }]}>
+              An amended copy will be created and linked to the original.
+            </Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button
+              onPress={() => setDialogVisible(false)}
+              disabled={submitting}
+            >
+              Cancel
+            </Button>
+            <Button
+              onPress={handleAmendStandup}
+              loading={submitting}
+              buttonColor="#F59E0B"
+              textColor="#fff"
+            >
+              Proceed
             </Button>
           </Dialog.Actions>
         </Dialog>
@@ -302,209 +488,180 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 16,
-    paddingBottom: 32,
   },
-  // Header Card
   headerCard: {
-    backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 16,
     marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
     elevation: 2,
   },
-  headerRow: {
+  headerTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 12,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
   },
-  headerLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#6B7280',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  headerValue: {
+  headerDate: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#111827',
-    marginTop: 6,
+    color: '#1F2937',
   },
-  infoGrid: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  infoItem: {
-    flex: 1,
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-    padding: 10,
-  },
-  infoLabel: {
-    fontSize: 10,
-    fontWeight: '700',
+  headerTime: {
+    fontSize: 12,
     color: '#6B7280',
-    textTransform: 'uppercase',
-  },
-  infoValue: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#111827',
     marginTop: 4,
   },
-  // Statistics Card
-  statsCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
+  divider: {
+    marginVertical: 12,
   },
-  cardTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 12,
-  },
-  statsRow: {
+  statsContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: 8,
+    marginVertical: 8,
   },
-  statItem: {
+  statBox: {
     flex: 1,
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-    padding: 12,
+    flexDirection: 'row',
     alignItems: 'center',
+    marginHorizontal: 4,
   },
-  statLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#6B7280',
-    textTransform: 'uppercase',
+  statContent: {
+    marginLeft: 8,
+    flex: 1,
   },
   statValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#6366F1',
-    marginTop: 6,
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#1F2937',
   },
-  // Tasks Section
-  tasksSection: {
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  taskCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  taskTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  label: {
-    fontSize: 10,
-    fontWeight: '700',
+  statLabel: {
+    fontSize: 11,
     color: '#6B7280',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  text: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#374151',
-    marginTop: 6,
-    lineHeight: 16,
-  },
-  taskMeta: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
-    gap: 8,
-  },
-  metaItem: {
-    flex: 1,
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-    padding: 10,
-  },
-  metaValue: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#111827',
-    marginTop: 4,
-  },
-  taskSeparator: {
-    height: 8,
-  },
-  // Remarks Card
-  remarksCard: {
-    backgroundColor: '#FFFBEB',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#FEE2E2',
+    marginTop: 2,
   },
   remarksLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#92400E',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
     marginBottom: 6,
   },
   remarksText: {
     fontSize: 12,
-    fontWeight: '500',
-    color: '#78350F',
-    lineHeight: 16,
+    color: '#6B7280',
+    fontStyle: 'italic',
   },
-  // Buttons
-  submitBtn: {
+  tasksSection: {
+    marginTop: 16,
     marginBottom: 16,
-    paddingVertical: 4,
   },
-  amendBtn: {
-    marginBottom: 16,
-    borderColor: '#6366F1',
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 12,
+  },
+  taskCard: {
+    marginBottom: 12,
+    borderRadius: 8,
+    elevation: 2,
+  },
+  taskHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  employeeInfo: {
+    flex: 1,
+  },
+  employeeName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  taskDepartment: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  taskContent: {
+    marginVertical: 8,
+  },
+  contentSection: {
+    marginBottom: 12,
+  },
+  sectionLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 4,
+  },
+  sectionValue: {
+    fontSize: 12,
+    color: '#6B7280',
+    lineHeight: 18,
+  },
+  metricsContainer: {
+    marginTop: 8,
+  },
+  metricItem: {
+    marginBottom: 8,
+  },
+  metricLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 4,
+  },
+  progressBarContainer: {
+    height: 8,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 4,
+  },
+  progressBar: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  metricValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  carryForwardBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 8,
     paddingVertical: 4,
+    borderRadius: 6,
+    marginTop: 8,
+  },
+  carryForwardText: {
+    fontSize: 11,
+    color: '#4F46E5',
+    fontWeight: '600',
+  },
+  noTasksText: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+  actionsContainer: {
+    marginBottom: 24,
+    gap: 8,
+  },
+  actionButton: {
+    marginBottom: 8,
+  },
+  dialogText: {
+    fontSize: 14,
+    color: '#374151',
+  },
+  remarksInput: {
+    marginTop: 16,
   },
 });
 

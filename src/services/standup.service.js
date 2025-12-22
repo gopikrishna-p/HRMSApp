@@ -123,13 +123,23 @@ class StandupService {
       if (toDate) params.to_date = toDate;
       if (department) params.department = department;
 
+      console.log('📊 Fetching all standups with params:', params);
       const response = await ApiService.get('/api/method/hrms.api.get_all_standups', { params });
-      if (response.success && response.data?.message) {
-        return response.data.message;
+      
+      if (response.success === false) {
+        throw new Error(response.message || 'Failed to fetch all standups');
       }
-      throw new Error(response.data?.message || 'Failed to fetch all standups');
+
+      const frappeResponse = response.data?.message || response.data;
+      
+      if (frappeResponse?.status === 'success' && frappeResponse?.data) {
+        console.log('✅ All standups fetched successfully');
+        return frappeResponse;
+      }
+      
+      throw new Error(frappeResponse?.message || 'Failed to fetch all standups');
     } catch (error) {
-      console.error('Error fetching all standups:', error);
+      console.error('❌ Error fetching all standups:', error.message);
       throw error;
     }
   }
@@ -140,15 +150,48 @@ class StandupService {
    */
   async getStandupDetail(standupId) {
     try {
-      const response = await ApiService.get('/api/method/hrms.api.get_standup_detail', {
-        params: { standup_id: standupId },
-      });
-      if (response.success && response.data?.message) {
-        return response.data.message;
+      if (!standupId) {
+        throw new Error('Standup ID is required');
       }
-      throw new Error(response.data?.message || 'Failed to fetch standup detail');
+
+      console.log('🔍 Fetching standup detail for:', standupId);
+      
+      // Use POST to ensure parameter is passed correctly
+      const response = await ApiService.post('/api/method/hrms.api.get_standup_detail', {
+        standup_id: standupId,
+      });
+      
+      console.log('📋 Raw response:', response);
+      
+      // Check for API service error
+      if (response.success === false) {
+        throw new Error(response.message || 'API request failed');
+      }
+
+      // Extract the actual response
+      // ApiService wraps response as { success: true, data: {...}, status: 200 }
+      // Frappe wraps our return as { message: {...}, status: 'success', data: {...} }
+      // So response.data contains what Frappe returned
+      const frappeResponse = response.data;
+      
+      // Handle case where response is wrapped in 'message' by Frappe
+      const apiResponse = frappeResponse?.message || frappeResponse;
+      
+      console.log('🔍 Extracted response:', apiResponse);
+      
+      if (apiResponse?.status === 'success' && apiResponse?.data) {
+        console.log('✅ Standup detail fetched successfully');
+        return apiResponse;
+      }
+      
+      // If response has error structure
+      if (apiResponse?.status === 'error') {
+        throw new Error(apiResponse?.message || 'Server returned error');
+      }
+      
+      throw new Error('Invalid response format from server');
     } catch (error) {
-      console.error('Error fetching standup detail:', error);
+      console.error('❌ Error fetching standup detail:', error.message);
       throw error;
     }
   }
@@ -163,13 +206,23 @@ class StandupService {
       const payload = { standup_id: standupId };
       if (remarks) payload.remarks = remarks;
 
+      console.log('📤 Submitting standup:', payload);
       const response = await ApiService.post('/api/method/hrms.api.submit_standup', payload);
-      if (response.success && response.data?.message) {
-        return response.data.message;
+      
+      if (response.success === false) {
+        throw new Error(response.message || 'Failed to submit standup');
       }
-      throw new Error(response.data?.message || 'Failed to submit standup');
+
+      const frappeResponse = response.data?.message || response.data;
+      
+      if (frappeResponse?.status === 'success') {
+        console.log('✅ Standup submitted successfully');
+        return frappeResponse;
+      }
+      
+      throw new Error(frappeResponse?.message || 'Failed to submit standup');
     } catch (error) {
-      console.error('Error submitting standup:', error);
+      console.error('❌ Error submitting standup:', error.message);
       throw error;
     }
   }
@@ -180,15 +233,25 @@ class StandupService {
    */
   async amendStandup(standupId) {
     try {
+      console.log('🔓 Amending standup:', standupId);
       const response = await ApiService.post('/api/method/hrms.api.amend_standup', {
         standup_id: standupId,
       });
-      if (response.success && response.data?.message) {
-        return response.data.message;
+      
+      if (response.success === false) {
+        throw new Error(response.message || 'Failed to amend standup');
       }
-      throw new Error(response.data?.message || 'Failed to amend standup');
+
+      const frappeResponse = response.data?.message || response.data;
+      
+      if (frappeResponse?.status === 'success') {
+        console.log('✅ Standup amended successfully');
+        return frappeResponse;
+      }
+      
+      throw new Error(frappeResponse?.message || 'Failed to amend standup');
     } catch (error) {
-      console.error('Error amending standup:', error);
+      console.error('❌ Error amending standup:', error.message);
       throw error;
     }
   }
@@ -205,15 +268,25 @@ class StandupService {
       if (fromDate) params.from_date = fromDate;
       if (toDate) params.to_date = toDate;
 
+      console.log('🏢 Fetching department standup summary:', params);
       const response = await ApiService.get('/api/method/hrms.api.get_department_standup_summary', {
         params,
       });
-      if (response.success && response.data?.message) {
-        return response.data.message;
+      
+      if (response.success === false) {
+        throw new Error(response.message || 'Failed to fetch department standup summary');
       }
-      throw new Error(response.data?.message || 'Failed to fetch department standup summary');
+
+      const frappeResponse = response.data?.message || response.data;
+      
+      if (frappeResponse?.status === 'success' && frappeResponse?.data) {
+        console.log('✅ Department standup summary fetched successfully');
+        return frappeResponse;
+      }
+      
+      throw new Error(frappeResponse?.message || 'Failed to fetch department standup summary');
     } catch (error) {
-      console.error('Error fetching department standup summary:', error);
+      console.error('❌ Error fetching department standup summary:', error.message);
       throw error;
     }
   }
