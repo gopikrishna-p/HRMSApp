@@ -36,17 +36,17 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
             total_used: 0,
             total_balance: 0,
             pending_applications: 0
-        },
-        thisMonth: {
-            present: 0,
-            wfh: 0,
-            absent: 0,
-            late: 0
         }
     });
 
-    // Add state for calculated working hours (using same logic as AttendanceHistoryScreen)
-    const [calculatedHours, setCalculatedHours] = useState({
+    // Summary stats from AttendanceHistoryScreen API (correct calculation)
+    const [summaryStats, setSummaryStats] = useState({
+        present_days: 0,
+        wfh_days: 0,
+        leave_days: 0,
+        holiday_days: 0,
+        absent_days: 0,
+        attendance_percentage: 0,
         total_working_hours: 0,
         avg_working_hours: 0
     });
@@ -77,7 +77,7 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
             const startDate = formatDate(getFirstDayOfCurrentMonth());
             const endDate = formatDate(new Date());
 
-            console.log('Fetching attendance history for working hours calculation:', {
+            console.log('Fetching attendance history for summary stats:', {
                 employee: employee.name,
                 startDate,
                 endDate
@@ -89,20 +89,24 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                 endDate
             );
 
-            console.log('Attendance history result for hours calculation:', result);
+            console.log('Attendance history result for summary stats:', result);
 
             if (result && result.summary_stats) {
-                setCalculatedHours({
-                    total_working_hours: result.summary_stats.total_working_hours || 0,
-                    avg_working_hours: result.summary_stats.avg_working_hours || 0
+                const stats = result.summary_stats;
+                setSummaryStats({
+                    present_days: stats.present_days || 0,
+                    wfh_days: stats.wfh_days || 0,
+                    leave_days: stats.leave_days || 0,
+                    holiday_days: stats.holiday_days || 0,
+                    absent_days: stats.absent_days || 0,
+                    attendance_percentage: stats.attendance_percentage || 0,
+                    total_working_hours: stats.total_working_hours || 0,
+                    avg_working_hours: stats.avg_working_hours || 0
                 });
-                console.log('Calculated hours updated:', {
-                    total: result.summary_stats.total_working_hours,
-                    avg: result.summary_stats.avg_working_hours
-                });
+                console.log('Summary stats updated:', stats);
             }
         } catch (error) {
-            console.error('Error fetching actual working hours:', error);
+            console.error('Error fetching summary stats:', error);
         }
     };
 
@@ -275,29 +279,29 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                 id: 1, 
                 icon: 'calendar-check', 
                 tint: custom.palette.primary, 
-                value: analytics.thisMonth.present.toString(), 
+                value: summaryStats.present_days.toString(), 
                 label: 'Present' 
             },
             { 
                 id: 2, 
                 icon: 'home', 
                 tint: '#10B981', 
-                value: analytics.thisMonth.wfh.toString(), 
+                value: summaryStats.wfh_days.toString(), 
                 label: 'WFH' 
             },
             { 
                 id: 3, 
-                icon: 'times-circle', 
-                tint: '#EF4444', 
-                value: analytics.thisMonth.absent.toString(), 
-                label: 'Absent' 
+                icon: 'file-alt', 
+                tint: '#8B5CF6', 
+                value: summaryStats.leave_days.toString(), 
+                label: 'Leave' 
             },
             { 
                 id: 4, 
-                icon: 'exclamation-triangle', 
-                tint: '#F59E0B', 
-                value: analytics.thisMonth.late.toString(), 
-                label: 'Late' 
+                icon: 'times-circle', 
+                tint: '#EF4444', 
+                value: summaryStats.absent_days.toString(), 
+                label: 'Absent' 
             },
         ];
 
@@ -400,16 +404,16 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                                 This Month Summary
                             </Text>
                             <Text style={{ fontSize: 20, fontWeight: '800', color: custom.palette.primary, marginLeft: 'auto' }}>
-                                {analytics.attendance.attendance_percentage}%
+                                {summaryStats.attendance_percentage}%
                             </Text>
                         </View>
 
-                        {/* Single Row Stats */}
+                    {/* Single Row Stats */}
                         <View style={{ flexDirection: 'row', marginHorizontal: -2 }}>
                             {[
-                                { label: 'Total Working Days', value: analytics.attendance.total_working_days, icon: 'calendar', color: '#6B7280' },
-                                { label: 'Hours', value: calculatedHours.total_working_hours || 0, icon: 'clock', color: '#8B5CF6' },
-                                { label: 'Avg/Day', value: calculatedHours.avg_working_hours > 0 ? calculatedHours.avg_working_hours + 'h' : '0h', icon: 'hourglass-half', color: '#10B981' },
+                                { label: 'Total Days', value: analytics.attendance.total_working_days, icon: 'calendar-check', color: '#F59E0B' },
+                                { label: 'Hours', value: summaryStats.total_working_hours || 0, icon: 'clock', color: '#8B5CF6' },
+                                { label: 'Avg/Day', value: summaryStats.avg_working_hours > 0 ? summaryStats.avg_working_hours + 'h' : '0h', icon: 'hourglass-half', color: '#10B981' },
                             ].map((stat, index) => (
                                 <View key={index} style={{ flex: 1, paddingHorizontal: 2 }}>
                                     <View style={{ 
