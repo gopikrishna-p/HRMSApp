@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, ScrollView, StyleSheet, Alert, FlatList, RefreshControl } from 'react-native';
+import { View, ScrollView, StyleSheet, Alert, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
 import { Text, useTheme, Chip, ActivityIndicator } from 'react-native-paper';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { useAuth } from '../../context/AuthContext';
 import AppHeader from '../../components/ui/AppHeader';
 import StandupService from '../../services/standup.service';
 import { formatDate } from '../../utils/helpers';
+import EditStandupTaskModal from '../../components/employee/EditStandupTaskModal';
 
 const EmployeeStandupHistoryScreen = ({ navigation }) => {
   const { employee } = useAuth();
@@ -15,6 +16,26 @@ const EmployeeStandupHistoryScreen = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [standups, setStandups] = useState([]);
   const [stats, setStats] = useState(null);
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [editTaskInitial, setEditTaskInitial] = useState({});
+  const [editStandupId, setEditStandupId] = useState(null);
+
+  const calculateStats = (standupList) => {
+    const totalStandups = standupList.length;
+    const submittedCount = standupList.filter((s) => s.is_submitted).length;
+    const completedTasks = standupList.reduce((acc, s) => {
+      if (s.employee_task && s.employee_task.task_status === 'Completed') {
+        return acc + 1;
+      }
+      return acc;
+    }, 0);
+
+    setStats({
+      total: totalStandups,
+      submitted: submittedCount,
+      completed: completedTasks,
+    });
+  };
 
   const fetchStandupHistory = useCallback(async () => {
     setLoading(true);
@@ -41,36 +62,20 @@ const EmployeeStandupHistoryScreen = ({ navigation }) => {
     }
   }, []);
 
-  const calculateStats = (standupList) => {
-    const totalStandups = standupList.length;
-    const submittedCount = standupList.filter((s) => s.is_submitted).length;
-    const completedTasks = standupList.reduce((acc, s) => {
-      if (s.employee_task && s.employee_task.task_status === 'Completed') {
-        return acc + 1;
-      }
-      return acc;
-    }, 0);
-
-    setStats({
-      total: totalStandups,
-      submitted: submittedCount,
-      completed: completedTasks,
-    });
-  };
-
-  useEffect(() => {
-    fetchStandupHistory();
-  }, [fetchStandupHistory]);
-
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await fetchStandupHistory();
     setRefreshing(false);
   }, [fetchStandupHistory]);
 
+  useEffect(() => {
+    fetchStandupHistory();
+  }, [fetchStandupHistory]);
+
   const renderStandupItem = ({ item }) => {
     const task = item.employee_task;
     const isSubmitted = item.is_submitted;
+    const canEdit = !isSubmitted && !!task;
 
     return (
       <View style={styles.itemCard}>
@@ -84,9 +89,7 @@ const EmployeeStandupHistoryScreen = ({ navigation }) => {
           </View>
           <Chip
             icon={isSubmitted ? 'check' : 'clock-outline'}
-            style={{
-              backgroundColor: isSubmitted ? '#D1FAE5' : '#FEF3C7',
-            }}
+            style={{ backgroundColor: isSubmitted ? '#D1FAE5' : '#FEF3C7' }}
             textStyle={{ color: isSubmitted ? '#059669' : '#92400E', fontWeight: '600' }}
             mode="flat"
             size="small"
@@ -116,14 +119,8 @@ const EmployeeStandupHistoryScreen = ({ navigation }) => {
               <View style={styles.statItem}>
                 <Text style={styles.statLabel}>Status</Text>
                 <Chip
-                  style={{
-                    backgroundColor: task.task_status === 'Completed' ? '#D1FAE5' : '#FEF3C7',
-                  }}
-                  textStyle={{
-                    color: task.task_status === 'Completed' ? '#065F46' : '#92400E',
-                    fontSize: 10,
-                    fontWeight: '600',
-                  }}
+                  style={{ backgroundColor: task.task_status === 'Completed' ? '#D1FAE5' : '#FEF3C7' }}
+                  textStyle={{ color: task.task_status === 'Completed' ? '#065F46' : '#92400E', fontSize: 10, fontWeight: '600' }}
                   size="small"
                   mode="flat"
                 >
@@ -141,9 +138,24 @@ const EmployeeStandupHistoryScreen = ({ navigation }) => {
                 </Text>
               </View>
             )}
+
+            {/* Edit Button for Drafts */}
+            {canEdit && (
+              <TouchableOpacity
+                style={{ marginTop: 10, alignSelf: 'flex-end', backgroundColor: '#E0E7FF', borderRadius: 6, paddingHorizontal: 12, paddingVertical: 6 }}
+                onPress={() => {
+                  setEditTaskInitial(task);
+                  setEditStandupId(item.standup_id);
+                  setEditModalVisible(true);
+                }}
+              >
+                <Text style={{ color: '#3730A3', fontWeight: 'bold' }}><Icon name="edit" size={12} /> Edit</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           <View style={styles.emptyTask}>
+  };
             <Text style={styles.emptyTaskText}>No task for this standup</Text>
           </View>
         )}
@@ -166,6 +178,19 @@ const EmployeeStandupHistoryScreen = ({ navigation }) => {
       </View>
     );
   }
+
+  // Save handler for modal
+  const handleEditSave = async (fields) => {
+    try {
+      setEditModalVisible(false);
+      if (!editStandupId) return;
+      await StandupService.editEmployeeStandupTask(editStandupId, fields);
+      Alert.alert('Success', 'Standup task updated');
+      fetchStandupHistory();
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Failed to update standup task');
+    }
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
@@ -218,6 +243,12 @@ const EmployeeStandupHistoryScreen = ({ navigation }) => {
           </View>
         )}
       </ScrollView>
+      <EditStandupTaskModal
+        visible={editModalVisible}
+        onClose={() => setEditModalVisible(false)}
+        onSave={handleEditSave}
+        initialValues={editTaskInitial}
+      />
     </View>
   );
 };

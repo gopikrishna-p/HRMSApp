@@ -135,6 +135,25 @@ class StandupService {
     }
   }
 
+  /**
+   * Edit employee's standup task for any date (new API)
+   * @param {string} standupId - Standup ID
+   * @param {object} fields - Fields to update (task_title, planned_output, actual_work_done, completion_percentage, task_status, carry_forward, next_working_date)
+   */
+  async editEmployeeStandupTask(standupId, fields) {
+    try {
+      const payload = { standup_id: standupId, ...fields };
+      const response = await ApiService.post('/api/method/hrms.api.edit_employee_standup_task', payload);
+      if (response.success && response.data?.message) {
+        return response.data.message;
+      }
+      throw new Error(response.data?.message || 'Failed to edit standup task');
+    } catch (error) {
+      console.error('Error editing standup task:', error);
+      throw new Error(`Failed to edit standup task: ${error.message}`);
+    }
+  }
+
   // ============== ADMIN APIs ==============
 
   /**

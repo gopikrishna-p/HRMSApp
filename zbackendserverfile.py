@@ -1,3 +1,4 @@
+
 #Actual file name /home/gcp_user/frappe-bench-v15/apps/hrms/hrms/api/__init__.py
 import frappe
 from frappe import _
@@ -9495,9 +9496,8 @@ def update_employee_standup_task(
 		if task_status not in valid_statuses:
 			frappe.throw(_("Invalid task status. Must be Draft or Completed"))
 		
-		# Auto-set completion % if completed
+		# When completed, clear carry forward but keep the completion percentage as entered
 		if task_status == "Completed":
-			completion_percentage = 100
 			carry_forward = 0
 			next_working_date = None
 		
@@ -10121,3 +10121,112 @@ def get_department_standup_summary(
 			"message": str(e),
 			"data": None,
 		}
+
+
+
+# =========================================================================
+# EMPLOYEE EDIT PREVIOUS STANDUP TASK API
+# =========================================================================
+
+@frappe.whitelist()
+def edit_employee_standup_task(
+    standup_id: str,
+    task_title: str | None = None,
+    planned_output: str | None = None,
+    actual_work_done: str | None = None,
+    completion_percentage: int | None = None,
+    task_status: str | None = None,
+    carry_forward: int | None = None,
+    next_working_date: str | None = None,
+) -> dict:
+    """
+    Allow employee to edit their standup task for any date (if not submitted).
+    Args:
+        standup_id: Daily Standup ID
+        task_title: (optional) New title
+        planned_output: (optional) New planned output
+        actual_work_done: (optional) New actual work done
+        completion_percentage: (optional) New completion %
+        task_status: (optional) New status
+        carry_forward: (optional) Carry forward flag
+        next_working_date: (optional) Next working date
+    Returns:
+        Dict with updated task details
+    """
+    try:
+        current_employee = get_employee_by_user()
+        if not current_employee:
+            frappe.throw(_("No employee record found for current user"))
+
+        standup = frappe.get_doc("Daily Standup", standup_id)
+        if standup.docstatus == 1:
+            frappe.throw(_("This standup is already submitted. Cannot edit task."))
+
+        # Find employee's task
+        task_found = False
+        if standup.standup_tasks:
+            for task in standup.standup_tasks:
+                if task.employee == current_employee:
+                    if task_title is not None:
+                        task.task_title = task_title
+                    if planned_output is not None:
+                        task.planned_output = planned_output
+                    if actual_work_done is not None:
+                        task.actual_work_done = actual_work_done
+                    if completion_percentage is not None:
+                        task.completion_percentage = min(100, max(0, cint(completion_percentage)))
+                    if task_status is not None:
+                        valid_statuses = ["Draft", "Completed"]
+                        if task_status not in valid_statuses:
+                            frappe.throw(_("Invalid task status. Must be Draft or Completed"))
+                        task.task_status = task_status
+                        if task_status == "Completed":
+                            task.carry_forward = 0
+                            task.next_working_date = None
+                    if carry_forward is not None:
+                        task.carry_forward = cint(carry_forward)
+                    if carry_forward and not next_working_date:
+                        frappe.throw(_("Next working date is required when carry_forward is enabled"))
+                    if next_working_date is not None:
+                        task.next_working_date = getdate(next_working_date) if next_working_date else None
+                    task_found = True
+                    break
+
+        if not task_found:
+            frappe.throw(_("Employee does not have a task in this standup"))
+
+        standup.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        # Get updated task
+        employee_task = None
+        if standup.standup_tasks:
+            for task in standup.standup_tasks:
+                if task.employee == current_employee:
+                    employee_task = {
+                        "idx": task.idx,
+                        "employee": task.employee,
+                        "task_title": task.task_title,
+                        "planned_output": task.planned_output,
+                        "actual_work_done": task.actual_work_done,
+                        "completion_percentage": task.completion_percentage,
+                        "task_status": task.task_status,
+                        "carry_forward": task.carry_forward,
+                        "next_working_date": str(task.next_working_date) if task.next_working_date else None,
+                    }
+                    break
+
+        return {
+            "status": "success",
+            "message": _("Standup task edited successfully"),
+            "data": {
+                "standup_id": standup.name,
+                "standup_date": str(standup.standup_date),
+                "employee": current_employee,
+                "employee_task": employee_task,
+            },
+        }
+
+    except Exception as e:
+        frappe.log_error(f"Edit Standup Task Error: {str(e)}\n{frappe.get_traceback()}", "Edit Standup Task")
+        frappe.throw(_("Failed to edit standup task: {0}").format(str(e)))

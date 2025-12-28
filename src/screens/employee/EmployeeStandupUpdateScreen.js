@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, ScrollView, StyleSheet, Alert, RefreshControl } from 'react-native';
+import { View, ScrollView, StyleSheet, Alert, RefreshControl, TouchableOpacity } from 'react-native';
 import { Text, TextInput, Button, useTheme, Switch, ActivityIndicator } from 'react-native-paper';
 import Icon from 'react-native-vector-icons/FontAwesome5';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import AppHeader from '../../components/ui/AppHeader';
 import StandupService from '../../services/standup.service';
 import { formatDate } from '../../utils/helpers';
@@ -18,6 +19,8 @@ const EmployeeStandupUpdateScreen = ({ navigation }) => {
   const [nextWorkingDate, setNextWorkingDate] = useState('');
   const [updated, setUpdated] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(new Date());
 
   const fetchTodayStandup = useCallback(async () => {
     setLoading(true);
@@ -50,6 +53,15 @@ const EmployeeStandupUpdateScreen = ({ navigation }) => {
     await fetchTodayStandup();
     setRefreshing(false);
   }, [fetchTodayStandup]);
+
+  const handleDatePicked = (event, date) => {
+    if (event.type === 'set' && date) {
+      const formattedDate = formatDate(date);
+      setNextWorkingDate(formattedDate);
+      setSelectedDate(date);
+    }
+    setShowDatePicker(false);
+  };
 
   const handleUpdateTask = async () => {
     if (!actualWork.trim()) {
@@ -249,17 +261,29 @@ const EmployeeStandupUpdateScreen = ({ navigation }) => {
           </View>
 
           {carryForward && (
-            <TextInput
-              label="Next Working Date"
-              value={nextWorkingDate}
-              onChangeText={setNextWorkingDate}
-              placeholder="YYYY-MM-DD"
-              mode="outlined"
-              style={styles.input}
-              editable={!loading}
-              outlineColor="#E5E7EB"
-              activeOutlineColor={custom.palette.primary}
-            />
+            <>
+              <TouchableOpacity
+                style={[styles.input, { paddingVertical: 12, justifyContent: 'center' }]}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <Text style={styles.label}>Next Working Date</Text>
+                <View style={styles.datePickerButton}>
+                  <Icon name="calendar" size={18} color={custom.palette.primary} />
+                  <Text style={styles.datePickerButtonText}>
+                    {nextWorkingDate || 'Select date'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+              {showDatePicker && (
+                <DateTimePicker
+                  value={selectedDate}
+                  mode="date"
+                  display="default"
+                  onChange={handleDatePicked}
+                  minimumDate={new Date()}
+                />
+              )}
+            </>
           )}
 
           {/* Submit Button */}
@@ -514,6 +538,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#4B5563',
     textAlign: 'center',
+  },
+  datePickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 4,
+    backgroundColor: '#FFFFFF',
+    gap: 8,
+  },
+  datePickerButtonText: {
+    fontSize: 14,
+    color: '#374151',
+    flex: 1,
   },
 });
 
