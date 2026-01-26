@@ -14,6 +14,13 @@ const ENDPOINTS = {
     TODAY_ATTENDANCE: '/api/method/hrms.api.get_today_attendance',
     GET_HOLIDAYS: '/api/method/hrms.api.get_holidays',
     GET_LEAVE_APPLICATIONS: '/api/method/hrms.api.get_leave_applications',
+    // Admin Attendance APIs
+    GET_ALL_ACTIVE_EMPLOYEES: '/api/method/hrms.api.get_all_active_employees',
+    ADMIN_GET_ATTENDANCE: '/api/method/hrms.api.admin_get_attendance',
+    ADMIN_MARK_ATTENDANCE: '/api/method/hrms.api.admin_mark_attendance',
+    ADMIN_BULK_MARK_ATTENDANCE: '/api/method/hrms.api.admin_bulk_mark_attendance',
+    ADMIN_GET_UNMARKED_EMPLOYEES: '/api/method/hrms.api.admin_get_unmarked_employees',
+    ADMIN_DELETE_ATTENDANCE: '/api/method/hrms.api.admin_delete_attendance',
 };
 
 class AttendanceService {
@@ -28,19 +35,26 @@ class AttendanceService {
         const day = String(date.getDate()).padStart(2, '0');
         return `${year}-${month}-${day}`;
     }
+    
+    /**
+     * Submit geo attendance (check-in/check-out)
+     * Note: For WFH and On Site, coordinates are optional but will be stored for audit if provided
+     * Backend stores coordinates in Attendance custom fields:
+     * - custom_work_type: Office/WFH/On Site
+     * - custom_checkin_latitude, custom_checkin_longitude
+     * - custom_checkout_latitude, custom_checkout_longitude
+     */
     async geoAttendance({ employee, action, latitude, longitude, work_type }) {
-        const isWFH = work_type === 'WFH';
-        const isOnSite = work_type === 'On Site';
-        // WFH and On Site skip geofence, so send 0 coordinates
-        const skipGeofence = isWFH || isOnSite;
-        const lat = skipGeofence ? 0 : Number(latitude ?? 0);
-        const lon = skipGeofence ? 0 : Number(longitude ?? 0);
+        // Always pass coordinates if available (for audit trail)
+        // Backend will skip geofence validation for WFH/On Site but still store the coordinates
+        const lat = Number(latitude ?? 0);
+        const lon = Number(longitude ?? 0);
         return ApiService.post(ENDPOINTS.GEO_ATTENDANCE, { 
             employee, 
             action, 
             latitude: lat, 
             longitude: lon, 
-            work_type: work_type || undefined 
+            work_type: work_type || 'Office' 
         });
     }
 
@@ -553,6 +567,81 @@ class AttendanceService {
             }
         });
         return Math.round(totalHours * 10) / 10;
+    }
+
+    // ========== Admin Attendance APIs ==========
+
+    /**
+     * Get all active employees for admin attendance marking
+     */
+    async getAllActiveEmployees() {
+        return ApiService.get(ENDPOINTS.GET_ALL_ACTIVE_EMPLOYEES);
+    }
+
+    /**
+     * Get attendance records for admin view
+     */
+    async adminGetAttendance({ employee, from_date, to_date, limit } = {}) {
+        const params = {};
+        if (employee) params.employee = employee;
+        if (from_date) params.from_date = from_date;
+        if (to_date) params.to_date = to_date;
+        if (limit) params.limit = limit;
+        return ApiService.get(ENDPOINTS.ADMIN_GET_ATTENDANCE, params);
+    }
+
+    /**
+     * Mark attendance for a specific employee (admin only)
+     * @param {string} employee - Employee ID (required)
+     * @param {string} attendance_date - Date (defaults to today)
+     * @param {string} status - Present, Absent, On Leave, Half Day, Work From Home, On Site
+     * @param {string} shift - Shift name (optional)
+     * @param {string} in_time - Check-in datetime e.g. "2026-01-26 09:00:00" (optional)
+     * @param {string} out_time - Check-out datetime e.g. "2026-01-26 18:00:00" (optional)
+     */
+    async adminMarkAttendance({ employee, attendance_date, status, shift, in_time, out_time }) {
+        const params = { employee };
+        if (attendance_date) params.attendance_date = attendance_date;
+        if (status) params.status = status;
+        if (shift) params.shift = shift;
+        if (in_time) params.in_time = in_time;
+        if (out_time) params.out_time = out_time;
+        return ApiService.post(ENDPOINTS.ADMIN_MARK_ATTENDANCE, params);
+    }
+
+    /**
+     * Bulk mark attendance for multiple employees
+     * @param {Array<string>} employees - List of employee IDs
+     * @param {string} attendance_date - Date (defaults to today)
+     * @param {string} status - Attendance status
+     * @param {string} shift - Shift name (optional)
+     * @param {string} in_time - Check-in datetime for all (optional)
+     * @param {string} out_time - Check-out datetime for all (optional)
+     */
+    async adminBulkMarkAttendance({ employees, attendance_date, status, shift, in_time, out_time }) {
+        const params = { employees };
+        if (attendance_date) params.attendance_date = attendance_date;
+        if (status) params.status = status;
+        if (shift) params.shift = shift;
+        if (in_time) params.in_time = in_time;
+        if (out_time) params.out_time = out_time;
+        return ApiService.post(ENDPOINTS.ADMIN_BULK_MARK_ATTENDANCE, params);
+    }
+
+    /**
+     * Get employees who don't have attendance marked for a date
+     */
+    async adminGetUnmarkedEmployees(attendance_date) {
+        const params = {};
+        if (attendance_date) params.attendance_date = attendance_date;
+        return ApiService.get(ENDPOINTS.ADMIN_GET_UNMARKED_EMPLOYEES, params);
+    }
+
+    /**
+     * Delete an attendance record (admin only)
+     */
+    async adminDeleteAttendance(attendance_name) {
+        return ApiService.post(ENDPOINTS.ADMIN_DELETE_ATTENDANCE, { attendance_name });
     }
 
 }

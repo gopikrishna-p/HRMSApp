@@ -147,6 +147,21 @@ const CheckInOutScreen = () => {
         }
     };
 
+    // Helper to get current GPS location
+    const getLocationForAudit = async () => {
+        try {
+            if (currentLocation) {
+                return { latitude: currentLocation.latitude, longitude: currentLocation.longitude };
+            }
+            await ensureLocationPermission();
+            const pos = await getCurrentPosition();
+            return { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+        } catch (err) {
+            console.log('Could not get location for audit:', err);
+            return { latitude: 0, longitude: 0 };
+        }
+    };
+
     const doAction = async (action) => {
         // For Office mode, check geofence
         if (workMode === 'Office' && locationStatus === 'outside') {
@@ -170,15 +185,24 @@ const CheckInOutScreen = () => {
                     Alert.alert('WFH Not Allowed', 'You are not eligible for WFH.');
                     return;
                 }
-                work_type = 'WFH'; // will force (0,0) in service
+                work_type = 'WFH';
+                // Get location for audit trail (optional, backend stores it)
+                const loc = await getLocationForAudit();
+                latitude = loc.latitude;
+                longitude = loc.longitude;
             } else if (isOnSite) {
                 if (!canDoOnSite) {
                     Alert.alert('On Site Not Allowed', 'You are not eligible for On Site attendance.');
                     return;
                 }
-                work_type = 'On Site'; // will force (0,0) in service
+                work_type = 'On Site';
+                // Get location for audit trail (optional, backend stores it)
+                const loc = await getLocationForAudit();
+                latitude = loc.latitude;
+                longitude = loc.longitude;
             } else {
-                // Office mode - use current location
+                // Office mode - use current location (required for geofence)
+                work_type = 'Office';
                 if (currentLocation) {
                     latitude = currentLocation.latitude;
                     longitude = currentLocation.longitude;

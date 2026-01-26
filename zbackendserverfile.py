@@ -4168,6 +4168,17 @@ def get_permitted_fields_for_write(doctype: str) -> list[str]:
 
 @frappe.whitelist(allow_guest=False)
 def geo_attendance(employee, action, latitude=None, longitude=None, work_type=None):
+    """
+    Mark attendance with geolocation tracking.
+    Stores coordinates directly in Attendance doctype (no Geo Log dependency).
+    
+    Args:
+        employee: Employee ID
+        action: "Check-In" or "Check-Out"
+        latitude: GPS latitude (optional for WFH/On Site)
+        longitude: GPS longitude (optional for WFH/On Site)
+        work_type: "Office", "WFH", or "On Site"
+    """
     try:
         # Log shortened input for debugging
         frappe.log_error(
@@ -4226,54 +4237,53 @@ def geo_attendance(employee, action, latitude=None, longitude=None, work_type=No
             if distance > geofence_radius:
                 frappe.throw(_("You are outside the office geofence"))
 
-        # Check for duplicate action today
-        last_log = frappe.db.get_all(
-            "Geo Log",
-            filters={
-                "employee": employee,
-                "action": action,
-                "status": "Approved",
-                "creation": [">=", getdate(now_datetime())],
-            },
-            fields=["name"],
-            limit=1,
-        )
-        if last_log:
-            frappe.throw(_(f"You have already performed {action} today"))
-
-        # For Check-Out, verify there's a Check-In
-        if action == "Check-Out":
-            check_in = frappe.db.get_all(
-                "Geo Log",
+        # Get today's date
+        today = getdate(now_datetime())
+        
+        # Check for duplicate action today using Attendance table
+        if action == "Check-In":
+            existing_attendance = frappe.db.get_all(
+                "Attendance",
                 filters={
                     "employee": employee,
-                    "action": "Check-In",
-                    "status": "Approved",
-                    "creation": [">=", getdate(now_datetime())],
+                    "attendance_date": today,
+                    "docstatus": ["!=", 2],
                 },
-                fields=["name"],
+                fields=["name", "in_time"],
                 limit=1,
             )
-            if not check_in:
+            if existing_attendance and existing_attendance[0].in_time:
+                frappe.throw(_("You have already checked in today"))
+        
+        # For Check-Out, verify there's a Check-In
+        if action == "Check-Out":
+            existing_attendance = frappe.db.get_all(
+                "Attendance",
+                filters={
+                    "employee": employee,
+                    "attendance_date": today,
+                    "docstatus": ["!=", 2],
+                },
+                fields=["name", "in_time", "out_time"],
+                limit=1,
+            )
+            if not existing_attendance or not existing_attendance[0].in_time:
                 frappe.throw(_("No Check-In found for today"))
+            if existing_attendance[0].out_time:
+                frappe.throw(_("You have already checked out today"))
 
-        # Create Geo Log
-        geo_log = frappe.get_doc({
-            "doctype": "Geo Log",
-            "employee": employee,
-            "action": action,
-            "timestamp": now_datetime(),
-            "latitude": latitude,
-            "longitude": longitude,
-            "work_type": work_type,
-            "status": "Approved",
-        })
-        geo_log.insert()
-
+        # Get current timestamp
+        current_timestamp = now_datetime()
+        
         try:
-            attendance = mark_attendance(employee, action, geo_log, work_type)
-            geo_log.attendance = attendance.name
-            geo_log.save()
+            attendance = mark_attendance_direct(
+                employee=employee,
+                action=action,
+                timestamp=current_timestamp,
+                latitude=latitude,
+                longitude=longitude,
+                work_type=work_type
+            )
         except frappe.PermissionError:
             frappe.db.rollback()
             frappe.throw(_("You lack permission to submit attendance. Contact HR."), exc=frappe.exceptions.PermissionError)
@@ -4284,17 +4294,30 @@ def geo_attendance(employee, action, latitude=None, longitude=None, work_type=No
         frappe.db.commit()
 
         return {
-            "status": "Approved",
-            "message": f"{action} Successfully",
-            "geo_log": geo_log.name,
+            "status": "Success",
+            "message": f"{action} recorded successfully",
             "attendance": attendance.name,
+            "timestamp": str(current_timestamp),
         }
     except Exception as e:
-        frappe.log_error(f"Geo Attendance Error: {str(e)[:100]}")
-        frappe.throw(_("An error occurred while processing your request. Please try again or contact HR."))
+        frappe.log_error(f"Geo Attendance Error: {str(e)[:200]}")
+        raise
 
-def mark_attendance(employee, action, geo_log, work_type=None):
-    attendance_date = getdate(geo_log.timestamp)
+
+def mark_attendance_direct(employee, action, timestamp, latitude=None, longitude=None, work_type=None):
+    """
+    Mark attendance directly without Geo Log intermediate step.
+    Stores all location data in custom fields on Attendance doctype.
+    
+    Args:
+        employee: Employee ID
+        action: "Check-In" or "Check-Out"
+        timestamp: Datetime of the action
+        latitude: GPS latitude
+        longitude: GPS longitude
+        work_type: "Office", "WFH", or "On Site"
+    """
+    attendance_date = getdate(timestamp)
     attendance = None
 
     if action == "Check-In":
@@ -4325,10 +4348,10 @@ def mark_attendance(employee, action, geo_log, work_type=None):
             "employee": employee,
             "attendance_date": attendance_date,
             "status": status,
-            "in_time": geo_log.timestamp,
+            "in_time": timestamp,
             "custom_work_type": work_type if work_type else "Office",
-            "custom_checkin_latitude": geo_log.latitude,
-            "custom_checkin_longitude": geo_log.longitude,
+            "custom_checkin_latitude": latitude,
+            "custom_checkin_longitude": longitude,
         })
         attendance.save()
         
@@ -4369,7 +4392,7 @@ def mark_attendance(employee, action, geo_log, work_type=None):
                     modified = %s,
                     modified_by = %s
                 WHERE name = %s
-            """, (geo_log.timestamp, geo_log.timestamp, geo_log.latitude, geo_log.longitude, now_datetime(), frappe.session.user, attendance_name))
+            """, (timestamp, timestamp, latitude, longitude, now_datetime(), frappe.session.user, attendance_name))
             
             frappe.db.commit()
             
@@ -4381,13 +4404,15 @@ def mark_attendance(employee, action, geo_log, work_type=None):
             attendance = frappe.get_doc("Attendance", attendance_name)
             
             # Set both out_time fields and checkout coordinates
-            attendance.out_time = geo_log.timestamp
-            attendance.custom_out_time_copy = geo_log.timestamp
-            attendance.custom_checkout_latitude = geo_log.latitude
-            attendance.custom_checkout_longitude = geo_log.longitude
+            attendance.out_time = timestamp
+            attendance.custom_out_time_copy = timestamp
+            attendance.custom_checkout_latitude = latitude
+            attendance.custom_checkout_longitude = longitude
             
             if work_type == "WFH" and existing_attendance[0].status != "Work From Home":
                 attendance.status = "Work From Home"
+            elif work_type == "On Site" and existing_attendance[0].status != "On Site":
+                attendance.status = "On Site"
             
             # Save the changes
             attendance.save()
@@ -9263,8 +9288,18 @@ def get_all_active_employees():
 
 
 @frappe.whitelist()
-def admin_mark_attendance(employee, attendance_date=None, status="Present", shift=None):
-    """Admin: Mark attendance for a specific active employee"""
+def admin_mark_attendance(employee, attendance_date=None, status="Present", shift=None, in_time=None, out_time=None):
+    """
+    Admin: Mark attendance for a specific active employee.
+    
+    Args:
+        employee: Employee ID (required)
+        attendance_date: Date for attendance (defaults to today)
+        status: Attendance status (Present, Absent, On Leave, Half Day, Work From Home, On Site)
+        shift: Shift name (optional)
+        in_time: Check-in time as datetime string e.g. '2026-01-26 09:00:00' (optional)
+        out_time: Check-out time as datetime string e.g. '2026-01-26 18:00:00' (optional)
+    """
     if not _is_priv():
         frappe.throw(_("Not permitted."), frappe.PermissionError)
     
@@ -9304,17 +9339,27 @@ def admin_mark_attendance(employee, attendance_date=None, status="Present", shif
             att_doc = frappe.get_doc("Attendance", existing)
             att_doc.status = status
             att_doc.shift = shift
+            if in_time:
+                att_doc.in_time = in_time
+            if out_time:
+                att_doc.out_time = out_time
             att_doc.flags.ignore_permissions = True
             att_doc.save()
         else:
             # Create new
-            att_doc = frappe.get_doc({
+            att_data = {
                 "doctype": "Attendance",
                 "employee": employee,
                 "attendance_date": attendance_date,
                 "status": status,
                 "shift": shift,
-            })
+            }
+            if in_time:
+                att_data["in_time"] = in_time
+            if out_time:
+                att_data["out_time"] = out_time
+            
+            att_doc = frappe.get_doc(att_data)
             att_doc.flags.ignore_permissions = True
             att_doc.insert()
             att_doc.submit()
@@ -9331,6 +9376,8 @@ def admin_mark_attendance(employee, attendance_date=None, status="Present", shif
                 "attendance_date": str(att_doc.attendance_date),
                 "status": att_doc.status,
                 "shift": att_doc.shift,
+                "in_time": str(att_doc.in_time) if att_doc.in_time else None,
+                "out_time": str(att_doc.out_time) if att_doc.out_time else None,
             }
         }
     except Exception as e:
@@ -9339,6 +9386,233 @@ def admin_mark_attendance(employee, attendance_date=None, status="Present", shif
         frappe.throw(_("Failed to mark attendance: {0}").format(str(e)))
 
 
+@frappe.whitelist()
+def admin_bulk_mark_attendance(employees, attendance_date=None, status="Present", shift=None, in_time=None, out_time=None):
+    """
+    Admin: Bulk mark attendance for multiple active employees at once.
+    
+    Args:
+        employees: List of employee IDs (JSON string or list)
+        attendance_date: Date for attendance (defaults to today)
+        status: Attendance status (Present, Absent, On Leave, Half Day, Work From Home, On Site)
+        shift: Shift name (optional)
+        in_time: Check-in time as datetime string e.g. '2026-01-26 09:00:00' (optional)
+        out_time: Check-out time as datetime string e.g. '2026-01-26 18:00:00' (optional)
+    
+    Returns:
+        Dict with success/failure counts and details
+    """
+    if not _is_priv():
+        frappe.throw(_("Not permitted."), frappe.PermissionError)
+    
+    # Parse employees if JSON string
+    if isinstance(employees, str):
+        try:
+            employees = json.loads(employees)
+        except json.JSONDecodeError:
+            frappe.throw(_("Invalid employees list format"))
+    
+    if not employees or not isinstance(employees, list):
+        frappe.throw(_("Employees list is required"))
+    
+    if not attendance_date:
+        attendance_date = today()
+    
+    # Validate status
+    valid_statuses = ["Present", "Absent", "On Leave", "Half Day", "Work From Home", "On Site"]
+    if status not in valid_statuses:
+        frappe.throw(_("Invalid status. Must be one of: {0}").format(", ".join(valid_statuses)))
+    
+    results = {
+        "success": [],
+        "failed": [],
+        "skipped": [],
+    }
+    
+    for employee in employees:
+        try:
+            # Validate employee exists and is active
+            emp_data = frappe.db.get_value(
+                "Employee", 
+                employee, 
+                ["name", "status", "employee_name"], 
+                as_dict=True
+            )
+            
+            if not emp_data:
+                results["failed"].append({
+                    "employee": employee,
+                    "reason": "Employee not found"
+                })
+                continue
+            
+            if emp_data.status != "Active":
+                results["skipped"].append({
+                    "employee": employee,
+                    "employee_name": emp_data.employee_name,
+                    "reason": "Inactive employee"
+                })
+                continue
+            
+            # Check if attendance already exists
+            existing = frappe.db.get_value(
+                "Attendance",
+                {"employee": employee, "attendance_date": attendance_date, "docstatus": ["<", 2]},
+                "name"
+            )
+            
+            if existing:
+                # Update existing
+                att_doc = frappe.get_doc("Attendance", existing)
+                att_doc.status = status
+                att_doc.shift = shift
+                if in_time:
+                    att_doc.in_time = in_time
+                if out_time:
+                    att_doc.out_time = out_time
+                att_doc.flags.ignore_permissions = True
+                att_doc.save()
+                action = "updated"
+            else:
+                # Create new
+                att_data = {
+                    "doctype": "Attendance",
+                    "employee": employee,
+                    "attendance_date": attendance_date,
+                    "status": status,
+                    "shift": shift,
+                }
+                if in_time:
+                    att_data["in_time"] = in_time
+                if out_time:
+                    att_data["out_time"] = out_time
+                
+                att_doc = frappe.get_doc(att_data)
+                att_doc.flags.ignore_permissions = True
+                att_doc.insert()
+                att_doc.submit()
+                action = "created"
+            
+            results["success"].append({
+                "employee": employee,
+                "employee_name": emp_data.employee_name,
+                "attendance": att_doc.name,
+                "action": action,
+                "status": status,
+                "in_time": str(att_doc.in_time) if att_doc.in_time else None,
+                "out_time": str(att_doc.out_time) if att_doc.out_time else None,
+            })
+            
+        except Exception as e:
+            results["failed"].append({
+                "employee": employee,
+                "reason": str(e)
+            })
+    
+    frappe.db.commit()
+    
+    return {
+        "ok": True,
+        "message": _("Bulk attendance processed: {0} success, {1} failed, {2} skipped").format(
+            len(results["success"]), 
+            len(results["failed"]), 
+            len(results["skipped"])
+        ),
+        "attendance_date": str(attendance_date),
+        "status": status,
+        "results": results,
+        "summary": {
+            "total": len(employees),
+            "success": len(results["success"]),
+            "failed": len(results["failed"]),
+            "skipped": len(results["skipped"]),
+        }
+    }
+
+
+@frappe.whitelist()
+def admin_get_unmarked_employees(attendance_date=None):
+    """
+    Admin: Get list of active employees who don't have attendance marked for a specific date.
+    Useful for identifying who needs attendance to be marked.
+    
+    Args:
+        attendance_date: Date to check (defaults to today)
+    
+    Returns:
+        List of employees without attendance for the date
+    """
+    if not _is_priv():
+        frappe.throw(_("Not permitted."), frappe.PermissionError)
+    
+    if not attendance_date:
+        attendance_date = today()
+    
+    # Get all active employees
+    all_employees = frappe.get_all(
+        "Employee",
+        filters={"status": "Active"},
+        fields=["name", "employee_name", "department", "designation", "company"],
+        order_by="employee_name asc"
+    )
+    
+    # Get employees who already have attendance
+    marked_employees = frappe.get_all(
+        "Attendance",
+        filters={
+            "attendance_date": attendance_date,
+            "docstatus": ["<", 2],
+        },
+        pluck="employee"
+    )
+    
+    marked_set = set(marked_employees)
+    
+    # Filter out employees who already have attendance
+    unmarked = [emp for emp in all_employees if emp.name not in marked_set]
+    
+    return {
+        "ok": True,
+        "attendance_date": str(attendance_date),
+        "unmarked_employees": unmarked,
+        "unmarked_count": len(unmarked),
+        "total_active": len(all_employees),
+        "marked_count": len(marked_employees),
+    }
+
+
+@frappe.whitelist()
+def admin_delete_attendance(attendance_name):
+    if not _is_priv():
+        frappe.throw(_("Not permitted."), frappe.PermissionError)
+    
+    if not attendance_name:
+        frappe.throw(_("Attendance name is required"))
+    
+    if not frappe.db.exists("Attendance", attendance_name):
+        frappe.throw(_("Attendance record not found"))
+    
+    att_doc = frappe.get_doc("Attendance", attendance_name)
+    employee_name = att_doc.employee_name
+    att_date = str(att_doc.attendance_date)
+    
+    try:
+        if att_doc.docstatus == 1:
+            # Cancel if submitted
+            att_doc.flags.ignore_permissions = True
+            att_doc.cancel()
+        
+        # Delete the record
+        frappe.delete_doc("Attendance", attendance_name, force=True, ignore_permissions=True)
+        frappe.db.commit()
+        
+        return {
+            "ok": True,
+            "message": _("Attendance deleted for {0} on {1}").format(employee_name, att_date),
+        }
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.throw(_("Failed to delete attendance: {0}").format(str(e)))
 
 
 def get_employee_by_user():

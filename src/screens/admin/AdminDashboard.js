@@ -250,6 +250,8 @@ const AdminDashboard = ({ navigation }) => {
                 <Section title="Attendance Control" icon="clipboard-check" tint={custom.palette.primary}>
                     <ListItem title="Admin Check In/Out" subtitle="Kiosk/Supervisor mode" leftIcon="user-clock"
                         tint={custom.palette.primary} onPress={() => navigation.navigate('AdminCheckInOut')} />
+                    <ListItem title="Mark Employee Attendance" subtitle="Single/bulk with time entry" leftIcon="user-check"
+                        tint={custom.palette.primary} onPress={() => navigation.navigate('AdminMarkAttendance')} />
                     <ListItem title="All Attendance Analytics List" subtitle="View all employee records" leftIcon="list-alt"
                         tint={custom.palette.primary} onPress={() => navigation.navigate('AllAttendanceAnalyticsScreen')} />
                     <ListItem title="Manual Check In/Out" subtitle="Attendance regularization" leftIcon="edit"

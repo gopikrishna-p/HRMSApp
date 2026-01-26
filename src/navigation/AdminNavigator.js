@@ -15,6 +15,7 @@ import TodayAttendanceScreen from '../screens/admin/TodayAttendanceScreen';
 import WFHSettingsScreen from '../screens/admin/WFHSettingsScreen';
 import WFHApprovalsScreen from '../screens/admin/WFHApprovalsScreen';
 import OnSiteSettingsScreen from '../screens/admin/OnSiteSettingsScreen';
+import AdminMarkAttendanceScreen from '../screens/admin/AdminMarkAttendanceScreen';
 import AttendanceAnalyticsScreen from '../screens/admin/AttendanceAnalyticsScreen';
 import TodayEmployeeAnalyticsScreen from '../screens/admin/TodayEmployeeAnalyticsScreen';
 import LeaveApprovalsScreen from '../screens/admin/LeaveApprovalsScreen';
@@ -64,6 +65,7 @@ const AdminNavigator = () => {
             <Stack.Screen name="WFHSettings" component={WFHSettingsScreen} options={{ title: 'WFH Settings' }} />
             <Stack.Screen name="WFHApprovals" component={WFHApprovalsScreen} options={{ title: 'WFH Approvals' }} />
             <Stack.Screen name="OnSiteSettings" component={OnSiteSettingsScreen} options={{ title: 'On Site Settings' }} />
+            <Stack.Screen name="AdminMarkAttendance" component={AdminMarkAttendanceScreen} options={{ title: 'Mark Attendance' }} />
             <Stack.Screen name="AttendanceAnalytics" component={AttendanceAnalyticsScreen} options={{ title: 'Attendance Analytics' }} />
             <Stack.Screen name="TodayEmployeeAnalytics" component={TodayEmployeeAnalyticsScreen} options={{ title: 'Today Analytics' }} />
             <Stack.Screen name="Reports" component={ReportsScreen} options={{ title: 'Reports & Analytics' }} />
