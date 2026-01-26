@@ -271,7 +271,7 @@ def get_attendance_analytics(employee: str, start_date, end_date) -> dict:
 		
 		# Calculate statistics
 		total_days = date_diff(end_date, start_date) + 1
-		present_days = sum(1 for a in attendance_records if a.status == "Present")
+		present_days = sum(1 for a in attendance_records if a.status in ["Present", "On Site"])
 		absent_days = sum(1 for a in attendance_records if a.status == "Absent")
 		half_day = sum(1 for a in attendance_records if a.status == "Half Day")
 		wfh_days = sum(1 for a in attendance_records if a.status == "Work From Home")
@@ -713,7 +713,7 @@ def get_employee_attendance_history(
 		)
 		
 		# Calculate summary statistics
-		present_days = sum(1 for a in attendance_records if a.status == "Present")
+		present_days = sum(1 for a in attendance_records if a.status in ["Present", "On Site"])
 		absent_days = sum(1 for a in attendance_records if a.status == "Absent")
 		half_day = sum(1 for a in attendance_records if a.status == "Half Day")
 		wfh_days = sum(1 for a in attendance_records if a.status == "Work From Home")
@@ -4193,6 +4193,12 @@ def geo_attendance(employee, action, latitude=None, longitude=None, work_type=No
             if not employee_doc.custom_wfh_eligible:
                 frappe.throw(_("You are not authorized to mark Work From Home attendance"), frappe.PermissionError)
 
+        # Check On Site eligibility if work_type is On Site
+        if work_type == "On Site":
+            employee_doc = frappe.get_doc("Employee", employee)
+            if not employee_doc.custom_on_site_eligible:
+                frappe.throw(_("You are not authorized to mark On Site attendance"), frappe.PermissionError)
+
         # Convert coordinates to float if they exist
         if latitude is not None and longitude is not None:
             try:
@@ -4201,10 +4207,11 @@ def geo_attendance(employee, action, latitude=None, longitude=None, work_type=No
             except (TypeError, ValueError):
                 frappe.throw(_("Invalid latitude or longitude values"))
 
-        # Only verify location if not WFH and coordinates are provided
-        if work_type != "WFH":
+        # Only verify location if not WFH or On Site and coordinates are provided
+        # WFH and On Site don't require geofence validation
+        if work_type not in ["WFH", "On Site"]:
             if latitude is None or longitude is None:
-                frappe.throw(_("Location coordinates are required for non-WFH attendance"))
+                frappe.throw(_("Location coordinates are required for office attendance"))
             
             employee_doc = frappe.get_doc("Employee", employee)
             if not employee_doc.custom_office_location:
@@ -4305,13 +4312,23 @@ def mark_attendance(employee, action, geo_log, work_type=None):
             frappe.throw(_("Attendance already marked for today"))
 
         # Create attendance record in draft state
+        # Determine status based on work_type
+        if work_type == "WFH":
+            status = "Work From Home"
+        elif work_type == "On Site":
+            status = "On Site"
+        else:
+            status = "Present"
+        
         attendance = frappe.get_doc({
             "doctype": "Attendance",
             "employee": employee,
             "attendance_date": attendance_date,
-            "status": "Work From Home" if work_type == "WFH" else "Present",
+            "status": status,
             "in_time": geo_log.timestamp,
-            "custom_work_type": work_type if work_type else None,
+            "custom_work_type": work_type if work_type else "Office",
+            "custom_checkin_latitude": geo_log.latitude,
+            "custom_checkin_longitude": geo_log.longitude,
         })
         attendance.save()
         
@@ -4342,15 +4359,17 @@ def mark_attendance(employee, action, geo_log, work_type=None):
             # Attendance is submitted - update directly in database
             frappe.log_error(f"Updating submitted attendance {attendance_name} via SQL", "Checkout Direct Update")
             
-            # Update both out_time fields directly in database
+            # Update both out_time fields and checkout coordinates directly in database
             frappe.db.sql("""
                 UPDATE `tabAttendance` 
                 SET out_time = %s, 
-                    custom_out_time_copy = %s, 
+                    custom_out_time_copy = %s,
+                    custom_checkout_latitude = %s,
+                    custom_checkout_longitude = %s,
                     modified = %s,
                     modified_by = %s
                 WHERE name = %s
-            """, (geo_log.timestamp, geo_log.timestamp, now_datetime(), frappe.session.user, attendance_name))
+            """, (geo_log.timestamp, geo_log.timestamp, geo_log.latitude, geo_log.longitude, now_datetime(), frappe.session.user, attendance_name))
             
             frappe.db.commit()
             
@@ -4361,9 +4380,11 @@ def mark_attendance(employee, action, geo_log, work_type=None):
             # Attendance is in draft - update normally
             attendance = frappe.get_doc("Attendance", attendance_name)
             
-            # Set both out_time fields
+            # Set both out_time fields and checkout coordinates
             attendance.out_time = geo_log.timestamp
             attendance.custom_out_time_copy = geo_log.timestamp
+            attendance.custom_checkout_latitude = geo_log.latitude
+            attendance.custom_checkout_longitude = geo_log.longitude
             
             if work_type == "WFH" and existing_attendance[0].status != "Work From Home":
                 attendance.status = "Work From Home"
@@ -4469,6 +4490,80 @@ def toggle_wfh_eligibility(employee_id, wfh_eligible):
     frappe.db.commit()
     return {"status": "success", "message": _("WFH eligibility updated for {0}.").format(employee_id)}
 
+# ============================================================================
+# ON SITE ELIGIBILITY APIs - Similar to WFH
+# ============================================================================
+
+@frappe.whitelist(allow_guest=False)
+def get_user_on_site_info():
+    """Get On Site eligibility info for current user."""
+    try:
+        user = frappe.session.user
+        if user == "Guest":
+            frappe.throw(_("User not authenticated"), frappe.AuthenticationError)
+        
+        employee = frappe.db.get_value(
+            "Employee",
+            {"user_id": user},
+            ["name", "custom_on_site_eligible", "employee_name", "department", "designation"],
+            as_dict=True
+        )
+        is_admin = any(role in frappe.get_roles() for role in ["System Manager", "HR Manager"])
+        
+        if not employee:
+            frappe.log_error(f"get_user_on_site_info: No Employee found for user {user}")
+            return {
+                "is_admin": is_admin,
+                "on_site_eligible": False,
+                "employee_id": None,
+                "employee_name": None,
+                "department": None,
+                "designation": None
+            }
+        
+        return {
+            "is_admin": is_admin,
+            "on_site_eligible": employee.custom_on_site_eligible or False,
+            "employee_id": employee.name,
+            "employee_name": employee.employee_name,
+            "department": employee.department or None,
+            "designation": employee.designation or None
+        }
+    except Exception as e:
+        frappe.log_error(f"get_user_on_site_info Error: {str(e)[:100]}, User: {frappe.session.user}")
+        frappe.throw(_("Failed to fetch user On Site info: {0}").format(str(e)), frappe.DataError)
+
+@frappe.whitelist(allow_guest=False)
+def get_employee_on_site_list():
+    """Get list of all employees with On Site eligibility status (Admin only)."""
+    # Check if user has Admin role
+    if not frappe.has_permission("Employee", "read") or not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager"]):
+        frappe.throw(_("You do not have permission to access this resource."), frappe.PermissionError)
+
+    # Fetch active employees with relevant fields
+    employees = frappe.get_all(
+        "Employee",
+        fields=["name", "employee_name", "custom_on_site_eligible", "status"],
+        filters={"status": "Active"}
+    )
+    return employees
+
+@frappe.whitelist(allow_guest=False)
+def toggle_on_site_eligibility(employee_id, on_site_eligible):
+    """Toggle On Site eligibility for an employee (Admin only)."""
+    # Check Admin permissions
+    if not frappe.has_permission("Employee", "write") or not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager"]):
+        frappe.throw(_("You do not have permission to modify this resource."), frappe.PermissionError)
+
+    # Validate employee exists
+    if not frappe.db.exists("Employee", employee_id):
+        frappe.throw(_("Employee {0} does not exist.").format(employee_id))
+
+    # Update On Site eligibility
+    frappe.db.set_value("Employee", employee_id, "custom_on_site_eligible", int(on_site_eligible))
+    frappe.db.commit()
+    return {"status": "success", "message": _("On Site eligibility updated for {0}.").format(employee_id)}
+
 @frappe.whitelist(allow_guest=False)
 def get_today_attendance(date=None):
     """Present / Absent / Holiday for a given date (default: today).
@@ -4494,11 +4589,11 @@ def get_today_attendance(date=None):
             fields=["employee", "employee_name", "in_time", "out_time", "custom_out_time_copy", "status"]
         )
 
-        present_ids = {att.employee for att in today_attendance if att.status in ["Present", "Work From Home"]}
+        present_ids = {att.employee for att in today_attendance if att.status in ["Present", "Work From Home", "On Site"]}
 
         present = []
         for att in today_attendance:
-            if att.status in ["Present", "Work From Home"]:
+            if att.status in ["Present", "Work From Home", "On Site"]:
                 checkout = att.out_time or att.custom_out_time_copy
                 present.append({
                     "employee_id": att.employee,
@@ -5908,9 +6003,9 @@ def get_attendance_analytics_by_date_range(start_date, end_date, department=None
             SELECT 
                 attendance_date,
                 COUNT(*) as total_attendance,
-                SUM(CASE WHEN status = 'Present' THEN 1 ELSE 0 END) as present_count,
+                SUM(CASE WHEN status IN ('Present', 'On Site') THEN 1 ELSE 0 END) as present_count,
                 SUM(CASE WHEN status = 'Work From Home' THEN 1 ELSE 0 END) as wfh_count,
-                SUM(CASE WHEN TIME(in_time) > '10:05:00' AND status = 'Present' THEN 1 ELSE 0 END) as late_count
+                SUM(CASE WHEN TIME(in_time) > '10:05:00' AND status IN ('Present', 'On Site') THEN 1 ELSE 0 END) as late_count
             FROM `tabAttendance`
             WHERE attendance_date BETWEEN %s AND %s
             AND docstatus != 2
@@ -6830,10 +6925,10 @@ def get_employee_statistics():
             fields=["employee", "employee_name", "status", "in_time"]
         )
         
-        present_today = len([att for att in today_attendance if att.status == "Present"])
+        present_today = len([att for att in today_attendance if att.status in ["Present", "On Site"]])
         wfh_today = len([att for att in today_attendance if att.status == "Work From Home"])
         
-        attended_employee_ids = {att.employee for att in today_attendance if att.status in ["Present", "Work From Home"]}
+        attended_employee_ids = {att.employee for att in today_attendance if att.status in ["Present", "Work From Home", "On Site"]}
         
         absent_today = 0
         employees_on_holiday = 0
@@ -6849,7 +6944,7 @@ def get_employee_statistics():
         
         late_arrivals = 0
         for att in today_attendance:
-            if att.in_time and att.status == "Present":
+            if att.in_time and att.status in ["Present", "On Site"]:
                 if is_late_arrival(att.in_time):
                     late_arrivals += 1
         
@@ -7057,7 +7152,7 @@ def get_department_statistics():
             filters={
                 "attendance_date": today,
                 "docstatus": ["!=", 2],
-                "status": ["in", ["Present", "Work From Home"]]
+                "status": ["in", ["Present", "Work From Home", "On Site"]]
             },
             fields=["employee"]
         )
@@ -7134,7 +7229,7 @@ def get_admin_attendance_analytics(period="week"):
                     filters={
                         "attendance_date": current_date,
                         "docstatus": ["!=", 2],
-                        "status": ["in", ["Present", "Work From Home"]]
+                        "status": ["in", ["Present", "Work From Home", "On Site"]]
                     }
                 )
                 
@@ -7264,7 +7359,7 @@ def get_attendance_by_date(date, employee_id=None, department=None):
             
             if record.docstatus == 0:
                 summary["draft"] += 1
-            elif record.status in ["Present", "Work From Home"]:
+            elif record.status in ["Present", "Work From Home", "On Site"]:
                 summary["present"] += 1
                 if record.in_time and not (record.out_time or record.custom_out_time_copy):
                     summary["missing_checkout"] += 1
@@ -8928,7 +9023,7 @@ def mark_attendance_app(employee=None, attendance_date=None, status="Present", s
             status = "Present"
         
         # Validate status
-        valid_statuses = ["Present", "Absent", "On Leave", "Half Day", "Work From Home"]
+        valid_statuses = ["Present", "Absent", "On Leave", "Half Day", "Work From Home", "On Site"]
         if status not in valid_statuses:
             frappe.throw(_("Invalid status. Must be one of: {0}").format(", ".join(valid_statuses)))
         
@@ -9192,7 +9287,7 @@ def admin_mark_attendance(employee, attendance_date=None, status="Present", shif
         status = "Present"
     
     # Validate status
-    valid_statuses = ["Present", "Absent", "On Leave", "Half Day", "Work From Home"]
+    valid_statuses = ["Present", "Absent", "On Leave", "Half Day", "Work From Home", "On Site"]
     if status not in valid_statuses:
         frappe.throw(_("Invalid status. Must be one of: {0}").format(", ".join(valid_statuses)))
     

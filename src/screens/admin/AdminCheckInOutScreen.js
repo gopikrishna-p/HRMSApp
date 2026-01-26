@@ -25,11 +25,12 @@ const AdminCheckInOutScreen = () => {
     const { custom } = useTheme();
 
     const [loading, setLoading] = useState(false);
-    const [isWFH, setIsWFH] = useState(false);
+    const [workMode, setWorkMode] = useState('Office'); // 'Office' | 'WFH' | 'On Site'
     const [wfhEligible, setWfhEligible] = useState(false);
+    const [onSiteEligible, setOnSiteEligible] = useState(false);
     const [officeLocation, setOfficeLocation] = useState(null);
     const [currentLocation, setCurrentLocation] = useState(null);
-    const [locationStatus, setLocationStatus] = useState('checking'); // checking | inside | outside | error | wfh
+    const [locationStatus, setLocationStatus] = useState('checking'); // checking | inside | outside | error | wfh | onsite
     const [distance, setDistance] = useState(null);
     const [locationError, setLocationError] = useState(null);
 
@@ -41,10 +42,21 @@ const AdminCheckInOutScreen = () => {
 
     const adminEmployeeId = employee?.name;
 
+    // Derived flags for backward compatibility
+    const isWFH = workMode === 'WFH';
+    const isOnSite = workMode === 'On Site';
+
     const fetchWFHInfo = useCallback(async () => {
         const res = await AttendanceService.getUserWFHInfo();
         if (res.success && res.data?.message) {
             setWfhEligible(!!res.data.message.wfh_eligible);
+        }
+    }, []);
+
+    const fetchOnSiteInfo = useCallback(async () => {
+        const res = await AttendanceService.getUserOnSiteInfo();
+        if (res.success && res.data?.message) {
+            setOnSiteEligible(!!res.data.message.on_site_eligible);
         }
     }, []);
 
@@ -69,8 +81,9 @@ const AdminCheckInOutScreen = () => {
     }, []);
 
     const checkGeofenceStatus = useCallback(async () => {
-        if (isWFH || !officeLocation) {
-            setLocationStatus('wfh');
+        // WFH and On Site skip geofence check
+        if (isWFH || isOnSite || !officeLocation) {
+            setLocationStatus(isWFH ? 'wfh' : isOnSite ? 'onsite' : 'checking');
             return;
         }
         try {
@@ -93,25 +106,26 @@ const AdminCheckInOutScreen = () => {
             setLocationError(err?.message || 'Location unavailable');
             setLocationStatus('error');
         }
-    }, [isWFH, officeLocation]);
+    }, [isWFH, isOnSite, officeLocation]);
 
     // Initial data loads
     useEffect(() => {
         if (adminEmployeeId) {
             fetchWFHInfo();
+            fetchOnSiteInfo();
             fetchOfficeLocation();
         }
-    }, [adminEmployeeId, fetchWFHInfo, fetchOfficeLocation]);
+    }, [adminEmployeeId, fetchWFHInfo, fetchOnSiteInfo, fetchOfficeLocation]);
 
-    // Run location check exactly once, after officeLocation becomes available
+    // Run location check exactly once, after officeLocation becomes available or work mode changes
     useEffect(() => {
         if (officeLocation) {
             checkGeofenceStatus();
         } else {
-            setLocationStatus(isWFH ? 'wfh' : 'checking');
+            setLocationStatus(isWFH ? 'wfh' : isOnSite ? 'onsite' : 'checking');
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [officeLocation]);
+    }, [officeLocation, workMode]);
 
     // Kiosk list load (once when enabled)
     useEffect(() => {
@@ -144,6 +158,13 @@ const AdminCheckInOutScreen = () => {
         }
     };
 
+    // Helper to handle work mode selection
+    const handleWorkModeChange = (mode) => {
+        if (mode === 'WFH' && !wfhEligible && !kioskMode) return;
+        if (mode === 'On Site' && !onSiteEligible && !kioskMode) return;
+        setWorkMode(mode);
+    };
+
     const doAction = async (action) => {
         const targetEmployee = kioskMode && selectedEmployee ? selectedEmployee.name : adminEmployeeId;
         const targetName = kioskMode && selectedEmployee ? selectedEmployee.employee_name : (user?.full_name || 'Admin');
@@ -153,22 +174,24 @@ const AdminCheckInOutScreen = () => {
             return;
         }
 
-        if (!isWFH && locationStatus === 'outside') {
+        // For Office mode, check geofence
+        if (workMode === 'Office' && locationStatus === 'outside') {
             Alert.alert(
                 'Outside Geofence',
                 `${kioskMode ? 'This device is' : 'You are'} ${distance}m away. Must be within ${officeLocation?.radius}m to ${action === 'Check-In' ? 'check in' : 'check out'}.`
             );
             return;
         }
-        if (!isWFH && (locationStatus === 'error' || locationStatus === 'checking')) {
+        if (workMode === 'Office' && (locationStatus === 'error' || locationStatus === 'checking')) {
             Alert.alert('Location Error', 'Cannot determine location. Tap the refresh icon to retry.', [
                 { text: 'OK' }
             ]);
             return;
         }
 
+        const modeText = isWFH ? 'Mode: WFH' : isOnSite ? 'Mode: On Site' : `Distance: ${distance}m`;
         if (kioskMode) {
-            Alert.alert('Confirm', `${action} for:\n${targetName} (${targetEmployee})\n${isWFH ? 'Mode: WFH' : `Distance: ${distance}m`}`, [
+            Alert.alert('Confirm', `${action} for:\n${targetName} (${targetEmployee})\n${modeText}`, [
                 { text: 'Cancel', style: 'cancel' },
                 { text: 'Confirm', onPress: () => performCheck(action, targetEmployee, targetName) },
             ]);
@@ -189,7 +212,14 @@ const AdminCheckInOutScreen = () => {
                     return;
                 }
                 work_type = 'WFH'; // will force (0,0) in service
+            } else if (isOnSite) {
+                if (!onSiteEligible && !kioskMode) {
+                    Alert.alert('On Site Not Allowed', 'You are not eligible for On Site attendance.');
+                    return;
+                }
+                work_type = 'On Site'; // will force (0,0) in service
             } else {
+                // Office mode - use current location
                 if (currentLocation) {
                     latitude = currentLocation.latitude;
                     longitude = currentLocation.longitude;
@@ -211,9 +241,10 @@ const AdminCheckInOutScreen = () => {
 
             if (res.success && res.data?.message) {
                 const m = res.data.message;
+                const modeText = isWFH ? 'Mode: WFH' : isOnSite ? 'Mode: On Site' : `Distance: ${distance}m`;
                 Alert.alert(
                     'Success',
-                    `${action} successful for ${displayName}!\nRef: ${m.geo_log || m.attendance}\n${isWFH ? 'Mode: WFH' : `Distance: ${distance}m`}`,
+                    `${action} successful for ${displayName}!\nRef: ${m.geo_log || m.attendance}\n${modeText}`,
                     [{ text: 'OK', onPress: () => { if (kioskMode) { setSelectedEmployee(null); setSearchQuery(''); } } }]
                 );
             } else {
@@ -233,6 +264,7 @@ const AdminCheckInOutScreen = () => {
             case 'outside': return custom.palette.danger;
             case 'checking': return custom.palette.warning;
             case 'wfh': return custom.palette.primary;
+            case 'onsite': return '#F59E0B'; // Amber for On Site
             default: return custom.palette.textSecondary;
         }
     })();
@@ -243,6 +275,7 @@ const AdminCheckInOutScreen = () => {
             case 'outside': return 'times-circle';
             case 'checking': return 'sync';
             case 'wfh': return 'home';
+            case 'onsite': return 'map-marker-alt';
             default: return 'question-circle';
         }
     })();
@@ -253,6 +286,7 @@ const AdminCheckInOutScreen = () => {
             case 'outside': return 'Outside Office Geofence';
             case 'checking': return 'Checking Location...';
             case 'wfh': return 'Work From Home Mode';
+            case 'onsite': return 'On Site Mode';
             case 'error': return 'Location Error';
             default: return 'Unknown Status';
         }
@@ -365,27 +399,63 @@ const AdminCheckInOutScreen = () => {
                     </Card>
                 )}
 
-                {/* Work Mode */}
+                {/* Work Mode Selection */}
                 <Card style={styles.card}>
                     <Card.Title title="Work Mode" subtitle="Choose working location" />
                     <Card.Content>
-                        <View style={styles.rowBetween}>
+                        {/* Office Mode */}
+                        <View style={[styles.rowBetween, { marginBottom: 12 }]}>
                             <View style={styles.rowCenter}>
-                                <Icon name="home" size={16} color={custom.palette.primary} />
-                                <Text style={styles.boldText}>Work From Home</Text>
+                                <Icon name="building" size={16} color={workMode === 'Office' ? custom.palette.primary : '#9CA3AF'} />
+                                <Text style={[styles.boldText, { color: workMode === 'Office' ? custom.palette.primary : '#374151' }]}>Office</Text>
                             </View>
-                            <Switch value={isWFH} onValueChange={setIsWFH} disabled={!kioskMode && !wfhEligible} />
+                            <Switch 
+                                value={workMode === 'Office'} 
+                                onValueChange={() => handleWorkModeChange('Office')} 
+                            />
+                        </View>
+
+                        {/* WFH Mode */}
+                        <View style={[styles.rowBetween, { marginBottom: 12 }]}>
+                            <View style={styles.rowCenter}>
+                                <Icon name="home" size={16} color={workMode === 'WFH' ? custom.palette.primary : '#9CA3AF'} />
+                                <Text style={[styles.boldText, { color: workMode === 'WFH' ? custom.palette.primary : '#374151' }]}>Work From Home</Text>
+                            </View>
+                            <Switch 
+                                value={workMode === 'WFH'} 
+                                onValueChange={() => handleWorkModeChange('WFH')} 
+                                disabled={!kioskMode && !wfhEligible} 
+                            />
                         </View>
                         {!kioskMode && !wfhEligible && (
-                            <View style={styles.bannerWarn}>
+                            <View style={[styles.bannerWarn, { marginBottom: 12 }]}>
                                 <Text style={styles.bannerWarnText}>⚠️ You are not eligible for WFH. Contact administrator.</Text>
+                            </View>
+                        )}
+
+                        {/* On Site Mode */}
+                        <View style={styles.rowBetween}>
+                            <View style={styles.rowCenter}>
+                                <Icon name="map-marker-alt" size={16} color={workMode === 'On Site' ? '#F59E0B' : '#9CA3AF'} />
+                                <Text style={[styles.boldText, { color: workMode === 'On Site' ? '#F59E0B' : '#374151' }]}>On Site</Text>
+                            </View>
+                            <Switch 
+                                value={workMode === 'On Site'} 
+                                onValueChange={() => handleWorkModeChange('On Site')} 
+                                disabled={!kioskMode && !onSiteEligible}
+                                color="#F59E0B"
+                            />
+                        </View>
+                        {!kioskMode && !onSiteEligible && (
+                            <View style={[styles.bannerWarn, { marginTop: 12 }]}>
+                                <Text style={styles.bannerWarnText}>⚠️ You are not eligible for On Site attendance. Contact administrator.</Text>
                             </View>
                         )}
                     </Card.Content>
                 </Card>
 
-                {/* Location Status (with REFRESH icon at top-right) */}
-                {!isWFH && (
+                {/* Location Status (with REFRESH icon at top-right) - Only show for Office mode */}
+                {workMode === 'Office' && (
                     <Card style={styles.card}>
                         <Card.Title
                             title="Location Status"
@@ -434,8 +504,8 @@ const AdminCheckInOutScreen = () => {
                     </Card>
                 )}
 
-                {/* Office Details */}
-                {!isWFH && officeLocation && (
+                {/* Office Details - Only show for Office mode */}
+                {workMode === 'Office' && officeLocation && (
                     <Card style={styles.card}>
                         <Card.Title
                             title="Office Geofence Details"
@@ -458,11 +528,45 @@ const AdminCheckInOutScreen = () => {
                     </Card>
                 )}
 
+                {/* On Site Mode Info Card */}
+                {workMode === 'On Site' && (
+                    <Card style={[styles.card, { borderLeftWidth: 4, borderLeftColor: '#F59E0B' }]}>
+                        <Card.Title
+                            title="On Site Mode Active"
+                            left={(props) => <Icon {...props} name="map-marker-alt" size={20} color="#F59E0B" />}
+                        />
+                        <Card.Content>
+                            <View style={[styles.bannerInfo, { backgroundColor: '#FFFBEB', borderLeftColor: '#F59E0B' }]}>
+                                <Text style={[styles.bannerInfoText, { color: '#92400E' }]}>
+                                    📍 On Site mode - Geofence validation not required.
+                                </Text>
+                            </View>
+                        </Card.Content>
+                    </Card>
+                )}
+
+                {/* WFH Mode Info Card */}
+                {workMode === 'WFH' && (
+                    <Card style={[styles.card, { borderLeftWidth: 4, borderLeftColor: custom.palette.primary }]}>
+                        <Card.Title
+                            title="WFH Mode Active"
+                            left={(props) => <Icon {...props} name="home" size={20} color={custom.palette.primary} />}
+                        />
+                        <Card.Content>
+                            <View style={styles.bannerInfo}>
+                                <Text style={styles.bannerInfoText}>
+                                    🏠 WFH mode - Geofence validation not required.
+                                </Text>
+                            </View>
+                        </Card.Content>
+                    </Card>
+                )}
+
                 {/* Actions */}
                 <Button
                     onPress={() => doAction('Check-In')}
                     style={{ marginBottom: 12 }}
-                    disabled={loading || (!isWFH && locationStatus !== 'inside') || (kioskMode && !selectedEmployee)}
+                    disabled={loading || (workMode === 'Office' && locationStatus !== 'inside') || (kioskMode && !selectedEmployee)}
                 >
                     <Icon name="sign-in-alt" size={14} /> {kioskMode && selectedEmployee ? `Check In - ${selectedEmployee.employee_name}` : 'Check In'}
                 </Button>
@@ -470,16 +574,16 @@ const AdminCheckInOutScreen = () => {
                 <Button
                     variant="outline"
                     onPress={() => doAction('Check-Out')}
-                    disabled={loading || (!isWFH && locationStatus !== 'inside') || (kioskMode && !selectedEmployee)}
+                    disabled={loading || (workMode === 'Office' && locationStatus !== 'inside') || (kioskMode && !selectedEmployee)}
                 >
                     <Icon name="sign-out-alt" size={14} /> {kioskMode && selectedEmployee ? `Check Out - ${selectedEmployee.employee_name}` : 'Check Out'}
                 </Button>
 
-                {!isWFH && locationStatus === 'outside' && (
+                {workMode === 'Office' && locationStatus === 'outside' && (
                     <View style={[styles.bannerError, { borderLeftColor: custom.palette.danger }]}>
                         <Text style={[styles.errorTitle, { color: custom.palette.danger }]}>⚠️ Check-in/out disabled</Text>
                         <Text style={[styles.errorText, { color: custom.palette.danger }]}>
-                            Device is {distance}m away. Move closer to office or enable WFH mode.
+                            Device is {distance}m away. Move closer to office or select WFH/On Site mode.
                         </Text>
                     </View>
                 )}

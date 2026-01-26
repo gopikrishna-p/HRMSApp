@@ -7,6 +7,10 @@ const ENDPOINTS = {
     GET_USER_WFH_INFO: '/api/method/hrms.api.get_user_wfh_info',
     GET_EMPLOYEE_WFH_LIST: '/api/method/hrms.api.get_employee_wfh_list',
     TOGGLE_WFH_ELIGIBILITY: '/api/method/hrms.api.toggle_wfh_eligibility',
+    // On Site APIs
+    GET_USER_ON_SITE_INFO: '/api/method/hrms.api.get_user_on_site_info',
+    GET_EMPLOYEE_ON_SITE_LIST: '/api/method/hrms.api.get_employee_on_site_list',
+    TOGGLE_ON_SITE_ELIGIBILITY: '/api/method/hrms.api.toggle_on_site_eligibility',
     TODAY_ATTENDANCE: '/api/method/hrms.api.get_today_attendance',
     GET_HOLIDAYS: '/api/method/hrms.api.get_holidays',
     GET_LEAVE_APPLICATIONS: '/api/method/hrms.api.get_leave_applications',
@@ -26,9 +30,18 @@ class AttendanceService {
     }
     async geoAttendance({ employee, action, latitude, longitude, work_type }) {
         const isWFH = work_type === 'WFH';
-        const lat = isWFH ? 0 : Number(latitude ?? 0);
-        const lon = isWFH ? 0 : Number(longitude ?? 0);
-        return ApiService.post(ENDPOINTS.GEO_ATTENDANCE, { employee, action, latitude: lat, longitude: lon, work_type: isWFH ? 'WFH' : undefined });
+        const isOnSite = work_type === 'On Site';
+        // WFH and On Site skip geofence, so send 0 coordinates
+        const skipGeofence = isWFH || isOnSite;
+        const lat = skipGeofence ? 0 : Number(latitude ?? 0);
+        const lon = skipGeofence ? 0 : Number(longitude ?? 0);
+        return ApiService.post(ENDPOINTS.GEO_ATTENDANCE, { 
+            employee, 
+            action, 
+            latitude: lat, 
+            longitude: lon, 
+            work_type: work_type || undefined 
+        });
     }
 
     async getOfficeLocation(employee) {
@@ -98,6 +111,19 @@ class AttendanceService {
 
     async toggleWFHEligibility(employee_id, wfh_eligible) {
         return ApiService.post(ENDPOINTS.TOGGLE_WFH_ELIGIBILITY, { employee_id, wfh_eligible: !!wfh_eligible ? 1 : 0 });
+    }
+
+    // ========== On Site APIs ==========
+    async getUserOnSiteInfo() {
+        return ApiService.get(ENDPOINTS.GET_USER_ON_SITE_INFO);
+    }
+
+    async getEmployeeOnSiteList() {
+        return ApiService.get(ENDPOINTS.GET_EMPLOYEE_ON_SITE_LIST);
+    }
+
+    async toggleOnSiteEligibility(employee_id, on_site_eligible) {
+        return ApiService.post(ENDPOINTS.TOGGLE_ON_SITE_ELIGIBILITY, { employee_id, on_site_eligible: !!on_site_eligible ? 1 : 0 });
     }
 
     // ✅ date is optional: 'YYYY-MM-DD'
@@ -382,6 +408,12 @@ class AttendanceService {
             record.status === 'Work From Home') {
             return 'Work From Home';
         }
+        // Check if it's On Site
+        if (record.work_type === 'On Site' || 
+            (record.check_in && record.check_in.includes('On Site')) ||
+            record.status === 'On Site') {
+            return 'On Site';
+        }
         return 'Office';
     }
 
@@ -394,6 +426,7 @@ class AttendanceService {
                 total_records: 0,
                 present_days: 0,
                 wfh_days: 0,
+                on_site_days: 0,
                 absent_days: 0,
                 leave_days: 0,
                 holiday_days: 0,
@@ -405,11 +438,11 @@ class AttendanceService {
         }
 
         // Count different types of days more accurately
-        // Present days: attendance records with in_time (includes both draft check-ins and submitted Present/WFH)
+        // Present days: attendance records with in_time (includes both draft check-ins and submitted Present/WFH/On Site)
         const present_days = records.filter(r => 
             r.type === 'attendance' && 
             (r.check_in || r.in_time) && 
-            (r.status === 'Present' || (r.docstatus === 0 && r.in_time))
+            (r.status === 'Present' || r.status === 'On Site' || (r.docstatus === 0 && r.in_time))
         ).length;
         
         // WFH days: attendance records with check-in and WFH work mode (submitted only)
@@ -418,6 +451,14 @@ class AttendanceService {
             (r.check_in || r.in_time) && 
             r.docstatus === 1 &&
             (r.work_mode === 'Work From Home' || r.status === 'Work From Home')
+        ).length;
+
+        // On Site days: attendance records with On Site status (submitted only)
+        const on_site_days = records.filter(r => 
+            r.type === 'attendance' && 
+            (r.check_in || r.in_time) && 
+            r.docstatus === 1 &&
+            (r.work_mode === 'On Site' || r.status === 'On Site')
         ).length;
         
         // Absent days: marked as absent or no check-in on working days

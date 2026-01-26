@@ -265,6 +265,11 @@ const AdminDashboard = ({ navigation }) => {
                         tint={custom.palette.success} onPress={() => navigation.navigate('WFHApprovals')} />
                 </Section>
 
+                <Section title="On Site Policy & Settings" icon="map-marker-alt" tint="#F59E0B">
+                    <ListItem title="Manage On Site Settings" subtitle="Configure On Site eligibility" leftIcon="cog"
+                        tint="#F59E0B" onPress={() => navigation.navigate('OnSiteSettings')} />
+                </Section>
+
                 <Section title="Analytics & Reports" icon="chart-line" tint={custom.palette.warning}>
                     <ListItem title="Attendance Analytics" subtitle="Trends, late/early, absences" leftIcon="chart-bar"
                         tint={custom.palette.warning} onPress={() => navigation.navigate('AttendanceAnalytics')} />

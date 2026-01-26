@@ -105,6 +105,7 @@ const TodayAttendanceScreen = () => {
         const isAbsent = activeTab === 'absent';
         const isHoliday = activeTab === 'holiday';
         const isWFH = item.status === 'Work From Home';
+        const isOnSite = item.status === 'On Site';
 
         return (
             <View key={`${item.employee_id}-${index}`} style={styles.attendanceItem}>
@@ -122,6 +123,11 @@ const TodayAttendanceScreen = () => {
                                     <View style={[styles.workTypeBadge, { backgroundColor: '#8B5CF6' }]}>
                                         <Icon name="home" size={10} color="white" />
                                         <Text style={styles.workTypeBadgeText}>WFH</Text>
+                                    </View>
+                                ) : isOnSite ? (
+                                    <View style={[styles.workTypeBadge, { backgroundColor: '#F59E0B' }]}>
+                                        <Icon name="map-marker-alt" size={10} color="white" />
+                                        <Text style={styles.workTypeBadgeText}>On Site</Text>
                                     </View>
                                 ) : (
                                     <View style={[styles.workTypeBadge, { backgroundColor: '#3B82F6' }]}>
@@ -199,9 +205,10 @@ const TodayAttendanceScreen = () => {
         ? Math.round((data.present.length / data.working_employees) * 100)
         : 0;
     
-    // Calculate WFH and Office counts
+    // Calculate WFH, On Site and Office counts
     const wfhCount = data.present.filter(p => p.status === 'Work From Home').length;
-    const officeCount = data.present.length - wfhCount;
+    const onSiteCount = data.present.filter(p => p.status === 'On Site').length;
+    const officeCount = data.present.length - wfhCount - onSiteCount;
 
     return (
         <View style={styles.container}>

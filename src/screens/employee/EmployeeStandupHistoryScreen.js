@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, ScrollView, StyleSheet, Alert, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
+import LinearGradient from 'react-native-linear-gradient';
 import { Text, useTheme, Chip, ActivityIndicator } from 'react-native-paper';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { useAuth } from '../../context/AuthContext';
@@ -142,20 +143,20 @@ const EmployeeStandupHistoryScreen = ({ navigation }) => {
             {/* Edit Button for Drafts */}
             {canEdit && (
               <TouchableOpacity
-                style={{ marginTop: 10, alignSelf: 'flex-end', backgroundColor: '#E0E7FF', borderRadius: 6, paddingHorizontal: 12, paddingVertical: 6 }}
+                style={styles.editButton}
                 onPress={() => {
                   setEditTaskInitial(task);
                   setEditStandupId(item.standup_id);
                   setEditModalVisible(true);
                 }}
               >
-                <Text style={{ color: '#3730A3', fontWeight: 'bold' }}><Icon name="edit" size={12} /> Edit</Text>
+                <Icon name="edit" size={13} color="#FFFFFF" />
+                <Text style={styles.editButtonText}>Edit Task</Text>
               </TouchableOpacity>
             )}
           </View>
         ) : (
           <View style={styles.emptyTask}>
-  };
             <Text style={styles.emptyTaskText}>No task for this standup</Text>
           </View>
         )}
@@ -173,7 +174,7 @@ const EmployeeStandupHistoryScreen = ({ navigation }) => {
         />
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
           <ActivityIndicator size="large" color={custom.palette.primary} />
-          <Text style={{ marginTop: 12, color: '#6B7280' }}>Loading history...</Text>
+          <Text style={{ marginTop: 16, color: '#6B7280', fontSize: 14 }}>Loading history...</Text>
         </View>
       </View>
     );
@@ -201,30 +202,48 @@ const EmployeeStandupHistoryScreen = ({ navigation }) => {
         {/* Statistics Grid */}
         {stats && (
           <View style={styles.statsGrid}>
-            <View style={styles.statCard}>
-              <Icon name="list" size={20} color={custom.palette.primary} />
+            <LinearGradient
+              colors={[custom.palette.primary, '#4F46E5']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.statCard}
+            >
+              <Icon name="list" size={22} color="#FFFFFF" />
               <Text style={styles.statNumber}>{stats.total}</Text>
-              <Text style={styles.statName}>Total</Text>
-            </View>
+              <Text style={styles.statNameLight}>Total</Text>
+            </LinearGradient>
 
-            <View style={styles.statCard}>
-              <Icon name="check" size={20} color="#10B981" />
+            <LinearGradient
+              colors={[custom.palette.success, '#059669']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.statCard}
+            >
+              <Icon name="check" size={22} color="#FFFFFF" />
               <Text style={styles.statNumber}>{stats.submitted}</Text>
-              <Text style={styles.statName}>Submitted</Text>
-            </View>
+              <Text style={styles.statNameLight}>Submitted</Text>
+            </LinearGradient>
 
-            <View style={styles.statCard}>
-              <Icon name="flag-checkered" size={20} color="#6366F1" />
+            <LinearGradient
+              colors={[custom.palette.secondary, '#0D9488']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.statCard}
+            >
+              <Icon name="flag-checkered" size={22} color="#FFFFFF" />
               <Text style={styles.statNumber}>{stats.completed}</Text>
-              <Text style={styles.statName}>Completed</Text>
-            </View>
+              <Text style={styles.statNameLight}>Completed</Text>
+            </LinearGradient>
           </View>
         )}
 
         {/* Standups List */}
         {standups.length > 0 ? (
           <View style={styles.listSection}>
-            <Text style={styles.listTitle}>Last 30 Days</Text>
+            <View style={styles.sectionHeaderContainer}>
+              <Icon name="history" size={16} color={custom.palette.primary} />
+              <Text style={styles.listTitle}>Last 30 Days</Text>
+            </View>
             <FlatList
               data={standups}
               renderItem={renderStandupItem}
@@ -268,69 +287,83 @@ const styles = StyleSheet.create({
   },
   statCard: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 12,
+    borderRadius: 14,
+    padding: 16,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 4,
   },
   statNumber: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#111827',
-    marginTop: 8,
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    marginTop: 10,
   },
   statName: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
-    color: '#6B7280',
-    marginTop: 4,
+    color: '#FFFFFF',
+    marginTop: 6,
     textAlign: 'center',
+    opacity: 0.9,
+  },
+  statNameLight: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    marginTop: 6,
+    textAlign: 'center',
+    opacity: 0.9,
   },
   // List Section
   listSection: {
     marginBottom: 24,
   },
+  sectionHeaderContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+    paddingHorizontal: 4,
+  },
   listTitle: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '700',
     color: '#111827',
-    marginBottom: 12,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+    marginLeft: 8,
   },
   // Item Card
   itemCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 14,
+    borderRadius: 14,
+    padding: 16,
     borderWidth: 1,
     borderColor: '#E5E7EB',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 3,
+    marginBottom: 8,
   },
   itemHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
+    alignItems: 'center',
+    marginBottom: 14,
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6',
   },
   itemDate: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '700',
     color: '#111827',
+    letterSpacing: 0.3,
   },
   submittedLabel: {
     fontSize: 11,
@@ -342,10 +375,11 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   taskTitle: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
     color: '#111827',
-    marginBottom: 8,
+    marginBottom: 10,
+    letterSpacing: 0.2,
   },
   section: {
     marginBottom: 8,
@@ -416,33 +450,62 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   separator: {
-    height: 8,
+    height: 0,
+  },
+  editButton: {
+    marginTop: 12,
+    alignSelf: 'flex-end',
+    backgroundColor: '#6366F1',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    shadowColor: '#6366F1',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  editButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 12,
+    letterSpacing: 0.3,
   },
   // Empty State
   emptyStateContainer: {
     alignItems: 'center',
-    paddingVertical: 60,
+    paddingVertical: 80,
     paddingHorizontal: 32,
   },
   emptyIconBox: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
     backgroundColor: '#F3F4F6',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
   emptyTitle: {
-    fontSize: 18,
+    fontSize: 19,
     fontWeight: '700',
     color: '#111827',
-    marginBottom: 8,
+    marginBottom: 10,
+    letterSpacing: 0.2,
   },
   emptyMessage: {
-    fontSize: 13,
+    fontSize: 14,
     color: '#6B7280',
     textAlign: 'center',
+    lineHeight: 20,
   },
 });
 

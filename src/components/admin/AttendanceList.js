@@ -248,8 +248,16 @@ const AttendanceList = ({
                     {/* Show status-specific information */}
                     {item.status?.toLowerCase() === 'work from home' && (
                         <View style={styles.wfhIndicator}>
-                            <Icon name="home" size={12} color="#F59E0B" />
+                            <Icon name="home" size={12} color="#8B5CF6" />
                             <Text style={styles.wfhText}>Work From Home</Text>
+                        </View>
+                    )}
+
+                    {/* Show On Site indicator */}
+                    {item.status?.toLowerCase() === 'on site' && (
+                        <View style={[styles.wfhIndicator, { backgroundColor: '#FFFBEB' }]}>
+                            <Icon name="map-marker-alt" size={12} color="#F59E0B" />
+                            <Text style={[styles.wfhText, { color: '#F59E0B' }]}>On Site</Text>
                         </View>
                     )}
 
