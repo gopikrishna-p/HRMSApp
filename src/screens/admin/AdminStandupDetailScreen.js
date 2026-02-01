@@ -167,6 +167,7 @@ const AdminStandupDetailScreen = ({ navigation, route }) => {
     const renderTaskItem = ({ item }) => {
         const completionPercent = item.completion_percentage || 0;
         const isCarriedForward = item.carry_forward === 1 || item.carry_forward === true;
+        const isBlocked = item.task_status?.toLowerCase() === 'blocked';
 
         return (
             <View style={styles.taskCard}>
@@ -175,7 +176,7 @@ const AdminStandupDetailScreen = ({ navigation, route }) => {
                     <View style={styles.employeeInfo}>
                         <Icon name="user-circle" size={18} color={custom.palette.primary} />
                         <View style={styles.employeeText}>
-                            <Text style={styles.employeeName}>{item.employee || 'Unknown'}</Text>
+                            <Text style={styles.employeeName}>{item.employee_name || item.employee || 'Unknown'}</Text>
                             <Text style={styles.designation}>{item.designation || 'N/A'}</Text>
                         </View>
                     </View>
@@ -210,7 +211,9 @@ const AdminStandupDetailScreen = ({ navigation, route }) => {
                                     ? 'check-circle'
                                     : item.task_status?.toLowerCase() === 'in progress'
                                         ? 'hourglass-half'
-                                        : 'circle'
+                                        : item.task_status?.toLowerCase() === 'blocked'
+                                            ? 'ban'
+                                            : 'circle'
                             }
                             size={13}
                             color={
@@ -218,7 +221,9 @@ const AdminStandupDetailScreen = ({ navigation, route }) => {
                                     ? '#10B981'
                                     : item.task_status?.toLowerCase() === 'in progress'
                                         ? '#3B82F6'
-                                        : '#F59E0B'
+                                        : item.task_status?.toLowerCase() === 'blocked'
+                                            ? '#EF4444'
+                                            : '#F59E0B'
                             }
                         />
                         <Text style={styles.metaLabel}>Task Status</Text>
@@ -231,12 +236,28 @@ const AdminStandupDetailScreen = ({ navigation, route }) => {
                                             ? '#10B981'
                                             : item.task_status?.toLowerCase() === 'in progress'
                                                 ? '#3B82F6'
-                                                : '#F59E0B',
+                                                : item.task_status?.toLowerCase() === 'blocked'
+                                                    ? '#EF4444'
+                                                    : '#F59E0B',
                                 },
                             ]}
                         >
                             {item.task_status || 'Draft'}
                         </Text>
+                    </View>
+                </View>
+
+                {/* Hours Row - NEW */}
+                <View style={styles.hoursRow}>
+                    <View style={styles.hoursItem}>
+                        <Icon name="clock" size={13} color="#6B7280" />
+                        <Text style={styles.hoursLabel}>Estimated</Text>
+                        <Text style={styles.hoursValue}>{item.estimated_hours || 0}h</Text>
+                    </View>
+                    <View style={styles.hoursItem}>
+                        <Icon name="hourglass-half" size={13} color="#6B7280" />
+                        <Text style={styles.hoursLabel}>Actual</Text>
+                        <Text style={styles.hoursValue}>{item.actual_hours || 0}h</Text>
                     </View>
                 </View>
 
@@ -268,6 +289,19 @@ const AdminStandupDetailScreen = ({ navigation, route }) => {
                         <Text style={styles.taskDescription}>{item.actual_work_done || 'Not updated yet'}</Text>
                     </View>
                 </View>
+
+                {/* Blockers Section - NEW */}
+                {(item.blockers || isBlocked) && (
+                    <View style={styles.blockersBox}>
+                        <View style={styles.blockersHeader}>
+                            <Icon name="exclamation-triangle" size={14} color="#DC2626" />
+                            <Text style={styles.blockersTitle}>Blockers</Text>
+                        </View>
+                        <Text style={styles.blockersText}>
+                            {item.blockers || 'No details provided'}
+                        </Text>
+                    </View>
+                )}
 
                 {/* Progress Bar */}
                 <View style={styles.progressContainer}>
@@ -839,6 +873,56 @@ const styles = StyleSheet.create({
     amendButton: {
         paddingVertical: 8,
         borderRadius: 8,
+    },
+    // Hours Row Styles
+    hoursRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        paddingVertical: 10,
+        backgroundColor: '#F9FAFB',
+        borderRadius: 8,
+        marginVertical: 8,
+    },
+    hoursItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    hoursLabel: {
+        fontSize: 11,
+        color: '#6B7280',
+        fontWeight: '500',
+    },
+    hoursValue: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#374151',
+    },
+    // Blockers Styles
+    blockersBox: {
+        marginTop: 10,
+        padding: 10,
+        backgroundColor: '#FEF2F2',
+        borderRadius: 8,
+        borderLeftWidth: 3,
+        borderLeftColor: '#DC2626',
+    },
+    blockersHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 6,
+    },
+    blockersTitle: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#DC2626',
+        marginLeft: 6,
+        textTransform: 'uppercase',
+    },
+    blockersText: {
+        fontSize: 12,
+        color: '#991B1B',
+        lineHeight: 18,
     },
 });
 

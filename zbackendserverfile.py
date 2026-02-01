@@ -5371,9 +5371,17 @@ def get_employee_attendance_history(employee_id, start_date=None, end_date=None)
     }
 
 
+# ============================================================================
+# ATTENDANCE ANALYTICS REPORT APIs - For App Export Reports
+# Functions: get_all_employees_attendance_summary, export_attendance_report,
+#            generate_all_employees_pdf_report, generate_all_employees_excel_report
+# WFH Deduction: Calculated only if salary structure has WFH component
+# Formula: (total_earnings / total_days_in_month) * wfh_days * 0.3
+# ============================================================================
+
 @frappe.whitelist(allow_guest=False)
-def get_all_employees_attendance_summary(start_date=None, end_date=None, department=None):
-    """Get attendance summary for all employees with export data."""
+def get_all_employees_attendance_summary(start_date=None, end_date=None, department=None, wfh_deduction_per_day=0):
+    """Get attendance summary for all employees with export data including salary calculations."""
     if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
         frappe.throw(_("You do not have permission to access this resource."), frappe.PermissionError)
 
@@ -5386,7 +5394,7 @@ def get_all_employees_attendance_summary(start_date=None, end_date=None, departm
     start_date = getdate(start_date)
     end_date = getdate(end_date)
 
-    # Get employees
+    # Get employees with CTC
     employee_filters = {"status": "Active"}
     if department:
         employee_filters["department"] = department
@@ -5394,7 +5402,7 @@ def get_all_employees_attendance_summary(start_date=None, end_date=None, departm
     employees = frappe.get_all(
         "Employee",
         filters=employee_filters,
-        fields=["name", "employee_name", "department", "designation"],
+        fields=["name", "employee_name", "department", "designation", "ctc"],
         limit=500
     )
 
@@ -5452,13 +5460,119 @@ def get_all_employees_attendance_summary(start_date=None, end_date=None, departm
             
             emp_working_days = total_days_in_range - len(emp_holiday_dates)
             
+            # If no holidays found, calculate weekends manually
+            if not emp_holiday_dates:
+                current = start_date
+                while current <= end_date:
+                    if current.weekday() in [5, 6]:  # Saturday, Sunday
+                        emp_holiday_dates.add(current)
+                    current = current + timedelta(days=1)
+                emp_working_days = total_days_in_range - len(emp_holiday_dates)
+            
+            # Get approved leaves for the period
+            leave_applications = frappe.get_all(
+                "Leave Application",
+                filters={
+                    "employee": emp.name,
+                    "from_date": ["<=", end_date],
+                    "to_date": [">=", start_date],
+                    "docstatus": 1,
+                    "status": "Approved"
+                },
+                fields=["from_date", "to_date", "total_leave_days", "half_day"]
+            )
+            
+            # Calculate total leave days
+            total_leave_days = 0
+            for leave in leave_applications:
+                leave_start = max(getdate(leave.from_date), start_date)
+                leave_end = min(getdate(leave.to_date), end_date)
+                leave_overlap_days = 0
+                current = leave_start
+                while current <= leave_end:
+                    if current not in emp_holiday_dates:
+                        leave_overlap_days += 1
+                    current = current + timedelta(days=1)
+                if leave.half_day:
+                    total_leave_days += 0.5
+                else:
+                    total_leave_days += leave_overlap_days
+            
+            # Calculate salary info from Salary Structure
+            total_earnings = 0
+            total_deductions = 0
+            wfh_deduction_applicable = False
+            
+            # Get active salary structure assignment
+            ssa = frappe.get_all(
+                "Salary Structure Assignment",
+                filters={
+                    "employee": emp.name,
+                    "docstatus": 1,
+                    "from_date": ["<=", end_date]
+                },
+                fields=["salary_structure", "base"],
+                order_by="from_date desc",
+                limit=1
+            )
+            
+            if ssa:
+                try:
+                    salary_structure = frappe.get_doc("Salary Structure", ssa[0].salary_structure)
+                    for earning in salary_structure.earnings:
+                        if earning.amount and earning.amount > 0:
+                            total_earnings += earning.amount
+                    for deduction in salary_structure.deductions:
+                        component_name = (deduction.salary_component or "").lower()
+                        # Check if this is a WFH deduction component
+                        if "wfh" in component_name or "work from home" in component_name:
+                            wfh_deduction_applicable = True
+                        elif deduction.amount and deduction.amount > 0:
+                            total_deductions += deduction.amount
+                except:
+                    pass
+            
+            # Fallback to CTC if no salary structure
+            if total_earnings == 0 and emp.ctc:
+                total_earnings = emp.ctc / 12
+            
+            wfh_days = emp_data["data"]["summary_stats"].get("wfh_days", 0) if "data" in emp_data else emp_data["summary_stats"].get("wfh_days", 0)
+            
+            # Calculate WFH deduction ONLY if applicable (salary structure has WFH deduction component)
+            # Use total_days_in_range (total calendar days in month) for calculation, not working days
+            wfh_deduction = 0
+            if wfh_deduction_applicable and wfh_days > 0:
+                # Formula: (total_earnings / total_days_in_month) * wfh_days * 0.3
+                per_day_salary = total_earnings / total_days_in_range if total_days_in_range > 0 else 0
+                wfh_deduction = per_day_salary * wfh_days * 0.3
+            elif wfh_deduction_per_day > 0 and wfh_days > 0:
+                # Manual override if wfh_deduction_per_day is provided
+                wfh_deduction = wfh_days * wfh_deduction_per_day
+            
+            net_salary = total_earnings - total_deductions
+            salary_to_pay = max(0, net_salary - wfh_deduction)
+            
+            summary_stats = emp_data["data"]["summary_stats"] if "data" in emp_data else emp_data["summary_stats"]
+            
             emp_summary = {
                 "employee_id": emp.name,
                 "employee_name": emp.employee_name,
                 "department": emp.department or "Not Assigned",
                 "designation": emp.designation or "Not Assigned",
                 "total_working_days": emp_working_days,
-                **emp_data["summary_stats"]
+                "present_days": summary_stats.get("present_days", 0),
+                "wfh_days": summary_stats.get("wfh_days", 0),
+                "leaves": round(total_leave_days, 1),
+                "absent_days": summary_stats.get("absent_days", 0),
+                "late_arrivals": summary_stats.get("late_arrivals", 0),
+                "total_working_hours": summary_stats.get("total_working_hours", 0),
+                "attendance_percentage": summary_stats.get("attendance_percentage", 0),
+                "total_earnings": round(total_earnings, 2),
+                "total_deductions": round(total_deductions, 2),
+                "net_salary": round(net_salary, 2),
+                "wfh_deduction": round(wfh_deduction, 2),
+                "wfh_applicable": "Yes" if wfh_deduction_applicable else "No",
+                "salary_to_pay": round(salary_to_pay, 2)
             }
             
             all_employees_data.append(emp_summary)
@@ -5478,12 +5592,19 @@ def get_all_employees_attendance_summary(start_date=None, end_date=None, departm
                 "department": emp.department or "Not Assigned",
                 "designation": emp.designation or "Not Assigned",
                 "total_working_days": total_working_days,
-                "total_working_days": 0,
                 "present_days": 0,
                 "wfh_days": 0,
+                "leaves": 0,
                 "absent_days": 0,
+                "late_arrivals": 0,
                 "total_working_hours": 0,
-                "attendance_percentage": 0
+                "attendance_percentage": 0,
+                "total_earnings": 0,
+                "total_deductions": 0,
+                "net_salary": 0,
+                "wfh_deduction": 0,
+                "wfh_applicable": "N/A",
+                "salary_to_pay": 0
             })
             continue
 
@@ -5506,7 +5627,7 @@ def get_all_employees_attendance_summary(start_date=None, end_date=None, departm
 
 ############################################### 
 @frappe.whitelist(allow_guest=False)
-def export_attendance_report(employee_id=None, start_date=None, end_date=None, export_format="pdf", department=None):
+def export_attendance_report(employee_id=None, start_date=None, end_date=None, export_format="pdf", department=None, wfh_deduction_per_day=0):
     """Export attendance report in PDF or Excel format with proper file handling."""
     if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
         frappe.throw(_("You do not have permission to access this resource."), frappe.PermissionError)
@@ -5525,6 +5646,9 @@ def export_attendance_report(employee_id=None, start_date=None, end_date=None, e
         # Check date range (max 1 year)
         if (end_date - start_date).days > 365:
             frappe.throw(_("Date range cannot exceed 365 days"))
+        
+        # Convert wfh_deduction_per_day to float
+        wfh_deduction_per_day = float(wfh_deduction_per_day or 0)
 
         if employee_id:
             # Individual employee report
@@ -5535,7 +5659,7 @@ def export_attendance_report(employee_id=None, start_date=None, end_date=None, e
                 return generate_individual_excel_report(data, employee_id)
         else:
             # All employees report
-            data = get_all_employees_attendance_summary(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), department)
+            data = get_all_employees_attendance_summary(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), department, wfh_deduction_per_day)
             if export_format.lower() == "pdf":
                 return generate_all_employees_pdf_report(data)
             else:
@@ -5789,10 +5913,13 @@ def generate_individual_excel_report(data, employee_id):
         return {"status": "error", "message": str(e)}
 
 def generate_all_employees_pdf_report(data):
-    """Generate PDF report for all employees with proper base64 encoding."""
+    """Generate PDF report with sorting by employee ID, WFH row colors, and professional styling."""
     try:
         from frappe.utils.pdf import get_pdf
         import base64
+        
+        # Sort employees by employee_id
+        sorted_employees = sorted(data['employees_data'], key=lambda x: x.get('employee_id', ''))
         
         html_content = f"""
         <!DOCTYPE html>
@@ -5800,87 +5927,97 @@ def generate_all_employees_pdf_report(data):
         <head>
             <meta charset="UTF-8">
             <style>
-                body {{ font-family: Arial, sans-serif; padding: 20px; }}
-                .header {{ text-align: center; margin-bottom: 30px; border-bottom: 2px solid #333; padding-bottom: 20px; }}
-                .title {{ color: #333; font-size: 24px; margin-bottom: 10px; }}
-                .date-range {{ color: #888; font-size: 14px; }}
-                .summary-section {{ margin-bottom: 30px; }}
-                .section-title {{ color: #333; font-size: 18px; margin-bottom: 15px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }}
-                table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 11px; }}
-                th, td {{ border: 1px solid #ddd; padding: 6px; text-align: left; }}
-                th {{ background-color: #f2f2f2; font-weight: bold; }}
-                .stats-table {{ width: 80%; margin: 0 auto; }}
-                .stats-table td {{ width: 20%; text-align: center; }}
-                .highlight {{ background-color: #f0f8ff; }}
+                body {{ font-family: 'Segoe UI', Arial, sans-serif; padding: 15px; font-size: 9px; background: #fff; }}
+                .header {{ text-align: center; margin-bottom: 20px; padding: 15px; background: linear-gradient(135deg, #1F4E79 0%, #2E75B6 100%); color: white; border-radius: 8px; }}
+                .title {{ font-size: 20px; font-weight: bold; margin-bottom: 8px; letter-spacing: 1px; }}
+                .subtitle {{ font-size: 11px; opacity: 0.9; margin-bottom: 3px; }}
+                .legend {{ margin: 10px 0; padding: 8px; background: #f8f9fa; border-radius: 5px; font-size: 9px; }}
+                .legend-item {{ display: inline-block; margin-right: 20px; }}
+                .legend-color {{ display: inline-block; width: 15px; height: 15px; vertical-align: middle; margin-right: 5px; border: 1px solid #ddd; }}
+                .wfh-color {{ background-color: #FFF2CC; }}
+                table {{ width: 100%; border-collapse: collapse; margin-top: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }}
+                th {{ background: linear-gradient(135deg, #1F4E79 0%, #2E75B6 100%); color: white; padding: 10px 4px; text-align: center; font-size: 8px; font-weight: 600; border: 1px solid #1F4E79; }}
+                td {{ padding: 7px 4px; border: 1px solid #e0e0e0; font-size: 8px; }}
+                tr:nth-child(even) {{ background-color: #f8f9fa; }}
+                tr:nth-child(odd) {{ background-color: #ffffff; }}
+                tr.wfh-row {{ background-color: #FFF2CC !important; }}
+                tr:hover {{ background-color: #e3f2fd !important; }}
                 .text-center {{ text-align: center; }}
-                .small-text {{ font-size: 10px; color: #666; }}
+                .text-right {{ text-align: right; }}
+                .text-left {{ text-align: left; }}
+                .footer {{ margin-top: 15px; text-align: center; font-size: 8px; color: #666; padding: 10px; border-top: 1px solid #ddd; }}
             </style>
         </head>
         <body>
             <div class="header">
-                <div class="title">All Employees Attendance Summary</div>
-                <div class="date-range">Period: {data['date_range']['start_date']} to {data['date_range']['end_date']}</div>
-                <div class="small-text">Total Days: {data['date_range'].get('total_days', 'N/A')} | Working Days: {data['date_range'].get('working_days', 'N/A')}</div>
-                <div class="small-text">Generated on {frappe.utils.now_datetime().strftime('%Y-%m-%d %H:%M:%S')}</div>
+                <div class="title">📊 All Employees Attendance Summary</div>
+                <div class="subtitle">📅 Period: {data['date_range']['start_date']} to {data['date_range']['end_date']}</div>
+                <div class="subtitle">📆 Total Days: {data['date_range'].get('total_days', 'N/A')} | Working Days: {data['date_range'].get('working_days', 'N/A')}</div>
+                <div class="subtitle">🕐 Generated on: {frappe.utils.now_datetime().strftime('%Y-%m-%d %H:%M:%S')}</div>
             </div>
             
-            <div class="summary-section">
-                <div class="section-title">Overall Statistics</div>
-                <table class="stats-table">
+            <div class="legend">
+                <span class="legend-item"><span class="legend-color wfh-color"></span> 🏠 Employees with WFH Days</span>
+                <span class="legend-item">📋 Total Employees: {len(sorted_employees)}</span>
+            </div>
+            
+            <table>
+                <thead>
                     <tr>
-                        <td><strong>Total Employees</strong></td>
-                        <td>{data['overall_stats']['total_employees']}</td>
-                        <td><strong>Working Days</strong></td>
-                        <td>{data['overall_stats'].get('total_working_days', 'N/A')}</td>
-                        <td><strong>Avg Attendance %</strong></td>
-                        <td class="highlight"><strong>{data['overall_stats']['avg_attendance_percentage']}%</strong></td>
+                        <th>S.No</th>
+                        <th>Employee ID</th>
+                        <th>Employee Name</th>
+                        <th>Department</th>
+                        <th>Designation</th>
+                        <th>Working<br>Days</th>
+                        <th>Present<br>Days</th>
+                        <th>WFH<br>Days</th>
+                        <th>Leaves</th>
+                        <th>Absent<br>Days</th>
+                        <th>Late</th>
+                        <th>Total<br>Hours</th>
+                        <th>Attend<br>%</th>
+                        <th>Total<br>Earnings</th>
+                        <th>Total<br>Deduct</th>
+                        <th>Net<br>Salary</th>
+                        <th>WFH<br>Deduct</th>
+                        <th>Salary<br>to Pay</th>
                     </tr>
-                </table>
-            </div>
-            
-            <div>
-                <div class="section-title">Employee-wise Attendance Details</div>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Employee Name</th>
-                            <th>Department</th>
-                            <th>Designation</th>
-                            <th>Working Days</th>
-                            <th>Present</th>
-                            <th>WFH</th>
-                            <th>Absent</th>
-                            <th>Late</th>
-                            <th>Total Hours</th>
-                            <th>Attendance %</th>
-                        </tr>
-                    </thead>
-                    <tbody>
+                </thead>
+                <tbody>
         """
         
-        for emp in data['employees_data']:
+        for idx, emp in enumerate(sorted_employees, 1):
+            has_wfh = emp.get('wfh_days', 0) > 0
+            row_class = 'wfh-row' if has_wfh else ''
             html_content += f"""
-                        <tr>
-                            <td>{emp['employee_name']}</td>
-                            <td>{emp['department']}</td>
-                            <td>{emp['designation']}</td>
-                            <td class="text-center">{emp.get('total_working_days', 'N/A')}</td>
-                            <td class="text-center">{emp.get('present_days', 0)}</td>
-                            <td class="text-center">{emp.get('wfh_days', 0)}</td>
-                            <td class="text-center">{emp.get('absent_days', 0)}</td>
-                            <td class="text-center">{emp.get('late_arrivals', 0)}</td>
-                            <td class="text-center">{emp.get('total_working_hours', 0)}</td>
-                            <td class="text-center highlight">{emp.get('attendance_percentage', 0)}%</td>
-                        </tr>
+                    <tr class="{row_class}">
+                        <td class="text-center">{idx}</td>
+                        <td class="text-left">{emp.get('employee_id', '')}</td>
+                        <td class="text-left">{emp['employee_name']}</td>
+                        <td class="text-left">{emp['department']}</td>
+                        <td class="text-left">{emp['designation']}</td>
+                        <td class="text-center">{emp.get('total_working_days', 0)}</td>
+                        <td class="text-center">{emp.get('present_days', 0)}</td>
+                        <td class="text-center">{emp.get('wfh_days', 0)}</td>
+                        <td class="text-center">{emp.get('leaves', 0)}</td>
+                        <td class="text-center">{emp.get('absent_days', 0)}</td>
+                        <td class="text-center">{emp.get('late_arrivals', 0)}</td>
+                        <td class="text-center">{emp.get('total_working_hours', 0)}</td>
+                        <td class="text-center">{emp.get('attendance_percentage', 0)}%</td>
+                        <td class="text-right">₹{emp.get('total_earnings', 0):,.0f}</td>
+                        <td class="text-right">₹{emp.get('total_deductions', 0):,.0f}</td>
+                        <td class="text-right">₹{emp.get('net_salary', 0):,.0f}</td>
+                        <td class="text-right">₹{emp.get('wfh_deduction', 0):,.0f}</td>
+                        <td class="text-right">₹{emp.get('salary_to_pay', 0):,.0f}</td>
+                    </tr>
             """
         
         html_content += """
-                    </tbody>
-                </table>
-            </div>
-            <div class="small-text text-center" style="margin-top: 30px; border-top: 1px solid #ddd; padding-top: 10px;">
-                This report was generated automatically by the HRMS system.<br>
-                Working Days = Total Days - Holidays for each employee
+                </tbody>
+            </table>
+            <div class="footer">
+                <p>This is a system-generated report. For any queries, please contact HR Department.</p>
             </div>
         </body>
         </html>
@@ -5906,7 +6043,7 @@ def generate_all_employees_pdf_report(data):
         return {"status": "error", "message": str(e)}
 
 def generate_all_employees_excel_report(data):
-    """Generate Excel report for all employees with proper base64 encoding."""
+    """Generate Excel report with sorting by employee ID, WFH row colors, and professional styling."""
     try:
         import io
         import xlsxwriter
@@ -5916,51 +6053,246 @@ def generate_all_employees_excel_report(data):
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
         worksheet = workbook.add_worksheet('Attendance Summary')
         
-        # Define formats
+        # Sort employees by employee_id
+        sorted_employees = sorted(data['employees_data'], key=lambda x: x.get('employee_id', ''))
+        
+        # Define formats - Professional styling
+        title_format = workbook.add_format({
+            'bold': True,
+            'font_size': 18,
+            'align': 'center',
+            'valign': 'vcenter',
+            'font_color': '#1F4E79',
+            'font_name': 'Calibri'
+        })
+        
+        subtitle_format = workbook.add_format({
+            'font_size': 11,
+            'align': 'left',
+            'font_color': '#404040',
+            'italic': True
+        })
+        
         header_format = workbook.add_format({
-            'bold': True, 
-            'bg_color': '#4472C4', 
+            'bold': True,
+            'font_size': 10,
+            'bg_color': '#1F4E79',
             'font_color': 'white',
             'align': 'center',
-            'valign': 'vcenter'
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#1F4E79',
+            'text_wrap': True
         })
-        title_format = workbook.add_format({'bold': True, 'font_size': 16, 'align': 'center'})
+        
+        # Normal row formats (alternating colors)
+        data_format_odd = workbook.add_format({
+            'font_size': 10,
+            'align': 'left',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'bg_color': '#FFFFFF'
+        })
+        
+        data_format_even = workbook.add_format({
+            'font_size': 10,
+            'align': 'left',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'bg_color': '#F2F2F2'
+        })
+        
+        number_format_odd = workbook.add_format({
+            'font_size': 10,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'bg_color': '#FFFFFF'
+        })
+        
+        number_format_even = workbook.add_format({
+            'font_size': 10,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'bg_color': '#F2F2F2'
+        })
+        
+        currency_format_odd = workbook.add_format({
+            'font_size': 10,
+            'align': 'right',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'num_format': '₹#,##0',
+            'bg_color': '#FFFFFF'
+        })
+        
+        currency_format_even = workbook.add_format({
+            'font_size': 10,
+            'align': 'right',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'num_format': '₹#,##0',
+            'bg_color': '#F2F2F2'
+        })
+        
+        percent_format_odd = workbook.add_format({
+            'font_size': 10,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'num_format': '0.0%',
+            'bg_color': '#FFFFFF'
+        })
+        
+        percent_format_even = workbook.add_format({
+            'font_size': 10,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'num_format': '0.0%',
+            'bg_color': '#F2F2F2'
+        })
+        
+        # WFH row formats (light orange/peach background)
+        wfh_data_format = workbook.add_format({
+            'font_size': 10,
+            'align': 'left',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'bg_color': '#FFF2CC'
+        })
+        
+        wfh_number_format = workbook.add_format({
+            'font_size': 10,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'bg_color': '#FFF2CC'
+        })
+        
+        wfh_currency_format = workbook.add_format({
+            'font_size': 10,
+            'align': 'right',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'num_format': '₹#,##0',
+            'bg_color': '#FFF2CC'
+        })
+        
+        wfh_percent_format = workbook.add_format({
+            'font_size': 10,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'num_format': '0.0%',
+            'bg_color': '#FFF2CC'
+        })
         
         # Write title
-        worksheet.merge_range('A1:J1', "All Employees Attendance Summary", title_format)
-        worksheet.write(1, 0, f"Period: {data['date_range']['start_date']} to {data['date_range']['end_date']}")
-        worksheet.write(2, 0, f"Total Days: {data['date_range'].get('total_days', 'N/A')} | Working Days: {data['date_range'].get('working_days', 'N/A')}")
-        worksheet.write(3, 0, f"Generated on: {frappe.utils.now_datetime().strftime('%Y-%m-%d %H:%M:%S')}")
+        worksheet.merge_range('A1:R1', '📊 All Employees Attendance Summary', title_format)
         
-        # Write headers
-        row = 5
-        headers = ["Employee Name", "Department", "Designation", "Working Days", "Present Days", "WFH Days", 
-                  "Absent Days", "Late Arrivals", "Total Hours", "Attendance %"]
+        # Write period info
+        worksheet.write(2, 0, f"📅 Period: {data['date_range']['start_date']} to {data['date_range']['end_date']}", subtitle_format)
+        worksheet.write(3, 0, f"📆 Total Days: {data['date_range'].get('total_days', 'N/A')} | Working Days: {data['date_range'].get('working_days', 'N/A')}", subtitle_format)
+        worksheet.write(4, 0, f"🕐 Generated on: {frappe.utils.now_datetime().strftime('%Y-%m-%d %H:%M:%S')}", subtitle_format)
         
+        # Legend for WFH
+        legend_format = workbook.add_format({'font_size': 9, 'bg_color': '#FFF2CC', 'border': 1, 'align': 'center'})
+        worksheet.write(2, 14, '🏠 WFH Row', legend_format)
+        
+        # Headers - Row 6 (index 5)
+        headers = [
+            "S.No", "Employee ID", "Employee Name", "Department", "Designation", "Working\nDays",
+            "Present\nDays", "WFH\nDays", "Leaves", "Absent\nDays",
+            "Late", "Total\nHours", "Attendance\n%",
+            "Total\nEarnings", "Total\nDeductions", "Net\nSalary", "WFH\nDeduction", "Salary\nto Pay"
+        ]
+        
+        row = 6
         for col, header in enumerate(headers):
             worksheet.write(row, col, header, header_format)
-        row += 1
         
-        # Write data
-        for emp in data['employees_data']:
-            worksheet.write(row, 0, emp['employee_name'])
-            worksheet.write(row, 1, emp['department'])
-            worksheet.write(row, 2, emp['designation'])
-            worksheet.write(row, 3, emp.get('total_working_days', 0))
-            worksheet.write(row, 4, emp.get('present_days', 0))
-            worksheet.write(row, 5, emp.get('wfh_days', 0))
-            worksheet.write(row, 6, emp.get('absent_days', 0))
-            worksheet.write(row, 7, emp.get('late_arrivals', 0))
-            worksheet.write(row, 8, emp.get('total_working_hours', 0))
-            worksheet.write(row, 9, f"{emp.get('attendance_percentage', 0)}%")
+        # Set row height for header
+        worksheet.set_row(row, 30)
+        
+        # Data rows
+        row = 7
+        for idx, emp in enumerate(sorted_employees, 1):
+            has_wfh = emp.get('wfh_days', 0) > 0
+            is_even = idx % 2 == 0
+            
+            # Select format based on WFH status
+            if has_wfh:
+                d_fmt = wfh_data_format
+                n_fmt = wfh_number_format
+                c_fmt = wfh_currency_format
+                p_fmt = wfh_percent_format
+            elif is_even:
+                d_fmt = data_format_even
+                n_fmt = number_format_even
+                c_fmt = currency_format_even
+                p_fmt = percent_format_even
+            else:
+                d_fmt = data_format_odd
+                n_fmt = number_format_odd
+                c_fmt = currency_format_odd
+                p_fmt = percent_format_odd
+            
+            worksheet.write(row, 0, idx, n_fmt)
+            worksheet.write(row, 1, emp.get('employee_id', ''), d_fmt)
+            worksheet.write(row, 2, emp['employee_name'], d_fmt)
+            worksheet.write(row, 3, emp['department'], d_fmt)
+            worksheet.write(row, 4, emp['designation'], d_fmt)
+            worksheet.write(row, 5, emp.get('total_working_days', 0), n_fmt)
+            worksheet.write(row, 6, emp.get('present_days', 0), n_fmt)
+            worksheet.write(row, 7, emp.get('wfh_days', 0), n_fmt)
+            worksheet.write(row, 8, emp.get('leaves', 0), n_fmt)
+            worksheet.write(row, 9, emp.get('absent_days', 0), n_fmt)
+            worksheet.write(row, 10, emp.get('late_arrivals', 0), n_fmt)
+            worksheet.write(row, 11, emp.get('total_working_hours', 0), n_fmt)
+            worksheet.write(row, 12, emp.get('attendance_percentage', 0) / 100, p_fmt)
+            worksheet.write(row, 13, emp.get('total_earnings', 0), c_fmt)
+            worksheet.write(row, 14, emp.get('total_deductions', 0), c_fmt)
+            worksheet.write(row, 15, emp.get('net_salary', 0), c_fmt)
+            worksheet.write(row, 16, emp.get('wfh_deduction', 0), c_fmt)
+            worksheet.write(row, 17, emp.get('salary_to_pay', 0), c_fmt)
             row += 1
         
-        # Auto-adjust column widths
-        worksheet.set_column('A:A', 20)  # Employee Name
-        worksheet.set_column('B:B', 15)  # Department
-        worksheet.set_column('C:C', 15)  # Designation
-        worksheet.set_column('D:I', 12)  # Numeric columns
-        worksheet.set_column('J:J', 15)  # Attendance %
+        # Set column widths
+        worksheet.set_column('A:A', 5)   # S.No
+        worksheet.set_column('B:B', 14)  # Employee ID
+        worksheet.set_column('C:C', 22)  # Employee Name
+        worksheet.set_column('D:D', 15)  # Department
+        worksheet.set_column('E:E', 25)  # Designation
+        worksheet.set_column('F:F', 10)  # Working Days
+        worksheet.set_column('G:G', 10)  # Present Days
+        worksheet.set_column('H:H', 8)   # WFH Days
+        worksheet.set_column('I:I', 8)   # Leaves
+        worksheet.set_column('J:J', 9)   # Absent Days
+        worksheet.set_column('K:K', 6)   # Late
+        worksheet.set_column('L:L', 9)   # Total Hours
+        worksheet.set_column('M:M', 10)  # Attendance %
+        worksheet.set_column('N:N', 12)  # Total Earnings
+        worksheet.set_column('O:O', 12)  # Total Deductions
+        worksheet.set_column('P:P', 11)  # Net Salary
+        worksheet.set_column('Q:Q', 11)  # WFH Deduction
+        worksheet.set_column('R:R', 11)  # Salary to Pay
+        
+        # Freeze panes (freeze header row)
+        worksheet.freeze_panes(7, 0)
         
         workbook.close()
         output.seek(0)
@@ -6164,6 +6496,814 @@ def get_employee_count():
         frappe.throw(_("Failed to fetch employee count"))
 
 
+
+
+# ============================================================================
+# COMPREHENSIVE ATTENDANCE ANALYTICS API - JSON/Excel/PDF Report
+# Functions: get_attendance_analytics_report, _get_employee_attendance_data,
+#            _generate_attendance_analytics_excel, _generate_attendance_analytics_pdf
+# WFH Deduction: Calculated only if salary structure has WFH component
+# Formula: (total_earnings / total_days_in_month) * wfh_days * 0.3
+# ============================================================================
+
+@frappe.whitelist(allow_guest=False)
+def get_attendance_analytics_report(
+    start_date: str = None,
+    end_date: str = None,
+    department: str = None,
+    employee_id: str = None,
+    export_format: str = "json",
+    wfh_deduction_per_day: float = 0
+) -> dict:
+    """
+    Generate comprehensive attendance analytics report matching Excel format.
+    
+    Args:
+        start_date: Start date (YYYY-MM-DD). Defaults to first day of current month.
+        end_date: End date (YYYY-MM-DD). Defaults to last day of current month.
+        department: Filter by department (optional)
+        employee_id: Filter by specific employee (optional)
+        export_format: 'json', 'excel', or 'pdf'
+        wfh_deduction_per_day: Amount to deduct per WFH day (default 0)
+    
+    Returns:
+        Comprehensive attendance report with:
+        - Employee Name, Department, Designation
+        - Working Days, Present Days, WFH Days, Leaves, Absent Days
+        - Late Arrivals, Total Hours, Attendance %
+        - Net Salary, WFH Deduction, Salary to Pay
+    """
+    try:
+        # Permission check
+        user_roles = frappe.get_roles()
+        is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+        
+        if not is_admin:
+            # Non-admin can only see their own data
+            current_employee = get_employee_by_user()
+            if not current_employee:
+                frappe.throw(_("No employee record found for current user"))
+            employee_id = current_employee
+        
+        # Set default date range (current month)
+        if not start_date:
+            today = getdate()
+            start_date = today.replace(day=1)
+        else:
+            start_date = getdate(start_date)
+            
+        if not end_date:
+            today = getdate()
+            next_month = today.replace(day=28) + timedelta(days=4)
+            end_date = next_month.replace(day=1) - timedelta(days=1)
+        else:
+            end_date = getdate(end_date)
+        
+        # Validate date range
+        if start_date > end_date:
+            frappe.throw(_("Start date cannot be after end date"))
+        
+        if (end_date - start_date).days > 366:
+            frappe.throw(_("Date range cannot exceed 366 days"))
+        
+        # Calculate total days in range
+        total_days_in_range = (end_date - start_date).days + 1
+        
+        # Build employee filters
+        emp_filters = {"status": "Active"}
+        if department:
+            emp_filters["department"] = department
+        if employee_id:
+            emp_filters["name"] = employee_id
+        
+        # Get employees
+        employees = frappe.get_all(
+            "Employee",
+            filters=emp_filters,
+            fields=["name", "employee_name", "department", "designation", "ctc"],
+            order_by="employee_name asc"
+        )
+        
+        if not employees:
+            return {
+                "status": "success",
+                "data": {
+                    "employees_data": [],
+                    "period": {
+                        "start_date": str(start_date),
+                        "end_date": str(end_date),
+                        "total_days": total_days_in_range,
+                        "working_days": 0
+                    },
+                    "generated_on": now_datetime().strftime("%Y-%m-%d %H:%M:%S")
+                },
+                "message": _("No employees found")
+            }
+        
+        # Calculate common working days (approximate - using first employee's holiday list)
+        sample_holiday_list = get_holiday_list_for_employee(employees[0].name, raise_exception=False)
+        common_holidays = 0
+        common_weekend_count = 0
+        
+        if sample_holiday_list:
+            common_holidays = frappe.db.count(
+                "Holiday",
+                filters={
+                    "parent": sample_holiday_list,
+                    "holiday_date": ["between", [start_date, end_date]]
+                }
+            )
+        
+        # If no holidays found, count weekends manually
+        if common_holidays == 0:
+            current = start_date
+            while current <= end_date:
+                if current.weekday() in [5, 6]:  # Saturday, Sunday
+                    common_weekend_count += 1
+                current = current + timedelta(days=1)
+        
+        common_working_days = total_days_in_range - max(common_holidays, common_weekend_count)
+        
+        # Process each employee
+        employees_data = []
+        
+        for emp in employees:
+            emp_data = _get_employee_attendance_data(
+                emp, start_date, end_date, total_days_in_range, wfh_deduction_per_day
+            )
+            employees_data.append(emp_data)
+        
+        # Generate report data
+        report_data = {
+            "employees_data": employees_data,
+            "period": {
+                "start_date": str(start_date),
+                "end_date": str(end_date),
+                "total_days": total_days_in_range,
+                "working_days": common_working_days
+            },
+            "generated_on": now_datetime().strftime("%Y-%m-%d %H:%M:%S"),
+            "wfh_deduction_per_day": wfh_deduction_per_day
+        }
+        
+        # Export based on format
+        if export_format.lower() == "excel":
+            return _generate_attendance_analytics_excel(report_data)
+        elif export_format.lower() == "pdf":
+            return _generate_attendance_analytics_pdf(report_data)
+        else:
+            return {
+                "status": "success",
+                "data": report_data,
+                "message": _("Attendance analytics report generated successfully")
+            }
+    
+    except Exception as e:
+        frappe.log_error(f"Attendance Analytics Report Error: {str(e)}\n{frappe.get_traceback()}", "Attendance Analytics")
+        return {
+            "status": "error",
+            "message": str(e),
+            "data": None
+        }
+
+
+def _get_employee_attendance_data(emp, start_date, end_date, total_days_in_range, wfh_deduction_per_day=0):
+    """Get attendance data for a single employee."""
+    try:
+        # Get employee's holiday list
+        holiday_list = get_holiday_list_for_employee(emp.name, raise_exception=False)
+        holiday_dates = set()
+        weekend_dates = set()
+        
+        if holiday_list:
+            holidays = frappe.get_all(
+                "Holiday",
+                filters={
+                    "parent": holiday_list,
+                    "holiday_date": ["between", [start_date, end_date]]
+                },
+                pluck="holiday_date"
+            )
+            holiday_dates = set(holidays)
+        
+        # If no holidays found in the period, calculate weekends (Sat, Sun) manually
+        if not holiday_dates:
+            current = start_date
+            while current <= end_date:
+                # Saturday = 5, Sunday = 6
+                if current.weekday() in [5, 6]:
+                    weekend_dates.add(current)
+                current = current + timedelta(days=1)
+        
+        # Combine holidays and weekends
+        non_working_dates = holiday_dates | weekend_dates
+        
+        # Calculate working days for this employee
+        working_days = total_days_in_range - len(non_working_dates)
+        
+        # Get attendance records
+        attendance_records = frappe.get_all(
+            "Attendance",
+            filters={
+                "employee": emp.name,
+                "attendance_date": ["between", [start_date, end_date]],
+                "docstatus": 1
+            },
+            fields=["attendance_date", "status", "working_hours", "in_time", "late_entry"]
+        )
+        
+        # Count attendance statuses
+        present_days = 0
+        wfh_days = 0
+        half_days = 0
+        on_leave_days = 0
+        late_arrivals = 0
+        total_working_hours = 0
+        
+        attendance_dates = set()
+        
+        for att in attendance_records:
+            attendance_dates.add(att.attendance_date)
+            
+            if att.status in ["Present", "On Site"]:
+                present_days += 1
+            elif att.status == "Work From Home":
+                wfh_days += 1
+            elif att.status == "Half Day":
+                half_days += 1
+            elif att.status == "On Leave":
+                on_leave_days += 1
+            
+            if att.late_entry:
+                late_arrivals += 1
+            
+            # Calculate working hours
+            if att.working_hours and att.working_hours > 0:
+                total_working_hours += att.working_hours
+        
+        # Get approved leaves for the period
+        leave_applications = frappe.get_all(
+            "Leave Application",
+            filters={
+                "employee": emp.name,
+                "from_date": ["<=", end_date],
+                "to_date": [">=", start_date],
+                "docstatus": 1,
+                "status": "Approved"
+            },
+            fields=["from_date", "to_date", "total_leave_days", "half_day"]
+        )
+        
+        # Calculate total leave days
+        total_leave_days = 0
+        for leave in leave_applications:
+            # Calculate overlap with our date range
+            leave_start = max(getdate(leave.from_date), start_date)
+            leave_end = min(getdate(leave.to_date), end_date)
+            overlap_days = (leave_end - leave_start).days + 1
+            
+            # Exclude non-working days (holidays + weekends) from leave days
+            leave_overlap_days = 0
+            current = leave_start
+            while current <= leave_end:
+                if current not in non_working_dates:
+                    leave_overlap_days += 1
+                current = current + timedelta(days=1)
+            
+            if leave.half_day:
+                total_leave_days += 0.5
+            else:
+                total_leave_days += leave_overlap_days
+        
+        # Calculate absent days (working days without attendance and not on leave)
+        days_accounted = present_days + wfh_days + half_days + on_leave_days + total_leave_days
+        absent_days = max(0, working_days - days_accounted)
+        
+        # Calculate attendance percentage
+        # Present + WFH + 0.5*HalfDay counts as attended
+        attended_days = present_days + wfh_days + (half_days * 0.5)
+        attendance_percentage = round((attended_days / working_days * 100), 1) if working_days > 0 else 0
+        
+        # Get salary info from Salary Structure Assignment (like Salary Slip calculation)
+        total_earnings = 0
+        total_deductions = 0
+        wfh_deduction_applicable = False
+        wfh_deduction_formula_vars = {}
+        
+        # Get active salary structure assignment
+        ssa = frappe.get_all(
+            "Salary Structure Assignment",
+            filters={
+                "employee": emp.name,
+                "docstatus": 1,
+                "from_date": ["<=", end_date]
+            },
+            fields=["salary_structure", "base"],
+            order_by="from_date desc",
+            limit=1
+        )
+        
+        if ssa:
+            # Get salary structure details
+            try:
+                salary_structure = frappe.get_doc("Salary Structure", ssa[0].salary_structure)
+                
+                # Calculate total earnings from salary structure and build abbreviation map
+                earning_abbr_map = {}
+                for earning in salary_structure.earnings:
+                    if earning.amount and earning.amount > 0:
+                        total_earnings += earning.amount
+                        # Get abbreviation for the component
+                        abbr = frappe.db.get_value("Salary Component", earning.salary_component, "salary_component_abbr")
+                        if abbr:
+                            earning_abbr_map[abbr] = earning.amount
+                
+                # Check if WFH deduction is applicable and calculate
+                for deduction in salary_structure.deductions:
+                    component_name = (deduction.salary_component or "").lower()
+                    
+                    # Check if this is a WFH deduction component
+                    if "wfh" in component_name or "work from home" in component_name:
+                        wfh_deduction_applicable = True
+                        wfh_deduction_formula_vars = earning_abbr_map
+                    elif deduction.amount and deduction.amount > 0:
+                        # Add other fixed deductions
+                        total_deductions += deduction.amount
+                        
+            except Exception as e:
+                frappe.log_error(f"Error fetching salary structure for {emp.name}: {str(e)}", "Salary Structure Fetch")
+        
+        # If no salary structure, fallback to CTC
+        if total_earnings == 0 and emp.ctc:
+            total_earnings = emp.ctc / 12  # Monthly from annual CTC
+        
+        # Calculate WFH deduction ONLY if applicable (salary structure has WFH deduction component)
+        # Use total_days_in_range (total calendar days in month) for calculation, not working days
+        wfh_deduction = 0
+        if wfh_deduction_applicable and wfh_days > 0:
+            # Formula: (total_earnings / total_days_in_month) * wfh_days * 0.3
+            per_day_salary = total_earnings / total_days_in_range if total_days_in_range > 0 else 0
+            wfh_deduction = per_day_salary * wfh_days * 0.3
+        elif wfh_deduction_per_day > 0 and wfh_days > 0:
+            # Manual override if wfh_deduction_per_day is provided
+            wfh_deduction = wfh_days * wfh_deduction_per_day
+        
+        # Net salary = Total Earnings - Fixed Deductions
+        net_salary = total_earnings - total_deductions
+        
+        # Calculate salary to pay = Net Salary - WFH Deduction
+        salary_to_pay = max(0, net_salary - wfh_deduction)
+        
+        return {
+            "employee_id": emp.name,
+            "employee_name": emp.employee_name or emp.name,
+            "department": emp.department or "Not Assigned",
+            "designation": emp.designation or "Not Assigned",
+            "working_days": working_days,
+            "present_days": present_days,
+            "wfh_days": wfh_days,
+            "leaves": round(total_leave_days, 1),
+            "absent_days": round(absent_days, 1),
+            "late_arrivals": late_arrivals,
+            "total_hours": round(total_working_hours, 2),
+            "attendance_percentage": min(100, attendance_percentage),
+            "total_earnings": round(total_earnings, 2),
+            "total_deductions": round(total_deductions, 2),
+            "net_salary": round(net_salary, 2),
+            "wfh_deduction": round(wfh_deduction, 2),
+            "wfh_applicable": "Yes" if wfh_deduction_applicable else "No",
+            "salary_to_pay": round(salary_to_pay, 2)
+        }
+    
+    except Exception as e:
+        frappe.log_error(f"Error processing employee {emp.name}: {str(e)}", "Attendance Analytics")
+        return {
+            "employee_id": emp.name,
+            "employee_name": emp.employee_name or emp.name,
+            "department": emp.department or "Not Assigned",
+            "designation": emp.designation or "Not Assigned",
+            "working_days": 0,
+            "present_days": 0,
+            "wfh_days": 0,
+            "leaves": 0,
+            "absent_days": 0,
+            "late_arrivals": 0,
+            "total_hours": 0,
+            "attendance_percentage": 0,
+            "total_earnings": 0,
+            "total_deductions": 0,
+            "net_salary": 0,
+            "wfh_deduction": 0,
+            "wfh_applicable": "N/A",
+            "salary_to_pay": 0
+        }
+
+
+def _generate_attendance_analytics_excel(data):
+    """Generate Excel report with sorting by employee ID, WFH row colors, and professional styling."""
+    try:
+        import io
+        import xlsxwriter
+        import base64
+        
+        output = io.BytesIO()
+        workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+        worksheet = workbook.add_worksheet('Attendance Summary')
+        
+        # Sort employees by employee_id
+        sorted_employees = sorted(data['employees_data'], key=lambda x: x.get('employee_id', ''))
+        
+        # Define formats - Professional styling
+        title_format = workbook.add_format({
+            'bold': True,
+            'font_size': 18,
+            'align': 'center',
+            'valign': 'vcenter',
+            'font_color': '#1F4E79',
+            'font_name': 'Calibri'
+        })
+        
+        subtitle_format = workbook.add_format({
+            'font_size': 11,
+            'align': 'left',
+            'font_color': '#404040',
+            'italic': True
+        })
+        
+        header_format = workbook.add_format({
+            'bold': True,
+            'font_size': 10,
+            'bg_color': '#1F4E79',
+            'font_color': 'white',
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#1F4E79',
+            'text_wrap': True
+        })
+        
+        # Normal row formats (alternating colors)
+        data_format_odd = workbook.add_format({
+            'font_size': 10,
+            'align': 'left',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'bg_color': '#FFFFFF'
+        })
+        
+        data_format_even = workbook.add_format({
+            'font_size': 10,
+            'align': 'left',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'bg_color': '#F2F2F2'
+        })
+        
+        number_format_odd = workbook.add_format({
+            'font_size': 10,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'bg_color': '#FFFFFF'
+        })
+        
+        number_format_even = workbook.add_format({
+            'font_size': 10,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'bg_color': '#F2F2F2'
+        })
+        
+        currency_format_odd = workbook.add_format({
+            'font_size': 10,
+            'align': 'right',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'num_format': '₹#,##0',
+            'bg_color': '#FFFFFF'
+        })
+        
+        currency_format_even = workbook.add_format({
+            'font_size': 10,
+            'align': 'right',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'num_format': '₹#,##0',
+            'bg_color': '#F2F2F2'
+        })
+        
+        percent_format_odd = workbook.add_format({
+            'font_size': 10,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'num_format': '0.0%',
+            'bg_color': '#FFFFFF'
+        })
+        
+        percent_format_even = workbook.add_format({
+            'font_size': 10,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'num_format': '0.0%',
+            'bg_color': '#F2F2F2'
+        })
+        
+        # WFH row formats (light orange/peach background)
+        wfh_data_format = workbook.add_format({
+            'font_size': 10,
+            'align': 'left',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'bg_color': '#FFF2CC'  # Light orange/peach for WFH
+        })
+        
+        wfh_number_format = workbook.add_format({
+            'font_size': 10,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'bg_color': '#FFF2CC'
+        })
+        
+        wfh_currency_format = workbook.add_format({
+            'font_size': 10,
+            'align': 'right',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'num_format': '₹#,##0',
+            'bg_color': '#FFF2CC'
+        })
+        
+        wfh_percent_format = workbook.add_format({
+            'font_size': 10,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+            'border_color': '#D9D9D9',
+            'num_format': '0.0%',
+            'bg_color': '#FFF2CC'
+        })
+        
+        # Write title
+        worksheet.merge_range('A1:Q1', '📊 All Employees Attendance Summary', title_format)
+        
+        # Write period info
+        period = data['period']
+        worksheet.write(2, 0, f"📅 Period: {period['start_date']} to {period['end_date']}", subtitle_format)
+        worksheet.write(3, 0, f"📆 Total Days: {period['total_days']} | Working Days: {period['working_days']}", subtitle_format)
+        worksheet.write(4, 0, f"🕐 Generated on: {data['generated_on']}", subtitle_format)
+        
+        # Legend for WFH
+        legend_format = workbook.add_format({'font_size': 9, 'bg_color': '#FFF2CC', 'border': 1, 'align': 'center'})
+        worksheet.write(2, 14, '🏠 WFH Row', legend_format)
+        
+        # Headers - Row 6 (index 5)
+        headers = [
+            "S.No", "Employee ID", "Employee Name", "Department", "Designation", "Working\nDays",
+            "Present\nDays", "WFH\nDays", "Leaves", "Absent\nDays",
+            "Late", "Total\nHours", "Attendance\n%",
+            "Total\nEarnings", "Total\nDeductions", "Net\nSalary", "WFH\nDeduction", "Salary\nto Pay"
+        ]
+        
+        row = 6
+        for col, header in enumerate(headers):
+            worksheet.write(row, col, header, header_format)
+        
+        # Set row height for header
+        worksheet.set_row(row, 30)
+        
+        # Data rows
+        row = 7
+        for idx, emp in enumerate(sorted_employees, 1):
+            has_wfh = emp.get('wfh_days', 0) > 0
+            is_even = idx % 2 == 0
+            
+            # Select format based on WFH status
+            if has_wfh:
+                d_fmt = wfh_data_format
+                n_fmt = wfh_number_format
+                c_fmt = wfh_currency_format
+                p_fmt = wfh_percent_format
+            elif is_even:
+                d_fmt = data_format_even
+                n_fmt = number_format_even
+                c_fmt = currency_format_even
+                p_fmt = percent_format_even
+            else:
+                d_fmt = data_format_odd
+                n_fmt = number_format_odd
+                c_fmt = currency_format_odd
+                p_fmt = percent_format_odd
+            
+            worksheet.write(row, 0, idx, n_fmt)
+            worksheet.write(row, 1, emp.get('employee_id', ''), d_fmt)
+            worksheet.write(row, 2, emp['employee_name'], d_fmt)
+            worksheet.write(row, 3, emp['department'], d_fmt)
+            worksheet.write(row, 4, emp['designation'], d_fmt)
+            worksheet.write(row, 5, emp['working_days'], n_fmt)
+            worksheet.write(row, 6, emp['present_days'], n_fmt)
+            worksheet.write(row, 7, emp['wfh_days'], n_fmt)
+            worksheet.write(row, 8, emp['leaves'], n_fmt)
+            worksheet.write(row, 9, emp['absent_days'], n_fmt)
+            worksheet.write(row, 10, emp['late_arrivals'], n_fmt)
+            worksheet.write(row, 11, emp['total_hours'], n_fmt)
+            worksheet.write(row, 12, emp['attendance_percentage'] / 100, p_fmt)
+            worksheet.write(row, 13, emp.get('total_earnings', 0), c_fmt)
+            worksheet.write(row, 14, emp.get('total_deductions', 0), c_fmt)
+            worksheet.write(row, 15, emp['net_salary'], c_fmt)
+            worksheet.write(row, 16, emp['wfh_deduction'], c_fmt)
+            worksheet.write(row, 17, emp['salary_to_pay'], c_fmt)
+            row += 1
+        
+        # Set column widths
+        worksheet.set_column('A:A', 5)   # S.No
+        worksheet.set_column('B:B', 14)  # Employee ID
+        worksheet.set_column('C:C', 22)  # Employee Name
+        worksheet.set_column('D:D', 15)  # Department
+        worksheet.set_column('E:E', 25)  # Designation
+        worksheet.set_column('F:F', 10)  # Working Days
+        worksheet.set_column('G:G', 10)  # Present Days
+        worksheet.set_column('H:H', 8)   # WFH Days
+        worksheet.set_column('I:I', 8)   # Leaves
+        worksheet.set_column('J:J', 9)   # Absent Days
+        worksheet.set_column('K:K', 6)   # Late
+        worksheet.set_column('L:L', 9)   # Total Hours
+        worksheet.set_column('M:M', 10)  # Attendance %
+        worksheet.set_column('N:N', 12)  # Total Earnings
+        worksheet.set_column('O:O', 12)  # Total Deductions
+        worksheet.set_column('P:P', 11)  # Net Salary
+        worksheet.set_column('Q:Q', 11)  # WFH Deduction
+        worksheet.set_column('R:R', 11)  # Salary to Pay
+        
+        # Freeze panes (freeze header row)
+        worksheet.freeze_panes(7, 0)
+        
+        workbook.close()
+        output.seek(0)
+        
+        # Encode to base64
+        base64_content = base64.b64encode(output.getvalue()).decode('utf-8')
+        
+        file_name = f"attendance_summary_{data['period']['start_date']}_{data['period']['end_date']}.xlsx"
+        
+        return {
+            "status": "success",
+            "file_name": file_name,
+            "content": f"data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{base64_content}",
+            "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }
+    
+    except Exception as e:
+        frappe.log_error(f"Excel generation error: {str(e)}", "Attendance Analytics Excel")
+        return {"status": "error", "message": str(e)}
+
+
+def _generate_attendance_analytics_pdf(data):
+    """Generate PDF report with sorting by employee ID, WFH row colors, and professional styling."""
+    try:
+        from frappe.utils.pdf import get_pdf
+        import base64
+        
+        period = data['period']
+        
+        # Sort employees by employee_id
+        sorted_employees = sorted(data['employees_data'], key=lambda x: x.get('employee_id', ''))
+        
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {{ font-family: 'Segoe UI', Arial, sans-serif; padding: 15px; font-size: 9px; background: #fff; }}
+                .header {{ text-align: center; margin-bottom: 20px; padding: 15px; background: linear-gradient(135deg, #1F4E79 0%, #2E75B6 100%); color: white; border-radius: 8px; }}
+                .title {{ font-size: 20px; font-weight: bold; margin-bottom: 8px; letter-spacing: 1px; }}
+                .subtitle {{ font-size: 11px; opacity: 0.9; margin-bottom: 3px; }}
+                .legend {{ margin: 10px 0; padding: 8px; background: #f8f9fa; border-radius: 5px; font-size: 9px; }}
+                .legend-item {{ display: inline-block; margin-right: 20px; }}
+                .legend-color {{ display: inline-block; width: 15px; height: 15px; vertical-align: middle; margin-right: 5px; border: 1px solid #ddd; }}
+                .wfh-color {{ background-color: #FFF2CC; }}
+                table {{ width: 100%; border-collapse: collapse; margin-top: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }}
+                th {{ background: linear-gradient(135deg, #1F4E79 0%, #2E75B6 100%); color: white; padding: 10px 4px; text-align: center; font-size: 8px; font-weight: 600; border: 1px solid #1F4E79; }}
+                td {{ padding: 7px 4px; border: 1px solid #e0e0e0; font-size: 8px; }}
+                tr:nth-child(even) {{ background-color: #f8f9fa; }}
+                tr:nth-child(odd) {{ background-color: #ffffff; }}
+                tr.wfh-row {{ background-color: #FFF2CC !important; }}
+                tr:hover {{ background-color: #e3f2fd !important; }}
+                .text-center {{ text-align: center; }}
+                .text-right {{ text-align: right; }}
+                .text-left {{ text-align: left; }}
+                .footer {{ margin-top: 15px; text-align: center; font-size: 8px; color: #666; padding: 10px; border-top: 1px solid #ddd; }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <div class="title">📊 All Employees Attendance Summary</div>
+                <div class="subtitle">📅 Period: {period['start_date']} to {period['end_date']}</div>
+                <div class="subtitle">📆 Total Days: {period['total_days']} | Working Days: {period['working_days']}</div>
+                <div class="subtitle">🕐 Generated on: {data['generated_on']}</div>
+            </div>
+            
+            <div class="legend">
+                <span class="legend-item"><span class="legend-color wfh-color"></span> 🏠 Employees with WFH Days</span>
+                <span class="legend-item">📋 Total Employees: {len(sorted_employees)}</span>
+            </div>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th>S.No</th>
+                        <th>Employee ID</th>
+                        <th>Employee Name</th>
+                        <th>Department</th>
+                        <th>Designation</th>
+                        <th>Working<br>Days</th>
+                        <th>Present<br>Days</th>
+                        <th>WFH<br>Days</th>
+                        <th>Leaves</th>
+                        <th>Absent<br>Days</th>
+                        <th>Late</th>
+                        <th>Total<br>Hours</th>
+                        <th>Attend<br>%</th>
+                        <th>Total<br>Earnings</th>
+                        <th>Total<br>Deduct</th>
+                        <th>Net<br>Salary</th>
+                        <th>WFH<br>Deduct</th>
+                        <th>Salary<br>to Pay</th>
+                    </tr>
+                </thead>
+                <tbody>
+        """
+        
+        for idx, emp in enumerate(sorted_employees, 1):
+            has_wfh = emp.get('wfh_days', 0) > 0
+            row_class = 'wfh-row' if has_wfh else ''
+            html_content += f"""
+                    <tr class="{row_class}">
+                        <td class="text-center">{idx}</td>
+                        <td class="text-left">{emp.get('employee_id', '')}</td>
+                        <td class="text-left">{emp['employee_name']}</td>
+                        <td class="text-left">{emp['department']}</td>
+                        <td class="text-left">{emp['designation']}</td>
+                        <td class="text-center">{emp['working_days']}</td>
+                        <td class="text-center">{emp['present_days']}</td>
+                        <td class="text-center">{emp['wfh_days']}</td>
+                        <td class="text-center">{emp['leaves']}</td>
+                        <td class="text-center">{emp['absent_days']}</td>
+                        <td class="text-center">{emp['late_arrivals']}</td>
+                        <td class="text-center">{emp['total_hours']}</td>
+                        <td class="text-center">{emp['attendance_percentage']}%</td>
+                        <td class="text-right">₹{emp.get('total_earnings', 0):,.0f}</td>
+                        <td class="text-right">₹{emp.get('total_deductions', 0):,.0f}</td>
+                        <td class="text-right">₹{emp['net_salary']:,.0f}</td>
+                        <td class="text-right">₹{emp['wfh_deduction']:,.0f}</td>
+                        <td class="text-right">₹{emp['salary_to_pay']:,.0f}</td>
+                    </tr>
+            """
+        
+        html_content += """
+                </tbody>
+            </table>
+            <div class="footer">
+                <p>This is a system-generated report. For any queries, please contact HR Department.</p>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Generate PDF
+        pdf_content = get_pdf(html_content, {"page-size": "A4", "orientation": "Landscape"})
+        
+        # Encode to base64
+        base64_content = base64.b64encode(pdf_content).decode('utf-8')
+        
+        file_name = f"attendance_summary_{period['start_date']}_{period['end_date']}.pdf"
+        
+        return {
+            "status": "success",
+            "file_name": file_name,
+            "content": f"data:application/pdf;base64,{base64_content}",
+            "content_type": "application/pdf"
+        }
+    
+    except Exception as e:
+        frappe.log_error(f"PDF generation error: {str(e)}", "Attendance Analytics PDF")
+        return {"status": "error", "message": str(e)}
+
 # OLD DUPLICATE LEAVE FUNCTIONS REMOVED - Use new comprehensive APIs starting at line ~600
 
 
@@ -6362,46 +7502,86 @@ except Exception as init_error:
 
 @frappe.whitelist(allow_guest=False)
 def save_fcm_token(token, device_type):
-    """Save or update FCM token for a user."""
+    """Save or update FCM token for a user.
+    
+    This API should be called by the mobile app immediately after:
+    1. User successfully logs in
+    2. FCM token is refreshed (token changes periodically)
+    3. App is opened after being closed for a while
+    
+    Args:
+        token: FCM token from Firebase SDK
+        device_type: "Android" or "iOS"
+    
+    Returns:
+        dict with status, message, and registration details
+    """
     try:
         # Validate inputs
         if not token:
-            frappe.throw(_("Token is required"))
+            return {"status": "error", "message": "Token is required"}
         
-        if device_type not in ['Android', 'iOS', 'android', 'ios']:
-            frappe.throw(_("Invalid device type. Expected: Android, iOS, android, or ios. Got: {0}").format(device_type))
+        if not token.strip():
+            return {"status": "error", "message": "Token cannot be empty"}
         
-        # Normalize device_type to capitalized format
-        device_type = 'Android' if device_type.lower() == 'android' else 'iOS'
+        # Accept various device type formats
+        device_type_lower = str(device_type).lower().strip() if device_type else "android"
+        if device_type_lower in ['android', 'a']:
+            device_type = 'Android'
+        elif device_type_lower in ['ios', 'i', 'iphone', 'ipad']:
+            device_type = 'iOS'
+        else:
+            device_type = 'Android'  # Default to Android
         
         user = frappe.session.user
+        token = token.strip()
         
         # Log for debugging
         frappe.log_error(
-            f"FCM Token Registration - User: {user}, Device: {device_type}, Token: {token[:20]}...",
+            f"FCM Token Registration - User: {user}, Device: {device_type}, Token: {token[:30]}...",
             "FCM Token Save"
         )
         
-        existing = frappe.db.exists("Mobile Device", {"user": user})
+        # Check if user already has a device registered - use get_all to be safe
+        existing_devices = frappe.get_all(
+            "Mobile Device", 
+            filters={"user": user}, 
+            fields=["name", "fcm_token"],
+            limit=1
+        )
         
-        if existing:
-            frappe.db.set_value("Mobile Device", existing, {
+        if existing_devices:
+            # Update existing record
+            existing = existing_devices[0]
+            old_token = existing.fcm_token
+            frappe.db.set_value("Mobile Device", existing.name, {
                 "fcm_token": token,
                 "device_type": device_type,
                 "last_active": now_datetime()
-            })
-            frappe.log_error(f"✅ Updated existing Mobile Device for user: {user}", "FCM Token Save")
+            }, update_modified=True)
+            action = "updated" if old_token != token else "refreshed"
+            frappe.log_error(f"✅ {action.capitalize()} Mobile Device {existing.name} for user: {user}", "FCM Token Save")
         else:
-            # Check if this token is already registered to a different user
-            existing_token = frappe.db.exists("Mobile Device", {"fcm_token": token})
-            if existing_token:
-                frappe.db.set_value("Mobile Device", existing_token, {
+            # Check if this token is already registered to a different user (device shared/transferred)
+            existing_token_devices = frappe.get_all(
+                "Mobile Device", 
+                filters={"fcm_token": token}, 
+                fields=["name", "user"],
+                limit=1
+            )
+            
+            if existing_token_devices:
+                existing_token = existing_token_devices[0]
+                old_user = existing_token.user
+                frappe.db.set_value("Mobile Device", existing_token.name, {
                     "user": user,
                     "device_type": device_type,
                     "last_active": now_datetime()
-                })
-                frappe.log_error(f"✅ Updated Mobile Device with existing token for user: {user}", "FCM Token Save")
+                }, update_modified=True)
+                frappe.log_error(f"✅ Transferred Mobile Device {existing_token.name} from {old_user} to {user}", "FCM Token Save")
+                action = "transferred"
             else:
+                # Create new record
                 doc = frappe.get_doc({
                     "doctype": "Mobile Device",
                     "user": user,
@@ -6410,16 +7590,147 @@ def save_fcm_token(token, device_type):
                     "last_active": now_datetime()
                 })
                 doc.insert(ignore_permissions=True)
-                frappe.log_error(f"✅ Created new Mobile Device for user: {user}", "FCM Token Save")
+                frappe.log_error(f"✅ Created new Mobile Device {doc.name} for user: {user}", "FCM Token Save")
+                action = "created"
         
         frappe.db.commit()
         
-        return {"status": "success", "message": "FCM token saved", "user": user, "device_type": device_type}
+        return {
+            "status": "success", 
+            "message": f"FCM token {action}", 
+            "user": user, 
+            "device_type": device_type,
+            "action": action
+        }
         
     except Exception as e:
-        frappe.log_error(f"❌ Error saving FCM token: {str(e)}", "FCM Token Save Error")
+        frappe.log_error(f"❌ Error saving FCM token for {frappe.session.user}: {str(e)}", "FCM Token Save Error")
         frappe.log_error(frappe.get_traceback(), "FCM Token Save Error Traceback")
-        frappe.throw(_("Failed to save FCM token: {0}").format(str(e)))
+        return {"status": "error", "message": f"Failed to save FCM token: {str(e)}"}
+
+
+@frappe.whitelist(allow_guest=False)
+def get_notification_status():
+    """Get current user's notification registration status.
+    
+    This API helps diagnose why a user might not be receiving notifications.
+    
+    Returns:
+        dict with registration status, token info, and diagnostic details
+    """
+    try:
+        user = frappe.session.user
+        
+        # Check if user has a mobile device registered
+        device = frappe.db.get_value(
+            "Mobile Device", 
+            {"user": user}, 
+            ["name", "fcm_token", "device_type", "last_active"],
+            as_dict=True
+        )
+        
+        # Check if user is linked to an employee
+        employee = frappe.db.get_value(
+            "Employee",
+            {"user_id": user, "status": "Active"},
+            ["name", "employee_name"],
+            as_dict=True
+        )
+        
+        if not device:
+            return {
+                "status": "not_registered",
+                "message": "No mobile device registered. Please ensure the app registers FCM token on login.",
+                "user": user,
+                "employee": employee.name if employee else None,
+                "employee_name": employee.employee_name if employee else None,
+                "is_registered": False,
+                "can_receive_notifications": False,
+                "troubleshooting": [
+                    "1. Make sure notification permissions are enabled on your device",
+                    "2. Log out and log back in to the app",
+                    "3. Check if Firebase is properly configured in the app",
+                    "4. Ensure internet connectivity when logging in"
+                ]
+            }
+        
+        # Check if token looks valid (FCM tokens are typically 150+ chars)
+        token_valid = device.fcm_token and len(device.fcm_token) > 100
+        
+        # Check if device was recently active
+        from datetime import datetime, timedelta
+        is_recent = device.last_active and device.last_active > datetime.now() - timedelta(days=7)
+        
+        return {
+            "status": "registered",
+            "message": "Mobile device is registered for notifications",
+            "user": user,
+            "employee": employee.name if employee else None,
+            "employee_name": employee.employee_name if employee else None,
+            "is_registered": True,
+            "can_receive_notifications": token_valid and is_recent,
+            "device_type": device.device_type,
+            "last_active": str(device.last_active) if device.last_active else None,
+            "token_preview": f"{device.fcm_token[:20]}...{device.fcm_token[-10:]}" if device.fcm_token else None,
+            "token_length": len(device.fcm_token) if device.fcm_token else 0,
+            "token_looks_valid": token_valid,
+            "recently_active": is_recent,
+            "troubleshooting": [] if (token_valid and is_recent) else [
+                "Token may be stale - try logging out and back in",
+                "Check if notifications are enabled in device settings"
+            ]
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Get Notification Status Error: {str(e)}", "Notification Status")
+        return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist(allow_guest=False)
+def test_notification():
+    """Send a test notification to the current user's device.
+    
+    Use this to verify notifications are working for a specific user.
+    """
+    try:
+        user = frappe.session.user
+        
+        # Get user's FCM token
+        device = frappe.db.get_value(
+            "Mobile Device", 
+            {"user": user}, 
+            ["fcm_token", "device_type"],
+            as_dict=True
+        )
+        
+        if not device or not device.fcm_token:
+            return {
+                "status": "error",
+                "message": "No FCM token registered for this user. Please log in to the mobile app first."
+            }
+        
+        # Send test notification
+        title = "Test Notification"
+        body = f"This is a test notification sent at {now_datetime().strftime('%H:%M:%S')}"
+        
+        result = send_fcm_notification(
+            [device.fcm_token], 
+            title, 
+            body, 
+            {"type": "test", "user": user},
+            "test_notification"
+        )
+        
+        return {
+            "status": "success" if result.get("success_count", 0) > 0 else "failed",
+            "message": "Test notification sent" if result.get("success_count", 0) > 0 else "Failed to send notification",
+            "device_type": device.device_type,
+            "fcm_result": result
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Test Notification Error: {str(e)}", "Test Notification")
+        return {"status": "error", "message": str(e)}
 
 
 def send_fcm_notification(tokens, title, body, data=None, notification_tag=None):
@@ -6530,6 +7841,107 @@ def get_employee_tokens(employees):
     
     # Filter out None/empty tokens
     return [t for t in tokens if t]
+
+
+@frappe.whitelist(allow_guest=False)
+def get_notification_diagnostics():
+    """Get comprehensive notification system diagnostics (Admin only).
+    
+    Returns detailed information about:
+    - Total employees vs registered devices
+    - Employees without FCM tokens
+    - Stale/inactive devices
+    - Recent notification delivery stats
+    """
+    try:
+        # Check admin permission
+        if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager"]):
+            frappe.throw(_("Only System Manager or HR Manager can access diagnostics"))
+        
+        from datetime import datetime, timedelta
+        
+        # Get all active employees with user_id
+        active_employees = frappe.get_all(
+            "Employee",
+            filters={"status": "Active", "user_id": ["is", "set"]},
+            fields=["name", "employee_name", "user_id", "department"]
+        )
+        
+        # Get all mobile devices
+        mobile_devices = frappe.get_all(
+            "Mobile Device",
+            fields=["name", "user", "fcm_token", "device_type", "last_active"]
+        )
+        
+        # Create lookup sets
+        registered_users = {d.user for d in mobile_devices if d.user}
+        
+        # Find employees without devices
+        employees_without_device = []
+        for emp in active_employees:
+            if emp.user_id not in registered_users:
+                employees_without_device.append({
+                    "employee": emp.name,
+                    "employee_name": emp.employee_name,
+                    "user_id": emp.user_id,
+                    "department": emp.department
+                })
+        
+        # Find stale devices (inactive > 30 days)
+        cutoff_30_days = datetime.now() - timedelta(days=30)
+        cutoff_7_days = datetime.now() - timedelta(days=7)
+        
+        stale_devices = []
+        inactive_devices = []
+        for d in mobile_devices:
+            if d.last_active:
+                if d.last_active < cutoff_30_days:
+                    stale_devices.append({
+                        "user": d.user,
+                        "last_active": str(d.last_active),
+                        "days_inactive": (datetime.now() - d.last_active).days
+                    })
+                elif d.last_active < cutoff_7_days:
+                    inactive_devices.append({
+                        "user": d.user,
+                        "last_active": str(d.last_active),
+                        "days_inactive": (datetime.now() - d.last_active).days
+                    })
+        
+        # Check for invalid tokens (too short)
+        invalid_tokens = []
+        for d in mobile_devices:
+            if d.fcm_token and len(d.fcm_token) < 100:
+                invalid_tokens.append({
+                    "user": d.user,
+                    "token_length": len(d.fcm_token)
+                })
+        
+        return {
+            "status": "success",
+            "summary": {
+                "total_active_employees": len(active_employees),
+                "total_registered_devices": len(mobile_devices),
+                "employees_without_device": len(employees_without_device),
+                "stale_devices_30_days": len(stale_devices),
+                "inactive_devices_7_days": len(inactive_devices),
+                "invalid_tokens": len(invalid_tokens),
+                "coverage_percentage": round((len(mobile_devices) / len(active_employees) * 100), 1) if active_employees else 0
+            },
+            "employees_without_device": employees_without_device,
+            "stale_devices": stale_devices,
+            "inactive_devices": inactive_devices,
+            "invalid_tokens": invalid_tokens,
+            "recommendations": [
+                f"Request {len(employees_without_device)} employees to install/login to the mobile app" if employees_without_device else None,
+                f"Consider cleaning up {len(stale_devices)} stale device records" if stale_devices else None,
+                f"Check {len(invalid_tokens)} devices with potentially invalid tokens" if invalid_tokens else None,
+            ]
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Notification Diagnostics Error: {str(e)}", "Diagnostics")
+        return {"status": "error", "message": str(e)}
 
 
 @frappe.whitelist(allow_guest=False)
@@ -8040,86 +9452,40 @@ def update_notification_settings(settings):
 # NOTIFICATION SCHEDULER
 # ============================================================================
 
-def send_project_log_reminders():
-    """Send hourly project log reminders during office hours (10 AM - 7 PM)."""
+def is_employee_on_leave(employee_id, date):
+    """Check if an employee has approved leave on a specific date."""
     try:
-        import datetime
-        current_time = datetime.datetime.now()
-        current_hour = current_time.hour
-        
-        # Only send during office hours (10 AM to 7 PM) on weekdays
-        if current_hour < 10 or current_hour > 19:
-            return
-        
-        # Check if it's a weekday (Monday=0, Sunday=6)
-        if current_time.weekday() > 4:  # Saturday=5, Sunday=6
-            return
-        
-        # Get all active employees with project assignments
-        project_employees = frappe.db.sql("""
-            SELECT DISTINCT e.name, e.employee_name, e.user_id
-            FROM `tabEmployee` e
-            WHERE e.status = 'Active' 
-            AND e.user_id IS NOT NULL
-            AND e.user_id != ''
-            AND EXISTS (
-                SELECT 1 FROM `tabProject Member` pm
-                WHERE pm.employee = e.name
-            )
-        """, as_dict=True)
-        
-        if not project_employees:
-            frappe.log_error("No employees with project assignments found", "Project Reminder")
-            return
-        
-        # Get FCM tokens using Mobile Device table
-        tokens = []
-        for emp in project_employees:
-            if emp.user_id:
-                emp_tokens = frappe.get_all("Mobile Device", 
-                    filters={"user": emp.user_id}, 
-                    pluck="fcm_token"
-                )
-                tokens.extend([t for t in emp_tokens if t])  # Filter out None/empty tokens
-        
-        if tokens:
-            title = "Project Log Reminder"
-            message = f"Time to log your project activities! Don't forget to record what you've accomplished this hour."
-            
-            response = send_fcm_notification(tokens, title, message)
-            frappe.log_error(f"✅ Project reminder sent to {len(tokens)} devices at {current_time}", "Project Reminder")
-        else:
-            frappe.log_error(f"No FCM tokens found for {len(project_employees)} project employees", "Project Reminder")
-            
-    except Exception as e:
-        frappe.log_error(f"Project Log Reminder Error: {str(e)}", "Notification Scheduler")
+        leave_exists = frappe.db.exists("Leave Application", {
+            "employee": employee_id,
+            "status": "Approved",
+            "docstatus": 1,
+            "from_date": ["<=", date],
+            "to_date": [">=", date]
+        })
+        return bool(leave_exists)
+    except Exception:
+        return False
 
 
 def send_checkin_reminder():
-    """Send morning check-in reminder (9:30 AM)."""
+    """Send morning check-in reminder at 10:00 AM only on working days.
+    
+    Excludes:
+    - Weekends (Saturday, Sunday)
+    - Employees on holiday
+    - Employees on approved leave
+    """
     try:
         import datetime
         current_time = datetime.datetime.now()
         today = current_time.date()
         
-        # Check if it's a weekday
-        if current_time.weekday() > 4:
-            return
-        
-        # Check if it's a holiday
-        holiday_lists = frappe.get_all("Holiday List", pluck="name")
-        is_holiday = False
-        
-        for holiday_list in holiday_lists:
-            if frappe.db.exists("Holiday", {"parent": holiday_list, "holiday_date": today}):
-                is_holiday = True
-                break
-        
-        if is_holiday:
+        # Check if it's a weekday (Monday=0, Sunday=6)
+        if current_time.weekday() > 4:  # Saturday=5, Sunday=6
+            frappe.log_error("Skipping check-in reminder - Weekend", "Check-in Reminder")
             return
         
         # Get employees who haven't checked in yet
-        # Note: Removed custom field checks that may not exist in all installations
         employees_not_checked_in = frappe.db.sql("""
             SELECT e.name, e.employee_name, e.user_id
             FROM `tabEmployee` e
@@ -8138,47 +9504,67 @@ def send_checkin_reminder():
             frappe.log_error(f"No employees need check-in reminder. All {frappe.db.count('Employee', {'status': 'Active'})} active employees have already checked in.", "Check-in Reminder")
             return
         
-        frappe.log_error(f"Found {len(employees_not_checked_in)} employees without check-in: {[e.employee_name for e in employees_not_checked_in]}", "Check-in Reminder")
-        
-        # Get FCM tokens from Mobile Device table using user_id directly from query
+        # Filter out employees who are on holiday or leave, and get FCM tokens
         tokens = []
+        employees_notified = []
+        employees_on_holiday = []
+        employees_on_leave = []
         
         for emp in employees_not_checked_in:
+            # Check if employee is on holiday today
+            if is_employee_on_holiday(emp.name, today):
+                employees_on_holiday.append(emp.employee_name)
+                continue
+            
+            # Check if employee is on approved leave today
+            if is_employee_on_leave(emp.name, today):
+                employees_on_leave.append(emp.employee_name)
+                continue
+            
             if emp.user_id:
                 emp_tokens = frappe.get_all("Mobile Device", 
                     filters={"user": emp.user_id}, 
                     pluck="fcm_token"
                 )
-                tokens.extend([t for t in emp_tokens if t])  # Filter out None/empty tokens
+                valid_tokens = [t for t in emp_tokens if t]
+                if valid_tokens:
+                    tokens.extend(valid_tokens)
+                    employees_notified.append(emp.employee_name)
         
-        frappe.log_error(f"Total FCM tokens collected: {len(tokens)}", "Check-in Reminder")
+        frappe.log_error(f"Check-in reminder: {len(employees_not_checked_in)} without check-in, {len(employees_on_holiday)} on holiday, {len(employees_on_leave)} on leave, {len(employees_notified)} to notify", "Check-in Reminder")
         
         if tokens:
             title = "Check-in Reminder"
             message = "Good morning! Don't forget to check in when you arrive at the office."
             
             response = send_fcm_notification(tokens, title, message)
-            frappe.log_error(f"✅ Check-in reminder sent to {len(tokens)} devices. Response: {response}", "Attendance Reminder")
+            frappe.log_error(f"✅ Check-in reminder sent to {len(tokens)} devices for {len(employees_notified)} employees.", "Attendance Reminder")
         else:
-            frappe.log_error("No FCM tokens found for employees without check-in", "Check-in Reminder")
+            frappe.log_error("No FCM tokens found for eligible employees (excluding holidays and leaves)", "Check-in Reminder")
             
     except Exception as e:
         frappe.log_error(f"Check-in Reminder Error: {str(e)}", "Notification Scheduler")
 
 
 def send_checkout_reminder():
-    """Send evening check-out reminder (6:30 PM)."""
+    """Send evening check-out reminder at 7:00 PM only on working days.
+    
+    Excludes:
+    - Weekends (Saturday, Sunday)
+    - Employees on holiday
+    - Employees on approved leave
+    """
     try:
         import datetime
         current_time = datetime.datetime.now()
         today = current_time.date()
         
-        # Check if it's a weekday
-        if current_time.weekday() > 4:
+        # Check if it's a weekday (Monday=0, Sunday=6)
+        if current_time.weekday() > 4:  # Saturday=5, Sunday=6
+            frappe.log_error("Skipping check-out reminder - Weekend", "Check-out Reminder")
             return
         
         # Get employees who checked in but haven't checked out
-        # Note: Removed custom field checks that may not exist in all installations
         employees_need_checkout = frappe.db.sql("""
             SELECT e.name, e.employee_name, e.user_id, a.name as attendance_id
             FROM `tabEmployee` e
@@ -8196,23 +9582,43 @@ def send_checkout_reminder():
             frappe.log_error("No employees found for check-out reminder", "Check-out Reminder")
             return
         
-        # Get FCM tokens from Mobile Device table using user_id directly from query
+        # Filter out employees who are on holiday or leave, and get FCM tokens
         tokens = []
+        employees_notified = []
+        employees_on_holiday = []
+        employees_on_leave = []
         
         for emp in employees_need_checkout:
+            # Check if employee is on holiday today
+            if is_employee_on_holiday(emp.name, today):
+                employees_on_holiday.append(emp.employee_name)
+                continue
+            
+            # Check if employee is on approved leave today
+            if is_employee_on_leave(emp.name, today):
+                employees_on_leave.append(emp.employee_name)
+                continue
+            
             if emp.user_id:
                 emp_tokens = frappe.get_all("Mobile Device", 
                     filters={"user": emp.user_id}, 
                     pluck="fcm_token"
                 )
-                tokens.extend([t for t in emp_tokens if t])  # Filter out None/empty tokens
+                valid_tokens = [t for t in emp_tokens if t]
+                if valid_tokens:
+                    tokens.extend(valid_tokens)
+                    employees_notified.append(emp.employee_name)
+        
+        frappe.log_error(f"Check-out reminder: {len(employees_need_checkout)} need checkout, {len(employees_on_holiday)} on holiday, {len(employees_on_leave)} on leave, {len(employees_notified)} to notify", "Check-out Reminder")
         
         if tokens:
             title = "Check-out Reminder"
             message = "Don't forget to check out before leaving the office!"
             
             response = send_fcm_notification(tokens, title, message)
-            frappe.log_error(f"Check-out reminder sent to {len(tokens)} devices", "Attendance Reminder")
+            frappe.log_error(f"✅ Check-out reminder sent to {len(tokens)} devices for {len(employees_notified)} employees.", "Attendance Reminder")
+        else:
+            frappe.log_error("No FCM tokens found for eligible employees (excluding holidays and leaves)", "Check-out Reminder")
             
     except Exception as e:
         frappe.log_error(f"Check-out Reminder Error: {str(e)}", "Notification Scheduler")
@@ -8226,6 +9632,92 @@ def send_attendance_reminders():
         pass
     except Exception as e:
         frappe.log_error(f"Daily Attendance Reminder Error: {str(e)}", "Notification Scheduler")
+
+
+def send_work_log_reminder():
+    """Send hourly work log reminders during office hours (10 AM - 7 PM) only on working days.
+    
+    This reminder is sent to all employees who have checked in today.
+    
+    Excludes:
+    - Weekends (Saturday, Sunday)
+    - Outside office hours (before 10 AM or after 7 PM)
+    - Employees on holiday
+    - Employees on approved leave
+    """
+    try:
+        import datetime
+        current_time = datetime.datetime.now()
+        current_hour = current_time.hour
+        today = current_time.date()
+        
+        # Only send during office hours (10 AM to 7 PM)
+        if current_hour < 10 or current_hour > 19:
+            frappe.log_error(f"Skipping work log reminder - Outside office hours ({current_hour}:00)", "Work Log Reminder")
+            return
+        
+        # Check if it's a weekday (Monday=0, Sunday=6)
+        if current_time.weekday() > 4:  # Saturday=5, Sunday=6
+            frappe.log_error("Skipping work log reminder - Weekend", "Work Log Reminder")
+            return
+        
+        # Get all active employees who have checked in today
+        employees_checked_in = frappe.db.sql("""
+            SELECT DISTINCT e.name, e.employee_name, e.user_id
+            FROM `tabEmployee` e
+            JOIN `tabAttendance` a ON e.name = a.employee
+            WHERE e.status = 'Active'
+            AND e.user_id IS NOT NULL
+            AND e.user_id != ''
+            AND a.attendance_date = %s
+            AND a.docstatus != 2
+            AND a.in_time IS NOT NULL
+        """, (today,), as_dict=True)
+        
+        if not employees_checked_in:
+            frappe.log_error("No employees with check-in found for work log reminder", "Work Log Reminder")
+            return
+        
+        # Filter out employees who are on holiday or leave, and get FCM tokens
+        tokens = []
+        employees_notified = []
+        employees_on_holiday = []
+        employees_on_leave = []
+        
+        for emp in employees_checked_in:
+            # Check if employee is on holiday today
+            if is_employee_on_holiday(emp.name, today):
+                employees_on_holiday.append(emp.employee_name)
+                continue
+            
+            # Check if employee is on approved leave today
+            if is_employee_on_leave(emp.name, today):
+                employees_on_leave.append(emp.employee_name)
+                continue
+            
+            if emp.user_id:
+                emp_tokens = frappe.get_all("Mobile Device", 
+                    filters={"user": emp.user_id}, 
+                    pluck="fcm_token"
+                )
+                valid_tokens = [t for t in emp_tokens if t]
+                if valid_tokens:
+                    tokens.extend(valid_tokens)
+                    employees_notified.append(emp.employee_name)
+        
+        frappe.log_error(f"Work log reminder: {len(employees_checked_in)} checked in, {len(employees_on_holiday)} on holiday, {len(employees_on_leave)} on leave, {len(employees_notified)} to notify", "Work Log Reminder")
+        
+        if tokens:
+            title = "Work Log Reminder"
+            message = "Don't forget to log your work activities! Keep track of what you've accomplished this hour."
+            
+            response = send_fcm_notification(tokens, title, message)
+            frappe.log_error(f"✅ Work log reminder sent to {len(tokens)} devices for {len(employees_notified)} employees at {current_hour}:00", "Work Log Reminder")
+        else:
+            frappe.log_error("No FCM tokens found for eligible employees (excluding holidays and leaves)", "Work Log Reminder")
+            
+    except Exception as e:
+        frappe.log_error(f"Work Log Reminder Error: {str(e)}", "Notification Scheduler")
 
 
 # ============================================================================
@@ -9646,10 +11138,10 @@ def get_or_create_today_standup() -> dict:
 		
 		standup_date = getdate()
 		
-		# Try to get existing standup for today
+		# Try to get existing standup for today (exclude cancelled - docstatus=2)
 		existing_standup = frappe.db.get_value(
 			"Daily Standup",
-			{"standup_date": standup_date},
+			{"standup_date": standup_date, "docstatus": ["!=", 2]},
 			"name"
 		)
 		
@@ -9665,6 +11157,11 @@ def get_or_create_today_standup() -> dict:
 			standup.insert(ignore_permissions=True)
 			frappe.db.commit()
 		
+		# Get employee info
+		employee_info = frappe.get_value("Employee", current_employee, ["employee_name", "department"], as_dict=True)
+		employee_name = employee_info.employee_name if employee_info else None
+		department = employee_info.department if employee_info else None
+		
 		# Get employee's task for this standup
 		employee_task = None
 		if standup.standup_tasks:
@@ -9673,11 +11170,16 @@ def get_or_create_today_standup() -> dict:
 					employee_task = {
 						"idx": task.idx,
 						"employee": task.employee,
+						"employee_name": task.employee_name or employee_name,
+						"department": task.department if hasattr(task, 'department') else department,
 						"task_title": task.task_title,
 						"planned_output": task.planned_output,
+						"estimated_hours": task.estimated_hours if hasattr(task, 'estimated_hours') else None,
 						"actual_work_done": task.actual_work_done,
+						"actual_hours": task.actual_hours if hasattr(task, 'actual_hours') else None,
 						"completion_percentage": task.completion_percentage,
 						"task_status": task.task_status,
+						"blockers": task.blockers if hasattr(task, 'blockers') else None,
 						"carry_forward": task.carry_forward,
 						"next_working_date": str(task.next_working_date) if task.next_working_date else None,
 					}
@@ -9693,6 +11195,8 @@ def get_or_create_today_standup() -> dict:
 				"is_submitted": standup.docstatus == 1,  # Locked if submitted
 				"docstatus": standup.docstatus,
 				"remarks": standup.remarks,
+				"employee": current_employee,
+				"employee_name": employee_name,
 				"employee_task": employee_task,
 				"total_tasks": len(standup.standup_tasks) if standup.standup_tasks else 0,
 			},
@@ -9714,6 +11218,7 @@ def submit_employee_standup_task(
 	task_title: str,
 	planned_output: str,
 	completion_percentage: int = 0,
+	estimated_hours: float | None = None,
 ) -> dict:
 	"""
 	Employee submits their daily standup task (morning entry).
@@ -9724,6 +11229,7 @@ def submit_employee_standup_task(
 		task_title: Short title of the task
 		planned_output: What employee plans to complete today
 		completion_percentage: Initial completion % (optional, defaults to 0)
+		estimated_hours: Estimated hours to complete (optional)
 	
 	Returns:
 		Dict with task details and standup status
@@ -9733,6 +11239,9 @@ def submit_employee_standup_task(
 		current_employee = get_employee_by_user()
 		if not current_employee:
 			frappe.throw(_("No employee record found for current user"))
+		
+		# Get employee info
+		employee_info = frappe.get_value("Employee", current_employee, ["employee_name", "department"], as_dict=True)
 		
 		# Get standup
 		standup = frappe.get_doc("Daily Standup", standup_id)
@@ -9765,16 +11274,22 @@ def submit_employee_standup_task(
 			existing_task.task_title = task_title
 			existing_task.planned_output = planned_output
 			existing_task.completion_percentage = min(100, max(0, cint(completion_percentage)))
+			if estimated_hours is not None:
+				existing_task.estimated_hours = estimated_hours
 		else:
 			# Add new task
 			standup.append("standup_tasks", {
 				"employee": current_employee,
-				"employee_name": frappe.get_value("Employee", current_employee, "employee_name"),
+				"employee_name": employee_info.employee_name if employee_info else None,
+				"department": employee_info.department if employee_info else None,
 				"task_title": task_title,
 				"planned_output": planned_output,
+				"estimated_hours": estimated_hours,
 				"actual_work_done": "",
+				"actual_hours": None,
 				"completion_percentage": min(100, max(0, cint(completion_percentage))),
 				"task_status": "Draft",
+				"blockers": "",
 				"carry_forward": 0,
 				"next_working_date": None,
 			})
@@ -9783,7 +11298,8 @@ def submit_employee_standup_task(
 		standup.save(ignore_permissions=True)
 		frappe.db.commit()
 		
-		# Get updated task
+		# Get employee name and updated task
+		employee_name = frappe.get_value("Employee", current_employee, "employee_name")
 		employee_task = None
 		if standup.standup_tasks:
 			for task in standup.standup_tasks:
@@ -9791,6 +11307,7 @@ def submit_employee_standup_task(
 					employee_task = {
 						"idx": task.idx,
 						"employee": task.employee,
+						"employee_name": employee_name,
 						"task_title": task.task_title,
 						"planned_output": task.planned_output,
 						"actual_work_done": task.actual_work_done,
@@ -9808,6 +11325,7 @@ def submit_employee_standup_task(
 				"standup_id": standup.name,
 				"standup_date": str(standup.standup_date),
 				"employee": current_employee,
+				"employee_name": employee_name,
 				"employee_task": employee_task,
 				"total_tasks": len(standup.standup_tasks) if standup.standup_tasks else 0,
 			},
@@ -9826,6 +11344,8 @@ def update_employee_standup_task(
 	task_status: str = "Draft",
 	carry_forward: int = 0,
 	next_working_date: str | None = None,
+	actual_hours: float | None = None,
+	blockers: str | None = None,
 ) -> dict:
 	"""
 	Employee updates their standup task with actual work done (evening entry).
@@ -9834,9 +11354,11 @@ def update_employee_standup_task(
 		standup_id: Daily Standup ID
 		actual_work_done: What was actually completed
 		completion_percentage: Task progress (0-100)
-		task_status: Task status (Draft, Completed)
+		task_status: Task status (Draft, In Progress, Completed, Blocked)
 		carry_forward: 1 if task continues to next day, 0 otherwise
 		next_working_date: Date to continue (required if carry_forward=1)
+		actual_hours: Actual hours spent (optional)
+		blockers: Any blockers/impediments (optional)
 	
 	Returns:
 		Dict with updated task details
@@ -9861,9 +11383,9 @@ def update_employee_standup_task(
 		completion_percentage = min(100, max(0, cint(completion_percentage)))
 		
 		# Validate task status
-		valid_statuses = ["Draft", "Completed"]
+		valid_statuses = ["Draft", "In Progress", "Completed", "Blocked"]
 		if task_status not in valid_statuses:
-			frappe.throw(_("Invalid task status. Must be Draft or Completed"))
+			frappe.throw(_("Invalid task status. Must be Draft, In Progress, Completed, or Blocked"))
 		
 		# When completed, clear carry forward but keep the completion percentage as entered
 		if task_status == "Completed":
@@ -9885,6 +11407,10 @@ def update_employee_standup_task(
 					task.task_status = task_status
 					task.carry_forward = cint(carry_forward)
 					task.next_working_date = getdate(next_working_date) if next_working_date else None
+					if actual_hours is not None:
+						task.actual_hours = actual_hours
+					if blockers is not None:
+						task.blockers = blockers
 					task_found = True
 					break
 		
@@ -9895,6 +11421,9 @@ def update_employee_standup_task(
 		standup.save(ignore_permissions=True)
 		frappe.db.commit()
 		
+		# Get employee info
+		employee_info = frappe.get_value("Employee", current_employee, ["employee_name", "department"], as_dict=True)
+		
 		# Get updated task
 		employee_task = None
 		if standup.standup_tasks:
@@ -9903,11 +11432,16 @@ def update_employee_standup_task(
 					employee_task = {
 						"idx": task.idx,
 						"employee": task.employee,
+						"employee_name": task.employee_name or (employee_info.employee_name if employee_info else None),
+						"department": task.department if hasattr(task, 'department') else (employee_info.department if employee_info else None),
 						"task_title": task.task_title,
 						"planned_output": task.planned_output,
+						"estimated_hours": task.estimated_hours if hasattr(task, 'estimated_hours') else None,
 						"actual_work_done": task.actual_work_done,
+						"actual_hours": task.actual_hours if hasattr(task, 'actual_hours') else None,
 						"completion_percentage": task.completion_percentage,
 						"task_status": task.task_status,
+						"blockers": task.blockers if hasattr(task, 'blockers') else None,
 						"carry_forward": task.carry_forward,
 						"next_working_date": str(task.next_working_date) if task.next_working_date else None,
 					}
@@ -9920,6 +11454,7 @@ def update_employee_standup_task(
 				"standup_id": standup.name,
 				"standup_date": str(standup.standup_date),
 				"employee": current_employee,
+				"employee_name": employee_info.employee_name if employee_info else None,
 				"employee_task": employee_task,
 			},
 		}
@@ -9961,11 +11496,15 @@ def get_employee_standup_history(
 		if not to_date:
 			to_date = getdate()
 		
-		# Get all standups in date range
+		# Get employee name
+		employee_name = frappe.get_value("Employee", employee, "employee_name")
+		
+		# Get all standups in date range (exclude cancelled)
 		standups = frappe.get_all(
 			"Daily Standup",
 			filters={
 				"standup_date": ["between", [from_date, to_date]],
+				"docstatus": ["!=", 2],  # Exclude cancelled standups
 			},
 			fields=["name", "standup_date", "standup_time", "remarks", "docstatus"],
 			order_by="standup_date desc",
@@ -9985,6 +11524,7 @@ def get_employee_standup_history(
 						employee_task = {
 							"idx": task.idx,
 							"employee": task.employee,
+							"employee_name": employee_name,
 							"task_title": task.task_title,
 							"planned_output": task.planned_output,
 							"actual_work_done": task.actual_work_done,
@@ -10010,6 +11550,7 @@ def get_employee_standup_history(
 			"status": "success",
 			"data": {
 				"employee": employee,
+				"employee_name": employee_name,
 				"from_date": str(from_date),
 				"to_date": str(to_date),
 				"standups": standup_list,
@@ -10552,12 +12093,15 @@ def edit_employee_standup_task(
                         if task_status == "Completed":
                             task.carry_forward = 0
                             task.next_working_date = None
-                    if carry_forward is not None:
-                        task.carry_forward = cint(carry_forward)
-                    if carry_forward and not next_working_date:
-                        frappe.throw(_("Next working date is required when carry_forward is enabled"))
-                    if next_working_date is not None:
-                        task.next_working_date = getdate(next_working_date) if next_working_date else None
+                    # Handle carry forward logic - only if status is not "Completed"
+                    if task.task_status != "Completed":
+                        if carry_forward is not None:
+                            task.carry_forward = cint(carry_forward)
+                        # Validate: if carry_forward is enabled, next_working_date is required
+                        if task.carry_forward and not next_working_date and not task.next_working_date:
+                            frappe.throw(_("Next working date is required when carry_forward is enabled"))
+                        if next_working_date is not None:
+                            task.next_working_date = getdate(next_working_date) if next_working_date else None
                     task_found = True
                     break
 
@@ -10568,6 +12112,9 @@ def edit_employee_standup_task(
         frappe.db.commit()
 
         # Get updated task
+        # Get employee name
+        employee_name = frappe.get_value("Employee", current_employee, "employee_name")
+        
         employee_task = None
         if standup.standup_tasks:
             for task in standup.standup_tasks:
@@ -10575,6 +12122,7 @@ def edit_employee_standup_task(
                     employee_task = {
                         "idx": task.idx,
                         "employee": task.employee,
+                        "employee_name": employee_name,
                         "task_title": task.task_title,
                         "planned_output": task.planned_output,
                         "actual_work_done": task.actual_work_done,
@@ -10592,10 +12140,134 @@ def edit_employee_standup_task(
                 "standup_id": standup.name,
                 "standup_date": str(standup.standup_date),
                 "employee": current_employee,
+                "employee_name": employee_name,
                 "employee_task": employee_task,
             },
         }
 
     except Exception as e:
-        frappe.log_error(f"Edit Standup Task Error: {str(e)}\n{frappe.get_traceback()}", "Edit Standup Task")
+        frappe.log_error(f"Edit Standup Task Error: {str(e)}\\n{frappe.get_traceback()}", "Edit Standup Task")
         frappe.throw(_("Failed to edit standup task: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_carry_forward_tasks() -> dict:
+    """
+    Get tasks marked for carry forward to today for the current employee.
+    Useful for pre-populating today's standup with yesterday's incomplete tasks.
+    
+    Returns:
+        Dict with carry forward tasks from previous standups
+    """
+    try:
+        current_employee = get_employee_by_user()
+        if not current_employee:
+            frappe.throw(_("No employee record found for current user"))
+        
+        today = getdate()
+        employee_name = frappe.get_value("Employee", current_employee, "employee_name")
+        
+        # Get recent standups (last 7 days) with carry_forward tasks for today
+        standups = frappe.get_all(
+            "Daily Standup",
+            filters={
+                "standup_date": ["<", today],
+                "docstatus": ["!=", 2],  # Exclude cancelled
+            },
+            fields=["name", "standup_date"],
+            order_by="standup_date desc",
+            limit=7,
+        )
+        
+        carry_forward_tasks = []
+        for standup in standups:
+            standup_doc = frappe.get_doc("Daily Standup", standup.name)
+            if standup_doc.standup_tasks:
+                for task in standup_doc.standup_tasks:
+                    # Check if this is a carry forward task for today
+                    if (task.employee == current_employee and 
+                        task.carry_forward == 1 and 
+                        task.next_working_date and
+                        getdate(task.next_working_date) == today):
+                        carry_forward_tasks.append({
+                            "source_standup_id": standup.name,
+                            "source_standup_date": str(standup.standup_date),
+                            "task_title": task.task_title,
+                            "planned_output": task.planned_output,
+                            "actual_work_done": task.actual_work_done,
+                            "completion_percentage": task.completion_percentage,
+                        })
+        
+        return {
+            "status": "success",
+            "data": {
+                "employee": current_employee,
+                "employee_name": employee_name,
+                "today": str(today),
+                "carry_forward_tasks": carry_forward_tasks,
+                "total_tasks": len(carry_forward_tasks),
+            },
+            "message": _("Carry forward tasks fetched successfully"),
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Get Carry Forward Tasks Error: {str(e)}\\n{frappe.get_traceback()}", "Carry Forward Tasks")
+        return {
+            "status": "error",
+            "message": str(e),
+            "data": None,
+        }
+
+
+@frappe.whitelist()
+def delete_employee_standup_task(standup_id: str) -> dict:
+    """
+    Allow employee to delete their own task from a draft standup.
+    
+    Args:
+        standup_id: Daily Standup ID
+    
+    Returns:
+        Dict with deletion status
+    """
+    try:
+        current_employee = get_employee_by_user()
+        if not current_employee:
+            frappe.throw(_("No employee record found for current user"))
+
+        standup = frappe.get_doc("Daily Standup", standup_id)
+        if standup.docstatus == 1:
+            frappe.throw(_("This standup is already submitted. Cannot delete task."))
+        
+        if standup.docstatus == 2:
+            frappe.throw(_("This standup is cancelled."))
+
+        # Find and remove employee's task
+        task_found = False
+        if standup.standup_tasks:
+            for idx, task in enumerate(standup.standup_tasks):
+                if task.employee == current_employee:
+                    standup.standup_tasks.pop(idx)
+                    task_found = True
+                    break
+
+        if not task_found:
+            frappe.throw(_("Employee does not have a task in this standup"))
+
+        standup.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        return {
+            "status": "success",
+            "message": _("Standup task deleted successfully"),
+            "data": {
+                "standup_id": standup.name,
+                "standup_date": str(standup.standup_date),
+                "employee": current_employee,
+                "remaining_tasks": len(standup.standup_tasks),
+            },
+        }
+
+    except Exception as e:
+        frappe.log_error(f"Delete Standup Task Error: {str(e)}\\n{frappe.get_traceback()}", "Delete Standup Task")
+        frappe.throw(_("Failed to delete standup task: {0}").format(str(e)))

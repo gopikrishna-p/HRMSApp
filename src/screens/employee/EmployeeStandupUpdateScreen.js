@@ -17,10 +17,15 @@ const EmployeeStandupUpdateScreen = ({ navigation }) => {
   const [taskStatus, setTaskStatus] = useState('Draft');
   const [carryForward, setCarryForward] = useState(false);
   const [nextWorkingDate, setNextWorkingDate] = useState('');
+  const [actualHours, setActualHours] = useState('');
+  const [blockers, setBlockers] = useState('');
   const [updated, setUpdated] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
+
+  // Task status options based on backend changes
+  const TASK_STATUS_OPTIONS = ['Draft', 'In Progress', 'Completed', 'Blocked'];
 
   const fetchTodayStandup = useCallback(async () => {
     setLoading(true);
@@ -35,6 +40,8 @@ const EmployeeStandupUpdateScreen = ({ navigation }) => {
         setTaskStatus(task.task_status || 'Draft');
         setCarryForward(task.carry_forward === 1);
         setNextWorkingDate(task.next_working_date || '');
+        setActualHours(task.actual_hours?.toString() || '');
+        setBlockers(task.blockers || '');
       }
     } catch (error) {
       console.error('Error:', error);
@@ -69,6 +76,12 @@ const EmployeeStandupUpdateScreen = ({ navigation }) => {
       return;
     }
 
+    // Validate blockers if status is Blocked
+    if (taskStatus === 'Blocked' && !blockers.trim()) {
+      Alert.alert('Validation', 'Please describe the blockers when status is Blocked');
+      return;
+    }
+
     setLoading(true);
     try {
       await StandupService.updateEmployeeStandupTask(
@@ -77,7 +90,9 @@ const EmployeeStandupUpdateScreen = ({ navigation }) => {
         completionPercentage,
         taskStatus,
         carryForward ? 1 : 0,
-        nextWorkingDate || null
+        nextWorkingDate || null,
+        parseFloat(actualHours) || 0,
+        blockers.trim()
       );
 
       Alert.alert('Success', 'Task updated successfully!');
@@ -229,22 +244,67 @@ const EmployeeStandupUpdateScreen = ({ navigation }) => {
           <View style={styles.statusSection}>
             <Text style={styles.label}>Task Status</Text>
             <View style={styles.statusOptions}>
-              {['Draft/In Progress', 'Completed'].map((status) => (
+              {TASK_STATUS_OPTIONS.map((status) => (
                 <Button
                   key={status}
                   mode={taskStatus === status ? 'contained' : 'outlined'}
                   onPress={() => setTaskStatus(status)}
                   style={[
                     styles.statusButton,
-                    taskStatus === status && { borderColor: custom.palette.primary }
+                    taskStatus === status && { 
+                      borderColor: status === 'Blocked' ? '#EF4444' : 
+                                   status === 'Completed' ? '#10B981' : 
+                                   status === 'In Progress' ? '#3B82F6' : custom.palette.primary,
+                      backgroundColor: status === 'Blocked' ? '#EF4444' : 
+                                       status === 'Completed' ? '#10B981' : 
+                                       status === 'In Progress' ? '#3B82F6' : custom.palette.primary
+                    }
                   ]}
-                  labelStyle={{ fontSize: 12 }}
+                  labelStyle={{ fontSize: 11 }}
                   compact
                 >
                   {status}
                 </Button>
               ))}
             </View>
+          </View>
+
+          {/* Actual Hours */}
+          <View style={styles.actualHoursSection}>
+            <Text style={styles.label}>Actual Hours Spent</Text>
+            <TextInput
+              value={actualHours}
+              onChangeText={setActualHours}
+              placeholder="e.g., 4.5"
+              mode="outlined"
+              keyboardType="decimal-pad"
+              style={styles.hoursInput}
+              editable={!loading}
+              outlineColor="#E5E7EB"
+              activeOutlineColor={custom.palette.primary}
+            />
+          </View>
+
+          {/* Blockers Section */}
+          <View style={styles.blockersInputSection}>
+            <View style={styles.blockersHeader}>
+              <Icon name="exclamation-triangle" size={16} color="#EF4444" />
+              <Text style={[styles.label, { marginLeft: 8, color: '#EF4444' }]}>
+                Blockers / Impediments {taskStatus === 'Blocked' ? '(Required)' : '(Optional)'}
+              </Text>
+            </View>
+            <TextInput
+              value={blockers}
+              onChangeText={setBlockers}
+              placeholder="Describe any blockers or challenges faced..."
+              mode="outlined"
+              multiline
+              numberOfLines={3}
+              style={[styles.input, { textAlignVertical: 'top' }]}
+              editable={!loading}
+              outlineColor={taskStatus === 'Blocked' ? '#EF4444' : '#E5E7EB'}
+              activeOutlineColor={taskStatus === 'Blocked' ? '#EF4444' : custom.palette.primary}
+            />
           </View>
 
           {/* Carry Forward Option */}
@@ -554,6 +614,29 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#374151',
     flex: 1,
+  },
+  // Actual Hours Section
+  actualHoursSection: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  hoursInput: {
+    marginTop: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  // Blockers Section
+  blockersInputSection: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  blockersHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
   },
 });
 

@@ -16,26 +16,30 @@ const EmployeeStandupScreen = ({ navigation }) => {
   const [todayStandup, setTodayStandup] = useState(null);
   const [taskTitle, setTaskTitle] = useState('');
   const [plannedOutput, setPlannedOutput] = useState('');
+  const [estimatedHours, setEstimatedHours] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const [carryForwardTasks, setCarryForwardTasks] = useState([]);
 
   const fetchTodayStandup = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await StandupService.getOrCreateTodayStandup();
-      console.log('✅ Standup fetched:', result);
-      console.log('📊 Result structure:', {
-        hasResult: !!result,
-        hasData: !!result?.data,
-        standup_id: result?.standup_id,
-        is_submitted: result?.is_submitted,
-        total_tasks: result?.total_tasks,
-        employee_task: !!result?.employee_task,
-      });
+      // Fetch standup and carry forward tasks in parallel
+      const [standupResult, carryForwardResult] = await Promise.all([
+        StandupService.getOrCreateTodayStandup(),
+        StandupService.getCarryForwardTasks().catch(() => ({ data: [] })),
+      ]);
+
+      console.log('✅ Standup fetched:', standupResult);
+      console.log('📋 Carry forward tasks:', carryForwardResult);
       
       // Handle the response - it might have .data nested
-      const standupData = result?.data || result;
+      const standupData = standupResult?.data || standupResult;
       setTodayStandup(standupData);
       setSubmitted(standupData?.is_submitted || false);
+
+      // Set carry forward tasks
+      const cfTasks = carryForwardResult?.data || [];
+      setCarryForwardTasks(cfTasks);
     } catch (error) {
       console.error('❌ Error fetching standup:', error);
       Alert.alert('Error', 'Failed to load standup: ' + (error.message || 'Unknown error'));
@@ -71,12 +75,14 @@ const EmployeeStandupScreen = ({ navigation }) => {
         todayStandup.standup_id,
         taskTitle.trim(),
         plannedOutput.trim(),
-        0
+        0,
+        parseFloat(estimatedHours) || 0
       );
 
       Alert.alert('Success', 'Standup task submitted for today!');
       setTaskTitle('');
       setPlannedOutput('');
+      setEstimatedHours('');
       await fetchTodayStandup();
     } catch (error) {
       console.error('Error:', error);
@@ -84,6 +90,14 @@ const EmployeeStandupScreen = ({ navigation }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Handle using a carry forward task
+  const handleUseCarryForwardTask = (task) => {
+    setTaskTitle(task.task_title);
+    setPlannedOutput(task.planned_output || `Continuing: ${task.task_title}`);
+    setEstimatedHours(task.estimated_hours?.toString() || '');
+    Alert.alert('Task Loaded', 'The carried forward task has been loaded. You can modify it before submitting.');
   };
 
   if (loading && !todayStandup) {
@@ -156,6 +170,36 @@ const EmployeeStandupScreen = ({ navigation }) => {
           </View>
         </View>
 
+        {/* Carry Forward Tasks Section */}
+        {!submitted && todayStandup && !todayStandup.employee_task && carryForwardTasks.length > 0 && (
+          <View style={styles.carryForwardSection}>
+            <View style={styles.sectionHeader}>
+              <Icon name="history" size={18} color="#F59E0B" />
+              <Text style={styles.sectionTitle}>Carried Forward Tasks</Text>
+            </View>
+            <Text style={styles.carryForwardHelp}>
+              These tasks were marked for carry forward. Tap to use as today's task.
+            </Text>
+            {carryForwardTasks.map((task, index) => (
+              <TouchableOpacity
+                key={index}
+                style={styles.carryForwardItem}
+                onPress={() => handleUseCarryForwardTask(task)}
+              >
+                <View style={styles.carryForwardContent}>
+                  <Icon name="arrow-right" size={14} color="#F59E0B" />
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text style={styles.carryForwardTitle} numberOfLines={1}>{task.task_title}</Text>
+                    <Text style={styles.carryForwardMeta}>
+                      {task.completion_percentage}% complete • From {formatDate(task.standup_date)}
+                    </Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
         {/* Form Section - Only show if not submitted and no task created yet */}
         {!submitted && todayStandup && !todayStandup.employee_task && (
           <View style={styles.formSection}>
@@ -190,6 +234,19 @@ const EmployeeStandupScreen = ({ navigation }) => {
               activeOutlineColor={custom.palette.primary}
             />
 
+            <TextInput
+              label="Estimated Hours (optional)"
+              value={estimatedHours}
+              onChangeText={setEstimatedHours}
+              placeholder="e.g., 4"
+              mode="outlined"
+              keyboardType="decimal-pad"
+              style={[styles.input, { marginTop: 12 }]}
+              editable={!loading}
+              outlineColor="#E5E7EB"
+              activeOutlineColor={custom.palette.primary}
+            />
+
             <Button
               mode="contained"
               onPress={handleSubmitTask}
@@ -212,6 +269,33 @@ const EmployeeStandupScreen = ({ navigation }) => {
             </View>
 
             <View style={styles.taskCard}>
+              {/* Task Status Badge */}
+              <View style={styles.taskStatusRow}>
+                <Chip
+                  icon={
+                    todayStandup.employee_task.task_status === 'Completed' ? 'check-circle' :
+                    todayStandup.employee_task.task_status === 'In Progress' ? 'clock' :
+                    todayStandup.employee_task.task_status === 'Blocked' ? 'alert-circle' : 'edit'
+                  }
+                  style={{
+                    backgroundColor: 
+                      todayStandup.employee_task.task_status === 'Completed' ? '#D1FAE5' :
+                      todayStandup.employee_task.task_status === 'In Progress' ? '#DBEAFE' :
+                      todayStandup.employee_task.task_status === 'Blocked' ? '#FEE2E2' : '#FEF3C7',
+                  }}
+                  textStyle={{
+                    color: 
+                      todayStandup.employee_task.task_status === 'Completed' ? '#065F46' :
+                      todayStandup.employee_task.task_status === 'In Progress' ? '#1E40AF' :
+                      todayStandup.employee_task.task_status === 'Blocked' ? '#991B1B' : '#92400E',
+                    fontWeight: '600',
+                    fontSize: 11,
+                  }}
+                >
+                  {todayStandup.employee_task.task_status || 'Draft'}
+                </Chip>
+              </View>
+
               <Text style={styles.taskLabel}>Task Title</Text>
               <Text style={styles.taskValue}>
                 {todayStandup.employee_task.task_title}
@@ -221,6 +305,36 @@ const EmployeeStandupScreen = ({ navigation }) => {
               <Text style={[styles.taskValue, { lineHeight: 20 }]}>
                 {todayStandup.employee_task.planned_output}
               </Text>
+
+              {/* Hours Row */}
+              <View style={styles.hoursRow}>
+                <View style={styles.hoursItem}>
+                  <Icon name="clock" size={14} color="#6B7280" />
+                  <Text style={styles.hoursLabel}>Est. Hours</Text>
+                  <Text style={styles.hoursValue}>
+                    {todayStandup.employee_task.estimated_hours || 0}h
+                  </Text>
+                </View>
+                <View style={styles.hoursItem}>
+                  <Icon name="hourglass-half" size={14} color="#6B7280" />
+                  <Text style={styles.hoursLabel}>Actual Hours</Text>
+                  <Text style={styles.hoursValue}>
+                    {todayStandup.employee_task.actual_hours || 0}h
+                  </Text>
+                </View>
+              </View>
+
+              {/* Blockers Section */}
+              {todayStandup.employee_task.blockers && (
+                <View style={styles.blockersSection}>
+                  <Text style={[styles.taskLabel, { color: '#DC2626' }]}>
+                    <Icon name="exclamation-triangle" size={12} color="#DC2626" /> Blockers
+                  </Text>
+                  <Text style={styles.blockersText}>
+                    {todayStandup.employee_task.blockers}
+                  </Text>
+                </View>
+              )}
 
               <View style={styles.progressContainer}>
                 <View style={styles.progressHeader}>
@@ -492,6 +606,86 @@ const styles = StyleSheet.create({
   viewHistoryBtn: {
     marginTop: 16,
     borderColor: '#6366F1',
+  },
+  // Carry Forward Section Styles
+  carryForwardSection: {
+    backgroundColor: '#FFFBEB',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  carryForwardHelp: {
+    fontSize: 12,
+    color: '#92400E',
+    marginBottom: 12,
+  },
+  carryForwardItem: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  carryForwardContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  carryForwardTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  carryForwardMeta: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  // Task Status Row
+  taskStatusRow: {
+    marginBottom: 12,
+  },
+  // Hours Row Styles
+  hoursRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  hoursItem: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  hoursLabel: {
+    fontSize: 11,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  hoursValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#374151',
+  },
+  // Blockers Section
+  blockersSection: {
+    marginTop: 12,
+    padding: 10,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#DC2626',
+  },
+  blockersText: {
+    fontSize: 13,
+    color: '#991B1B',
+    marginTop: 4,
+    lineHeight: 18,
   },
 });
 

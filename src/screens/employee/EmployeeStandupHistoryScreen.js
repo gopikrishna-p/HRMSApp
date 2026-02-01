@@ -77,6 +77,16 @@ const EmployeeStandupHistoryScreen = ({ navigation }) => {
     const task = item.employee_task;
     const isSubmitted = item.is_submitted;
     const canEdit = !isSubmitted && !!task;
+    const isBlocked = task?.task_status === 'Blocked';
+
+    const getStatusColor = (status) => {
+      switch (status) {
+        case 'Completed': return { bg: '#D1FAE5', text: '#065F46' };
+        case 'In Progress': return { bg: '#DBEAFE', text: '#1E40AF' };
+        case 'Blocked': return { bg: '#FEE2E2', text: '#991B1B' };
+        default: return { bg: '#FEF3C7', text: '#92400E' };
+      }
+    };
 
     return (
       <View style={styles.itemCard}>
@@ -103,10 +113,32 @@ const EmployeeStandupHistoryScreen = ({ navigation }) => {
           <View style={styles.taskContent}>
             <Text style={styles.taskTitle} numberOfLines={2}>{task.task_title}</Text>
 
+            {/* Hours Display */}
+            <View style={styles.hoursDisplay}>
+              <View style={styles.hourItem}>
+                <Icon name="clock" size={12} color="#6B7280" />
+                <Text style={styles.hourLabel}>Est: {task.estimated_hours || 0}h</Text>
+              </View>
+              <View style={styles.hourItem}>
+                <Icon name="hourglass-half" size={12} color="#6B7280" />
+                <Text style={styles.hourLabel}>Actual: {task.actual_hours || 0}h</Text>
+              </View>
+            </View>
+
             {task.actual_work_done && (
               <View style={styles.section}>
                 <Text style={styles.label}>✅ Actual Work</Text>
                 <Text style={styles.text} numberOfLines={2}>{task.actual_work_done}</Text>
+              </View>
+            )}
+
+            {/* Blockers Display */}
+            {(task.blockers || isBlocked) && (
+              <View style={styles.blockersDisplayBox}>
+                <Icon name="exclamation-triangle" size={12} color="#DC2626" />
+                <Text style={styles.blockersDisplayText} numberOfLines={2}>
+                  {task.blockers || 'Task is blocked'}
+                </Text>
               </View>
             )}
 
@@ -120,12 +152,12 @@ const EmployeeStandupHistoryScreen = ({ navigation }) => {
               <View style={styles.statItem}>
                 <Text style={styles.statLabel}>Status</Text>
                 <Chip
-                  style={{ backgroundColor: task.task_status === 'Completed' ? '#D1FAE5' : '#FEF3C7' }}
-                  textStyle={{ color: task.task_status === 'Completed' ? '#065F46' : '#92400E', fontSize: 10, fontWeight: '600' }}
+                  style={{ backgroundColor: getStatusColor(task.task_status).bg }}
+                  textStyle={{ color: getStatusColor(task.task_status).text, fontSize: 10, fontWeight: '600' }}
                   size="small"
                   mode="flat"
                 >
-                  {task.task_status}
+                  {task.task_status || 'Draft'}
                 </Chip>
               </View>
             </View>
@@ -506,6 +538,47 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     textAlign: 'center',
     lineHeight: 20,
+  },
+  // Hours Display Styles
+  hoursDisplay: {
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+    gap: 16,
+    marginTop: 8,
+    marginBottom: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 6,
+  },
+  hourItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  hourLabel: {
+    fontSize: 11,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  // Blockers Display
+  blockersDisplayBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FEF2F2',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    marginTop: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#DC2626',
+    gap: 6,
+  },
+  blockersDisplayText: {
+    fontSize: 11,
+    color: '#991B1B',
+    flex: 1,
+    lineHeight: 16,
   },
 });
 

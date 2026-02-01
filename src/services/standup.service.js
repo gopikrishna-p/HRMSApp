@@ -20,12 +20,39 @@ class StandupService {
       time: apiData.standup_time || apiData.time,
       remarks: apiData.remarks || apiData.manager_remarks,
       manager_remarks: apiData.remarks || apiData.manager_remarks,
-      status: apiData.is_submitted ? 'Submitted' : 'Draft',
+      status: apiData.status || (apiData.is_submitted ? 'Submitted' : 'Draft'),
       is_submitted: apiData.is_submitted,
       docstatus: apiData.docstatus,
       tasks: apiData.tasks || [],
-      task_count: apiData.tasks?.length || 0,
+      task_count: apiData.tasks?.length || apiData.total_tasks || 0,
+      total_employees: apiData.total_employees || 0,
       statistics: apiData.statistics,
+    };
+  }
+
+  /**
+   * Normalize task data from API response
+   * @param {object} taskData - Raw task data from API
+   */
+  _normalizeTaskData(taskData) {
+    if (!taskData) return null;
+
+    return {
+      name: taskData.name,
+      employee: taskData.employee,
+      employee_name: taskData.employee_name,
+      department: taskData.department,
+      designation: taskData.designation,
+      task_title: taskData.task_title,
+      planned_output: taskData.planned_output,
+      actual_work_done: taskData.actual_work_done,
+      completion_percentage: taskData.completion_percentage || 0,
+      task_status: taskData.task_status || 'Draft',
+      estimated_hours: taskData.estimated_hours || 0,
+      actual_hours: taskData.actual_hours || 0,
+      blockers: taskData.blockers || '',
+      carry_forward: taskData.carry_forward || 0,
+      next_working_date: taskData.next_working_date,
     };
   }
 
@@ -54,13 +81,22 @@ class StandupService {
    * @param {string} plannedOutput - What employee plans to do
    * @param {number} completionPercentage - Initial completion % (usually 0)
    */
-  async submitEmployeeStandupTask(standupId, taskTitle, plannedOutput, completionPercentage = 0) {
+  /**
+   * Submit employee's morning standup task
+   * @param {string} standupId - Standup ID
+   * @param {string} taskTitle - Task title
+   * @param {string} plannedOutput - What employee plans to do
+   * @param {number} completionPercentage - Initial completion % (usually 0)
+   * @param {number} estimatedHours - Estimated hours to complete (optional)
+   */
+  async submitEmployeeStandupTask(standupId, taskTitle, plannedOutput, completionPercentage = 0, estimatedHours = 0) {
     try {
       const payload = {
         standup_id: standupId,
         task_title: taskTitle,
         planned_output: plannedOutput,
         completion_percentage: completionPercentage,
+        estimated_hours: estimatedHours,
       };
 
       const response = await ApiService.post('/api/method/hrms.api.submit_employee_standup_task', payload);
@@ -83,13 +119,26 @@ class StandupService {
    * @param {number} carryForward - 1 if carrying forward to next day, 0 otherwise
    * @param {string} nextWorkingDate - Date to carry forward to (if applicable)
    */
+  /**
+   * Update employee's standup task (typically evening entry)
+   * @param {string} standupId - Standup ID
+   * @param {string} actualWorkDone - What was actually accomplished
+   * @param {number} completionPercentage - Updated completion %
+   * @param {string} taskStatus - Task status (Draft, In Progress, Completed, Blocked)
+   * @param {number} carryForward - 1 if carrying forward to next day, 0 otherwise
+   * @param {string} nextWorkingDate - Date to carry forward to (if applicable)
+   * @param {number} actualHours - Actual hours spent (optional)
+   * @param {string} blockers - Any blockers/impediments (optional)
+   */
   async updateEmployeeStandupTask(
     standupId,
     actualWorkDone,
     completionPercentage,
     taskStatus,
     carryForward = 0,
-    nextWorkingDate = null
+    nextWorkingDate = null,
+    actualHours = 0,
+    blockers = ''
   ) {
     try {
       const payload = {
@@ -99,6 +148,8 @@ class StandupService {
         task_status: taskStatus,
         carry_forward: carryForward,
         next_working_date: nextWorkingDate,
+        actual_hours: actualHours,
+        blockers: blockers,
       };
 
       const response = await ApiService.post('/api/method/hrms.api.update_employee_standup_task', payload);
@@ -151,6 +202,62 @@ class StandupService {
     } catch (error) {
       console.error('Error editing standup task:', error);
       throw new Error(`Failed to edit standup task: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get tasks marked for carry forward from previous days
+   * These can be pre-populated when creating today's standup
+   */
+  async getCarryForwardTasks() {
+    try {
+      console.log('📋 Fetching carry forward tasks...');
+      const response = await ApiService.get('/api/method/hrms.api.get_carry_forward_tasks');
+      
+      if (response.success === false) {
+        throw new Error(response.message || 'Failed to fetch carry forward tasks');
+      }
+
+      const frappeResponse = response.data?.message || response.data;
+      
+      if (frappeResponse?.status === 'success') {
+        console.log('✅ Carry forward tasks fetched:', frappeResponse.data?.length || 0);
+        return frappeResponse;
+      }
+      
+      throw new Error(frappeResponse?.message || 'Failed to fetch carry forward tasks');
+    } catch (error) {
+      console.error('❌ Error fetching carry forward tasks:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete own standup task (only if standup is still in draft)
+   * @param {string} standupId - Standup ID
+   */
+  async deleteStandupTask(standupId) {
+    try {
+      console.log('🗑️ Deleting standup task:', standupId);
+      const response = await ApiService.post('/api/method/hrms.api.delete_employee_standup_task', {
+        standup_id: standupId,
+      });
+      
+      if (response.success === false) {
+        throw new Error(response.message || 'Failed to delete standup task');
+      }
+
+      const frappeResponse = response.data?.message || response.data;
+      
+      if (frappeResponse?.status === 'success') {
+        console.log('✅ Standup task deleted successfully');
+        return frappeResponse;
+      }
+      
+      throw new Error(frappeResponse?.message || 'Failed to delete standup task');
+    } catch (error) {
+      console.error('❌ Error deleting standup task:', error.message);
+      throw error;
     }
   }
 

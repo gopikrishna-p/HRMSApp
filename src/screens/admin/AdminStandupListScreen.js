@@ -107,6 +107,12 @@ const AdminStandupListScreen = ({ navigation }) => {
                 return '#F59E0B';
             case 'amended':
                 return '#8B5CF6';
+            case 'in progress':
+                return '#3B82F6';
+            case 'open':
+                return '#6B7280';
+            case 'completed':
+                return '#059669';
             default:
                 return '#6B7280';
         }
@@ -120,6 +126,12 @@ const AdminStandupListScreen = ({ navigation }) => {
                 return 'edit';
             case 'amended':
                 return 'history';
+            case 'in progress':
+                return 'hourglass-half';
+            case 'open':
+                return 'folder-open';
+            case 'completed':
+                return 'check-double';
             default:
                 return 'circle';
         }
@@ -129,12 +141,13 @@ const AdminStandupListScreen = ({ navigation }) => {
         // Debug the item structure
         const standupId = item.name || item.id || item.standup_id;
         const employeeDisplay = item.employee_name || standupId || 'Unknown';
+        const departmentDisplay = item.department || '';
         console.log('📄 Standup item:', { name: item.name, id: item.id, standup_id: item.standup_id });
 
         return (
             <ListItem
                 title={employeeDisplay}
-                subtitle={`${item.task_count || 0} tasks • ${item.status || 'Draft'}`}
+                subtitle={`${departmentDisplay ? departmentDisplay + ' • ' : ''}${item.task_count || 0} tasks • ${item.status || 'Draft'}`}
                 leftIcon="user"
                 tint={custom.palette.primary}
                 badge={item.task_count}
@@ -216,7 +229,7 @@ const AdminStandupListScreen = ({ navigation }) => {
                     <View style={styles.filterSection}>
                         <Text style={styles.filterTitle}>Filter by Status</Text>
                         <View style={styles.chipGroup}>
-                            {['all', 'submitted', 'draft', 'amended'].map(status => (
+                            {['all', 'open', 'in progress', 'completed', 'submitted', 'draft', 'amended'].map(status => (
                                 <Chip
                                     key={status}
                                     selected={filterStatus === status}
