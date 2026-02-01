@@ -5626,9 +5626,85 @@ def get_all_employees_attendance_summary(start_date=None, end_date=None, departm
 
 
 ############################################### 
+# Available columns for export with their display names
+EXPORT_COLUMNS_CONFIG = {
+    # Basic columns (always included)
+    "sno": {"label": "S.No", "group": "basic", "default": True},
+    "employee_id": {"label": "Employee ID", "group": "basic", "default": True},
+    "employee_name": {"label": "Employee Name", "group": "basic", "default": True},
+    "department": {"label": "Department", "group": "basic", "default": True},
+    "designation": {"label": "Designation", "group": "basic", "default": True},
+    
+    # Attendance columns
+    "working_days": {"label": "Working Days", "group": "attendance", "default": True},
+    "present_days": {"label": "Present Days", "group": "attendance", "default": True},
+    "wfh_days": {"label": "WFH Days", "group": "attendance", "default": True},
+    "leaves": {"label": "Leaves", "group": "attendance", "default": True},
+    "absent_days": {"label": "Absent Days", "group": "attendance", "default": True},
+    "late_arrivals": {"label": "Late Arrivals", "group": "attendance", "default": True},
+    "working_hours": {"label": "Total Hours", "group": "attendance", "default": True},
+    "attendance_percentage": {"label": "Attendance %", "group": "attendance", "default": True},
+    
+    # Salary columns (optional)
+    "total_earnings": {"label": "Total Earnings", "group": "salary", "default": True},
+    "total_deductions": {"label": "Total Deductions", "group": "salary", "default": True},
+    "net_salary": {"label": "Net Salary", "group": "salary", "default": True},
+    "wfh_deduction": {"label": "WFH Deduction", "group": "salary", "default": True},
+    "salary_to_pay": {"label": "Salary to Pay", "group": "salary", "default": True},
+}
+
 @frappe.whitelist(allow_guest=False)
-def export_attendance_report(employee_id=None, start_date=None, end_date=None, export_format="pdf", department=None, wfh_deduction_per_day=0):
-    """Export attendance report in PDF or Excel format with proper file handling."""
+def get_export_column_options():
+    """
+    Get available column options for attendance report export.
+    Returns column configuration with groups for UI rendering.
+    """
+    if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
+        frappe.throw(_("You do not have permission to access this resource."), frappe.PermissionError)
+    
+    # Group columns by category
+    grouped_columns = {
+        "basic": {"label": "Basic Information", "columns": []},
+        "attendance": {"label": "Attendance Details", "columns": []},
+        "salary": {"label": "Salary Information", "columns": []},
+    }
+    
+    for col_key, col_config in EXPORT_COLUMNS_CONFIG.items():
+        group = col_config["group"]
+        grouped_columns[group]["columns"].append({
+            "key": col_key,
+            "label": col_config["label"],
+            "default": col_config["default"]
+        })
+    
+    return {
+        "status": "success",
+        "data": {
+            "grouped_columns": grouped_columns,
+            "all_columns": list(EXPORT_COLUMNS_CONFIG.keys())
+        }
+    }
+
+@frappe.whitelist(allow_guest=False)
+def export_attendance_report(employee_id=None, start_date=None, end_date=None, export_format="pdf", department=None, wfh_deduction_per_day=0, include_columns=None, exclude_columns=None):
+    """
+    Export attendance report in PDF or Excel format with column selection.
+    
+    Args:
+        employee_id: Specific employee ID (optional, for individual report)
+        start_date: Start date for report period
+        end_date: End date for report period
+        export_format: "pdf" or "excel"
+        department: Filter by department (optional)
+        wfh_deduction_per_day: WFH deduction amount per day
+        include_columns: JSON string or list of column keys to include (if not provided, all default columns are included)
+        exclude_columns: JSON string or list of column keys to exclude
+        
+    Column Options:
+        - Basic: sno, employee_id, employee_name, department, designation
+        - Attendance: working_days, present_days, wfh_days, leaves, absent_days, late_arrivals, working_hours, attendance_percentage
+        - Salary: total_earnings, total_deductions, net_salary, wfh_deduction, salary_to_pay
+    """
     if not any(role in frappe.get_roles() for role in ["System Manager", "HR Manager", "HR User"]):
         frappe.throw(_("You do not have permission to access this resource."), frappe.PermissionError)
 
@@ -5649,27 +5725,73 @@ def export_attendance_report(employee_id=None, start_date=None, end_date=None, e
         
         # Convert wfh_deduction_per_day to float
         wfh_deduction_per_day = float(wfh_deduction_per_day or 0)
+        
+        # Parse column selections
+        selected_columns = _parse_column_selection(include_columns, exclude_columns)
 
         if employee_id:
             # Individual employee report
             data = get_employee_attendance_history(employee_id, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
             if export_format.lower() == "pdf":
-                return generate_individual_pdf_report(data, employee_id)
+                return generate_individual_pdf_report(data, employee_id, selected_columns)
             else:
-                return generate_individual_excel_report(data, employee_id)
+                return generate_individual_excel_report(data, employee_id, selected_columns)
         else:
             # All employees report
             data = get_all_employees_attendance_summary(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), department, wfh_deduction_per_day)
             if export_format.lower() == "pdf":
-                return generate_all_employees_pdf_report(data)
+                return generate_all_employees_pdf_report(data, selected_columns)
             else:
-                return generate_all_employees_excel_report(data)
+                return generate_all_employees_excel_report(data, selected_columns)
                 
     except Exception as e:
         frappe.log_error(f"Export error: {str(e)}")
         frappe.throw(_("Export failed: {0}").format(str(e)))
 
-def generate_individual_pdf_report(data, employee_id):
+
+def _parse_column_selection(include_columns, exclude_columns):
+    """
+    Parse column selection parameters and return list of columns to include.
+    
+    Args:
+        include_columns: JSON string or list of columns to include
+        exclude_columns: JSON string or list of columns to exclude
+        
+    Returns:
+        List of column keys to include in the export
+    """
+    # Parse include_columns
+    if include_columns:
+        if isinstance(include_columns, str):
+            try:
+                include_columns = json.loads(include_columns)
+            except json.JSONDecodeError:
+                include_columns = [c.strip() for c in include_columns.split(",")]
+        
+        # Validate columns exist
+        valid_columns = [col for col in include_columns if col in EXPORT_COLUMNS_CONFIG]
+        if not valid_columns:
+            # If no valid columns, use defaults
+            valid_columns = [k for k, v in EXPORT_COLUMNS_CONFIG.items() if v["default"]]
+        return valid_columns
+    
+    # Start with default columns
+    selected_columns = [k for k, v in EXPORT_COLUMNS_CONFIG.items() if v["default"]]
+    
+    # Parse exclude_columns
+    if exclude_columns:
+        if isinstance(exclude_columns, str):
+            try:
+                exclude_columns = json.loads(exclude_columns)
+            except json.JSONDecodeError:
+                exclude_columns = [c.strip() for c in exclude_columns.split(",")]
+        
+        # Remove excluded columns
+        selected_columns = [col for col in selected_columns if col not in exclude_columns]
+    
+    return selected_columns
+
+def generate_individual_pdf_report(data, employee_id, selected_columns=None):
     """Generate PDF report for individual employee with proper base64 encoding."""
     try:
         from frappe.utils.pdf import get_pdf
@@ -5805,7 +5927,7 @@ def generate_individual_pdf_report(data, employee_id):
         return {"status": "error", "message": str(e)}
 
 
-def generate_individual_excel_report(data, employee_id):
+def generate_individual_excel_report(data, employee_id, selected_columns=None):
     """Generate Excel report for individual employee with proper base64 encoding."""
     try:
         import io
@@ -5912,14 +6034,48 @@ def generate_individual_excel_report(data, employee_id):
         frappe.log_error(f"Excel generation error: {str(e)}")
         return {"status": "error", "message": str(e)}
 
-def generate_all_employees_pdf_report(data):
-    """Generate PDF report with sorting by employee ID, WFH row colors, and professional styling."""
+def generate_all_employees_pdf_report(data, selected_columns=None):
+    """Generate PDF report with sorting by employee ID, WFH row colors, and column selection."""
     try:
         from frappe.utils.pdf import get_pdf
         import base64
         
+        # Default columns if none specified
+        if not selected_columns:
+            selected_columns = list(EXPORT_COLUMNS_CONFIG.keys())
+        
         # Sort employees by employee_id
         sorted_employees = sorted(data['employees_data'], key=lambda x: x.get('employee_id', ''))
+        
+        # Column definitions with their data keys and formatting
+        column_definitions = {
+            "sno": {"header": "S.No", "data_key": None, "align": "center", "format": "number"},
+            "employee_id": {"header": "Employee ID", "data_key": "employee_id", "align": "left", "format": "text"},
+            "employee_name": {"header": "Employee Name", "data_key": "employee_name", "align": "left", "format": "text"},
+            "department": {"header": "Department", "data_key": "department", "align": "left", "format": "text"},
+            "designation": {"header": "Designation", "data_key": "designation", "align": "left", "format": "text"},
+            "working_days": {"header": "Working<br>Days", "data_key": "total_working_days", "align": "center", "format": "number"},
+            "present_days": {"header": "Present<br>Days", "data_key": "present_days", "align": "center", "format": "number"},
+            "wfh_days": {"header": "WFH<br>Days", "data_key": "wfh_days", "align": "center", "format": "number"},
+            "leaves": {"header": "Leaves", "data_key": "leaves", "align": "center", "format": "number"},
+            "absent_days": {"header": "Absent<br>Days", "data_key": "absent_days", "align": "center", "format": "number"},
+            "late_arrivals": {"header": "Late", "data_key": "late_arrivals", "align": "center", "format": "number"},
+            "working_hours": {"header": "Total<br>Hours", "data_key": "total_working_hours", "align": "center", "format": "number"},
+            "attendance_percentage": {"header": "Attend<br>%", "data_key": "attendance_percentage", "align": "center", "format": "percent"},
+            "total_earnings": {"header": "Total<br>Earnings", "data_key": "total_earnings", "align": "right", "format": "currency"},
+            "total_deductions": {"header": "Total<br>Deduct", "data_key": "total_deductions", "align": "right", "format": "currency"},
+            "net_salary": {"header": "Net<br>Salary", "data_key": "net_salary", "align": "right", "format": "currency"},
+            "wfh_deduction": {"header": "WFH<br>Deduct", "data_key": "wfh_deduction", "align": "right", "format": "currency"},
+            "salary_to_pay": {"header": "Salary<br>to Pay", "data_key": "salary_to_pay", "align": "right", "format": "currency"},
+        }
+        
+        # Filter to selected columns only
+        active_columns = [col for col in selected_columns if col in column_definitions]
+        
+        # Build headers HTML
+        headers_html = ""
+        for col in active_columns:
+            headers_html += f"<th>{column_definitions[col]['header']}</th>"
         
         html_content = f"""
         <!DOCTYPE html>
@@ -5959,29 +6115,13 @@ def generate_all_employees_pdf_report(data):
             <div class="legend">
                 <span class="legend-item"><span class="legend-color wfh-color"></span> 🏠 Employees with WFH Days</span>
                 <span class="legend-item">📋 Total Employees: {len(sorted_employees)}</span>
+                <span class="legend-item">📊 Columns: {len(active_columns)}</span>
             </div>
             
             <table>
                 <thead>
                     <tr>
-                        <th>S.No</th>
-                        <th>Employee ID</th>
-                        <th>Employee Name</th>
-                        <th>Department</th>
-                        <th>Designation</th>
-                        <th>Working<br>Days</th>
-                        <th>Present<br>Days</th>
-                        <th>WFH<br>Days</th>
-                        <th>Leaves</th>
-                        <th>Absent<br>Days</th>
-                        <th>Late</th>
-                        <th>Total<br>Hours</th>
-                        <th>Attend<br>%</th>
-                        <th>Total<br>Earnings</th>
-                        <th>Total<br>Deduct</th>
-                        <th>Net<br>Salary</th>
-                        <th>WFH<br>Deduct</th>
-                        <th>Salary<br>to Pay</th>
+                        {headers_html}
                     </tr>
                 </thead>
                 <tbody>
@@ -5990,28 +6130,30 @@ def generate_all_employees_pdf_report(data):
         for idx, emp in enumerate(sorted_employees, 1):
             has_wfh = emp.get('wfh_days', 0) > 0
             row_class = 'wfh-row' if has_wfh else ''
-            html_content += f"""
-                    <tr class="{row_class}">
-                        <td class="text-center">{idx}</td>
-                        <td class="text-left">{emp.get('employee_id', '')}</td>
-                        <td class="text-left">{emp['employee_name']}</td>
-                        <td class="text-left">{emp['department']}</td>
-                        <td class="text-left">{emp['designation']}</td>
-                        <td class="text-center">{emp.get('total_working_days', 0)}</td>
-                        <td class="text-center">{emp.get('present_days', 0)}</td>
-                        <td class="text-center">{emp.get('wfh_days', 0)}</td>
-                        <td class="text-center">{emp.get('leaves', 0)}</td>
-                        <td class="text-center">{emp.get('absent_days', 0)}</td>
-                        <td class="text-center">{emp.get('late_arrivals', 0)}</td>
-                        <td class="text-center">{emp.get('total_working_hours', 0)}</td>
-                        <td class="text-center">{emp.get('attendance_percentage', 0)}%</td>
-                        <td class="text-right">₹{emp.get('total_earnings', 0):,.0f}</td>
-                        <td class="text-right">₹{emp.get('total_deductions', 0):,.0f}</td>
-                        <td class="text-right">₹{emp.get('net_salary', 0):,.0f}</td>
-                        <td class="text-right">₹{emp.get('wfh_deduction', 0):,.0f}</td>
-                        <td class="text-right">₹{emp.get('salary_to_pay', 0):,.0f}</td>
-                    </tr>
-            """
+            
+            row_html = f'<tr class="{row_class}">'
+            for col in active_columns:
+                col_def = column_definitions[col]
+                align_class = f"text-{col_def['align']}"
+                
+                # Get value
+                if col == "sno":
+                    value = idx
+                else:
+                    value = emp.get(col_def['data_key'], 0 if col_def['format'] in ['number', 'currency', 'percent'] else '')
+                
+                # Format value
+                if col_def['format'] == 'currency':
+                    cell_content = f"₹{value:,.0f}" if value else "₹0"
+                elif col_def['format'] == 'percent':
+                    cell_content = f"{value}%"
+                else:
+                    cell_content = value
+                
+                row_html += f'<td class="{align_class}">{cell_content}</td>'
+            
+            row_html += '</tr>'
+            html_content += row_html
         
         html_content += """
                 </tbody>
@@ -6042,12 +6184,16 @@ def generate_all_employees_pdf_report(data):
         frappe.log_error(f"PDF generation error: {str(e)}")
         return {"status": "error", "message": str(e)}
 
-def generate_all_employees_excel_report(data):
-    """Generate Excel report with sorting by employee ID, WFH row colors, and professional styling."""
+def generate_all_employees_excel_report(data, selected_columns=None):
+    """Generate Excel report with sorting by employee ID, WFH row colors, and column selection."""
     try:
         import io
         import xlsxwriter
         import base64
+        
+        # Default columns if none specified
+        if not selected_columns:
+            selected_columns = list(EXPORT_COLUMNS_CONFIG.keys())
         
         output = io.BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
@@ -6055,6 +6201,32 @@ def generate_all_employees_excel_report(data):
         
         # Sort employees by employee_id
         sorted_employees = sorted(data['employees_data'], key=lambda x: x.get('employee_id', ''))
+        
+        # Column definitions with their data keys, formatting, and widths
+        column_definitions = {
+            "sno": {"header": "S.No", "data_key": None, "format": "number", "width": 5},
+            "employee_id": {"header": "Employee ID", "data_key": "employee_id", "format": "text", "width": 14},
+            "employee_name": {"header": "Employee Name", "data_key": "employee_name", "format": "text", "width": 22},
+            "department": {"header": "Department", "data_key": "department", "format": "text", "width": 15},
+            "designation": {"header": "Designation", "data_key": "designation", "format": "text", "width": 25},
+            "working_days": {"header": "Working\nDays", "data_key": "total_working_days", "format": "number", "width": 10},
+            "present_days": {"header": "Present\nDays", "data_key": "present_days", "format": "number", "width": 10},
+            "wfh_days": {"header": "WFH\nDays", "data_key": "wfh_days", "format": "number", "width": 8},
+            "leaves": {"header": "Leaves", "data_key": "leaves", "format": "number", "width": 8},
+            "absent_days": {"header": "Absent\nDays", "data_key": "absent_days", "format": "number", "width": 9},
+            "late_arrivals": {"header": "Late", "data_key": "late_arrivals", "format": "number", "width": 6},
+            "working_hours": {"header": "Total\nHours", "data_key": "total_working_hours", "format": "number", "width": 9},
+            "attendance_percentage": {"header": "Attendance\n%", "data_key": "attendance_percentage", "format": "percent", "width": 10},
+            "total_earnings": {"header": "Total\nEarnings", "data_key": "total_earnings", "format": "currency", "width": 12},
+            "total_deductions": {"header": "Total\nDeductions", "data_key": "total_deductions", "format": "currency", "width": 12},
+            "net_salary": {"header": "Net\nSalary", "data_key": "net_salary", "format": "currency", "width": 11},
+            "wfh_deduction": {"header": "WFH\nDeduction", "data_key": "wfh_deduction", "format": "currency", "width": 11},
+            "salary_to_pay": {"header": "Salary\nto Pay", "data_key": "salary_to_pay", "format": "currency", "width": 11},
+        }
+        
+        # Filter to selected columns only
+        active_columns = [col for col in selected_columns if col in column_definitions]
+        num_cols = len(active_columns)
         
         # Define formats - Professional styling
         title_format = workbook.add_format({
@@ -6085,145 +6257,54 @@ def generate_all_employees_excel_report(data):
             'text_wrap': True
         })
         
-        # Normal row formats (alternating colors)
-        data_format_odd = workbook.add_format({
-            'font_size': 10,
-            'align': 'left',
-            'valign': 'vcenter',
-            'border': 1,
-            'border_color': '#D9D9D9',
-            'bg_color': '#FFFFFF'
-        })
+        # Create format dictionaries for different cell types
+        def create_format(bg_color, align='left', num_fmt=None):
+            fmt = {
+                'font_size': 10,
+                'align': align,
+                'valign': 'vcenter',
+                'border': 1,
+                'border_color': '#D9D9D9',
+                'bg_color': bg_color
+            }
+            if num_fmt:
+                fmt['num_format'] = num_fmt
+            return workbook.add_format(fmt)
         
-        data_format_even = workbook.add_format({
-            'font_size': 10,
-            'align': 'left',
-            'valign': 'vcenter',
-            'border': 1,
-            'border_color': '#D9D9D9',
-            'bg_color': '#F2F2F2'
-        })
-        
-        number_format_odd = workbook.add_format({
-            'font_size': 10,
-            'align': 'center',
-            'valign': 'vcenter',
-            'border': 1,
-            'border_color': '#D9D9D9',
-            'bg_color': '#FFFFFF'
-        })
-        
-        number_format_even = workbook.add_format({
-            'font_size': 10,
-            'align': 'center',
-            'valign': 'vcenter',
-            'border': 1,
-            'border_color': '#D9D9D9',
-            'bg_color': '#F2F2F2'
-        })
-        
-        currency_format_odd = workbook.add_format({
-            'font_size': 10,
-            'align': 'right',
-            'valign': 'vcenter',
-            'border': 1,
-            'border_color': '#D9D9D9',
-            'num_format': '₹#,##0',
-            'bg_color': '#FFFFFF'
-        })
-        
-        currency_format_even = workbook.add_format({
-            'font_size': 10,
-            'align': 'right',
-            'valign': 'vcenter',
-            'border': 1,
-            'border_color': '#D9D9D9',
-            'num_format': '₹#,##0',
-            'bg_color': '#F2F2F2'
-        })
-        
-        percent_format_odd = workbook.add_format({
-            'font_size': 10,
-            'align': 'center',
-            'valign': 'vcenter',
-            'border': 1,
-            'border_color': '#D9D9D9',
-            'num_format': '0.0%',
-            'bg_color': '#FFFFFF'
-        })
-        
-        percent_format_even = workbook.add_format({
-            'font_size': 10,
-            'align': 'center',
-            'valign': 'vcenter',
-            'border': 1,
-            'border_color': '#D9D9D9',
-            'num_format': '0.0%',
-            'bg_color': '#F2F2F2'
-        })
-        
-        # WFH row formats (light orange/peach background)
-        wfh_data_format = workbook.add_format({
-            'font_size': 10,
-            'align': 'left',
-            'valign': 'vcenter',
-            'border': 1,
-            'border_color': '#D9D9D9',
-            'bg_color': '#FFF2CC'
-        })
-        
-        wfh_number_format = workbook.add_format({
-            'font_size': 10,
-            'align': 'center',
-            'valign': 'vcenter',
-            'border': 1,
-            'border_color': '#D9D9D9',
-            'bg_color': '#FFF2CC'
-        })
-        
-        wfh_currency_format = workbook.add_format({
-            'font_size': 10,
-            'align': 'right',
-            'valign': 'vcenter',
-            'border': 1,
-            'border_color': '#D9D9D9',
-            'num_format': '₹#,##0',
-            'bg_color': '#FFF2CC'
-        })
-        
-        wfh_percent_format = workbook.add_format({
-            'font_size': 10,
-            'align': 'center',
-            'valign': 'vcenter',
-            'border': 1,
-            'border_color': '#D9D9D9',
-            'num_format': '0.0%',
-            'bg_color': '#FFF2CC'
-        })
+        # Formats for odd/even rows and WFH
+        formats = {
+            'text_odd': create_format('#FFFFFF', 'left'),
+            'text_even': create_format('#F2F2F2', 'left'),
+            'text_wfh': create_format('#FFF2CC', 'left'),
+            'number_odd': create_format('#FFFFFF', 'center'),
+            'number_even': create_format('#F2F2F2', 'center'),
+            'number_wfh': create_format('#FFF2CC', 'center'),
+            'currency_odd': create_format('#FFFFFF', 'right', '₹#,##0'),
+            'currency_even': create_format('#F2F2F2', 'right', '₹#,##0'),
+            'currency_wfh': create_format('#FFF2CC', 'right', '₹#,##0'),
+            'percent_odd': create_format('#FFFFFF', 'center', '0.0%'),
+            'percent_even': create_format('#F2F2F2', 'center', '0.0%'),
+            'percent_wfh': create_format('#FFF2CC', 'center', '0.0%'),
+        }
         
         # Write title
-        worksheet.merge_range('A1:R1', '📊 All Employees Attendance Summary', title_format)
+        last_col = chr(ord('A') + num_cols - 1)
+        worksheet.merge_range(f'A1:{last_col}1', '📊 All Employees Attendance Summary', title_format)
         
         # Write period info
         worksheet.write(2, 0, f"📅 Period: {data['date_range']['start_date']} to {data['date_range']['end_date']}", subtitle_format)
         worksheet.write(3, 0, f"📆 Total Days: {data['date_range'].get('total_days', 'N/A')} | Working Days: {data['date_range'].get('working_days', 'N/A')}", subtitle_format)
-        worksheet.write(4, 0, f"🕐 Generated on: {frappe.utils.now_datetime().strftime('%Y-%m-%d %H:%M:%S')}", subtitle_format)
+        worksheet.write(4, 0, f"🕐 Generated on: {frappe.utils.now_datetime().strftime('%Y-%m-%d %H:%M:%S')} | Columns: {num_cols}", subtitle_format)
         
         # Legend for WFH
         legend_format = workbook.add_format({'font_size': 9, 'bg_color': '#FFF2CC', 'border': 1, 'align': 'center'})
-        worksheet.write(2, 14, '🏠 WFH Row', legend_format)
+        if num_cols > 5:
+            worksheet.write(2, num_cols - 1, '🏠 WFH Row', legend_format)
         
         # Headers - Row 6 (index 5)
-        headers = [
-            "S.No", "Employee ID", "Employee Name", "Department", "Designation", "Working\nDays",
-            "Present\nDays", "WFH\nDays", "Leaves", "Absent\nDays",
-            "Late", "Total\nHours", "Attendance\n%",
-            "Total\nEarnings", "Total\nDeductions", "Net\nSalary", "WFH\nDeduction", "Salary\nto Pay"
-        ]
-        
         row = 6
-        for col, header in enumerate(headers):
-            worksheet.write(row, col, header, header_format)
+        for col_idx, col in enumerate(active_columns):
+            worksheet.write(row, col_idx, column_definitions[col]['header'], header_format)
         
         # Set row height for header
         worksheet.set_row(row, 30)
@@ -6234,62 +6315,36 @@ def generate_all_employees_excel_report(data):
             has_wfh = emp.get('wfh_days', 0) > 0
             is_even = idx % 2 == 0
             
-            # Select format based on WFH status
+            # Determine format suffix based on row type
             if has_wfh:
-                d_fmt = wfh_data_format
-                n_fmt = wfh_number_format
-                c_fmt = wfh_currency_format
-                p_fmt = wfh_percent_format
+                suffix = '_wfh'
             elif is_even:
-                d_fmt = data_format_even
-                n_fmt = number_format_even
-                c_fmt = currency_format_even
-                p_fmt = percent_format_even
+                suffix = '_even'
             else:
-                d_fmt = data_format_odd
-                n_fmt = number_format_odd
-                c_fmt = currency_format_odd
-                p_fmt = percent_format_odd
+                suffix = '_odd'
             
-            worksheet.write(row, 0, idx, n_fmt)
-            worksheet.write(row, 1, emp.get('employee_id', ''), d_fmt)
-            worksheet.write(row, 2, emp['employee_name'], d_fmt)
-            worksheet.write(row, 3, emp['department'], d_fmt)
-            worksheet.write(row, 4, emp['designation'], d_fmt)
-            worksheet.write(row, 5, emp.get('total_working_days', 0), n_fmt)
-            worksheet.write(row, 6, emp.get('present_days', 0), n_fmt)
-            worksheet.write(row, 7, emp.get('wfh_days', 0), n_fmt)
-            worksheet.write(row, 8, emp.get('leaves', 0), n_fmt)
-            worksheet.write(row, 9, emp.get('absent_days', 0), n_fmt)
-            worksheet.write(row, 10, emp.get('late_arrivals', 0), n_fmt)
-            worksheet.write(row, 11, emp.get('total_working_hours', 0), n_fmt)
-            worksheet.write(row, 12, emp.get('attendance_percentage', 0) / 100, p_fmt)
-            worksheet.write(row, 13, emp.get('total_earnings', 0), c_fmt)
-            worksheet.write(row, 14, emp.get('total_deductions', 0), c_fmt)
-            worksheet.write(row, 15, emp.get('net_salary', 0), c_fmt)
-            worksheet.write(row, 16, emp.get('wfh_deduction', 0), c_fmt)
-            worksheet.write(row, 17, emp.get('salary_to_pay', 0), c_fmt)
+            for col_idx, col in enumerate(active_columns):
+                col_def = column_definitions[col]
+                fmt_type = col_def['format']
+                fmt = formats[f'{fmt_type}{suffix}']
+                
+                # Get value
+                if col == "sno":
+                    value = idx
+                else:
+                    value = emp.get(col_def['data_key'], 0 if fmt_type in ['number', 'currency', 'percent'] else '')
+                
+                # Handle percentage (divide by 100 for Excel format)
+                if fmt_type == 'percent' and value:
+                    value = value / 100
+                
+                worksheet.write(row, col_idx, value, fmt)
+            
             row += 1
         
-        # Set column widths
-        worksheet.set_column('A:A', 5)   # S.No
-        worksheet.set_column('B:B', 14)  # Employee ID
-        worksheet.set_column('C:C', 22)  # Employee Name
-        worksheet.set_column('D:D', 15)  # Department
-        worksheet.set_column('E:E', 25)  # Designation
-        worksheet.set_column('F:F', 10)  # Working Days
-        worksheet.set_column('G:G', 10)  # Present Days
-        worksheet.set_column('H:H', 8)   # WFH Days
-        worksheet.set_column('I:I', 8)   # Leaves
-        worksheet.set_column('J:J', 9)   # Absent Days
-        worksheet.set_column('K:K', 6)   # Late
-        worksheet.set_column('L:L', 9)   # Total Hours
-        worksheet.set_column('M:M', 10)  # Attendance %
-        worksheet.set_column('N:N', 12)  # Total Earnings
-        worksheet.set_column('O:O', 12)  # Total Deductions
-        worksheet.set_column('P:P', 11)  # Net Salary
-        worksheet.set_column('Q:Q', 11)  # WFH Deduction
-        worksheet.set_column('R:R', 11)  # Salary to Pay
+        # Set column widths dynamically
+        for col_idx, col in enumerate(active_columns):
+            worksheet.set_column(col_idx, col_idx, column_definitions[col]['width'])
         
         # Freeze panes (freeze header row)
         worksheet.freeze_panes(7, 0)
@@ -13174,4 +13229,3 @@ def get_my_bookings(
             "message": str(e),
             "data": None,
         }
-

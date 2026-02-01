@@ -210,8 +210,8 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
         try {
             const params = {
                 employee_id: selectedEmployee,
-                start_date: dateRange.startDate?.toISOString().split('T')[0],
-                end_date: dateRange.endDate?.toISOString().split('T')[0]
+                start_date: formatDateForAPI(dateRange.startDate),
+                end_date: formatDateForAPI(dateRange.endDate)
             };
 
             const response = await ApiService.getEmployeeAttendanceHistory(params);
@@ -268,6 +268,16 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
     // ===========================================
     // DATE RANGE FUNCTIONS
     // ===========================================
+    
+    // Helper to format date in local timezone (YYYY-MM-DD)
+    const formatDateForAPI = (date) => {
+        if (!date) return null;
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+
     const applyDatePreset = (preset) => {
         const today = new Date();
         let startDate, endDate;
@@ -385,8 +395,8 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
         try {
             const params = {
                 employee_id: selectedEmployee,
-                start_date: dateRange.startDate.toISOString().split('T')[0],
-                end_date: dateRange.endDate.toISOString().split('T')[0],
+                start_date: formatDateForAPI(dateRange.startDate),
+                end_date: formatDateForAPI(dateRange.endDate),
                 export_format: format
             };
 
@@ -441,8 +451,8 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
                         setExportLoading(true);
                         try {
                             const params = {
-                                start_date: dateRange.startDate.toISOString().split('T')[0],
-                                end_date: dateRange.endDate.toISOString().split('T')[0],
+                                start_date: formatDateForAPI(dateRange.startDate),
+                                end_date: formatDateForAPI(dateRange.endDate),
                                 export_format: format,
                                 department: selectedDepartment || null
                             };
