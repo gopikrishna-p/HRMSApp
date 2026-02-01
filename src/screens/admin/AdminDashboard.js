@@ -310,6 +310,11 @@ const AdminDashboard = ({ navigation }) => {
                         tint="#14B8A6" onPress={() => navigation.navigate('ProjectsOverview')} />
                 </Section>
 
+                <Section title="Meeting Rooms" icon="door-open" tint="#EC4899">
+                    <ListItem title="Meeting Room Management" subtitle="Book rooms & view all bookings" leftIcon="calendar-plus"
+                        tint="#EC4899" onPress={() => navigation.navigate('AdminMeetingRoom')} />
+                </Section>
+
                 <Section title="Notifications & Announcements" icon="bullhorn" tint="#F43F5E">
                     <ListItem title="Create Notification" subtitle="Target by dept/location" leftIcon="plus-circle"
                         tint="#F43F5E" onPress={() => navigation.navigate('CreateNotification')} />

@@ -27,6 +27,7 @@ import EmployeeStandupScreen from '../screens/employee/EmployeeStandupScreen';
 import EmployeeStandupUpdateScreen from '../screens/employee/EmployeeStandupUpdateScreen';
 import EmployeeStandupHistoryScreen from '../screens/employee/EmployeeStandupHistoryScreen';
 import EmployeeTodayStandupScreen from '../screens/employee/EmployeeTodayStandupScreen';
+import EmployeeMeetingRoomScreen from '../screens/employee/EmployeeMeetingRoomScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -74,6 +75,8 @@ const EmployeeNavigator = () => {
 
             <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: 'Notifications' }} />
             <Stack.Screen name="Profile" component={ProfileScreen} options={{ title: 'My Profile' }} />
+
+            <Stack.Screen name="EmployeeMeetingRoom" component={EmployeeMeetingRoomScreen} options={{ headerShown: false }} />
         </Stack.Navigator>
     );
 };

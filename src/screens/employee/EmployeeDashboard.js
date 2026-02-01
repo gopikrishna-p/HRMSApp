@@ -545,6 +545,11 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                             tint={custom.palette.danger} onPress={() => navigation.navigate('Payslip')} />
                     </Section>
 
+                    <Section title="Meeting Rooms" icon="door-open" tint="#EC4899">
+                        <ListItem title="Book Meeting Room" subtitle="Reserve rooms & view bookings" leftIcon="calendar-plus"
+                            tint="#EC4899" onPress={() => navigation.navigate('EmployeeMeetingRoom')} />
+                    </Section>
+
                     <Section title="Other" icon="ellipsis-h" tint="#6B7280">
                         <ListItem title="Notifications" subtitle="View notifications" leftIcon="bell" badge={pendingNotifications > 0 ? pendingNotifications : null}
                             tint="#6B7280" onPress={() => navigation.navigate('Notifications')} />

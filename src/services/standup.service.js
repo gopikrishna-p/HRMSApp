@@ -175,7 +175,7 @@ class StandupService {
       if (fromDate) params.from_date = fromDate;
       if (toDate) params.to_date = toDate;
 
-      const response = await ApiService.get('/api/method/hrms.api.get_employee_standup_history', { params });
+      const response = await ApiService.get('/api/method/hrms.api.get_employee_standup_history', params);
       if (response.success && response.data?.message) {
         return response.data.message;
       }
@@ -278,7 +278,7 @@ class StandupService {
       if (department) params.department = department;
 
       console.log('📊 Fetching all standups with params:', params);
-      const response = await ApiService.get('/api/method/hrms.api.get_all_standups', { params });
+      const response = await ApiService.get('/api/method/hrms.api.get_all_standups', params);
       
       if (response.success === false) {
         throw new Error(response.message || 'Failed to fetch all standups');
@@ -448,7 +448,7 @@ class StandupService {
       console.log('🏢 Fetching department standup summary:', params);
       
       // Use GET with query params as per API docs
-      const response = await ApiService.get('/api/method/hrms.api.get_department_standup_summary', { params });
+      const response = await ApiService.get('/api/method/hrms.api.get_department_standup_summary', params);
       
       console.log('📨 Department summary raw response:', response);
       

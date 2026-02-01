@@ -34,6 +34,7 @@ import AdminTodayStandupScreen from '../screens/admin/AdminTodayStandupScreen';
 import AdminStandupListScreen from '../screens/admin/AdminStandupListScreen';
 import AdminStandupDetailScreen from '../screens/admin/AdminStandupDetailScreen';
 import AdminDepartmentStandupScreen from '../screens/admin/AdminDepartmentStandupScreen';
+import AdminMeetingRoomScreen from '../screens/admin/AdminMeetingRoomScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -86,6 +87,8 @@ const AdminNavigator = () => {
             <Stack.Screen name="ProjectTasksScreen" component={ProjectTasksScreen} options={{ title: 'Project Tasks' }} />
 
             <Stack.Screen name="AdminNotifications" component={AdminNotifications} options={{ title: 'Notifications' }} />
+
+            <Stack.Screen name="AdminMeetingRoom" component={AdminMeetingRoomScreen} options={{ headerShown: false }} />
         </Stack.Navigator>
     );
 };

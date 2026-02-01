@@ -12271,3 +12271,907 @@ def delete_employee_standup_task(standup_id: str) -> dict:
     except Exception as e:
         frappe.log_error(f"Delete Standup Task Error: {str(e)}\\n{frappe.get_traceback()}", "Delete Standup Task")
         frappe.throw(_("Failed to delete standup task: {0}").format(str(e)))
+
+
+# ============================================================================
+# MEETING ROOM BOOKING APIs
+# ============================================================================
+
+@frappe.whitelist()
+def get_meeting_rooms(
+    location: str | None = None,
+    min_capacity: int | None = None,
+) -> dict:
+    """
+    Get all available meeting rooms with optional filters.
+    
+    Args:
+        location: Filter by location (optional)
+        min_capacity: Filter by minimum capacity (optional)
+    
+    Returns:
+        Dict with list of meeting rooms
+    """
+    try:
+        filters = {}
+        if location:
+            filters["location"] = ["like", f"%{location}%"]
+        if min_capacity:
+            filters["capacity"] = [">=", cint(min_capacity)]
+        
+        # All users can view meeting rooms
+        rooms = frappe.get_all(
+            "Meeting Room",
+            filters=filters,
+            fields=["name", "room_name", "location", "capacity"],
+            order_by="room_name asc",
+            ignore_permissions=True,
+        )
+        
+        return {
+            "status": "success",
+            "data": {
+                "rooms": rooms,
+                "total_rooms": len(rooms),
+            },
+            "message": _("Meeting rooms fetched successfully"),
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Get Meeting Rooms Error: {str(e)}\n{frappe.get_traceback()}", "Meeting Rooms")
+        return {
+            "status": "error",
+            "message": str(e),
+            "data": None,
+        }
+
+
+@frappe.whitelist()
+def get_room_availability(
+    meeting_room: str,
+    date: str,
+) -> dict:
+    """
+    Get availability slots for a specific meeting room on a specific date.
+    Shows all bookings and available time slots.
+    
+    Args:
+        meeting_room: Meeting Room name
+        date: Date to check (YYYY-MM-DD)
+    
+    Returns:
+        Dict with room details, bookings for the day, and available slots
+    """
+    try:
+        # Validate room exists
+        if not frappe.db.exists("Meeting Room", meeting_room):
+            frappe.throw(_("Meeting Room {0} does not exist").format(meeting_room))
+        
+        # Get room details
+        room = frappe.get_doc("Meeting Room", meeting_room)
+        
+        # Get bookings for the date - all users can see room availability
+        bookings = frappe.get_all(
+            "Meeting Room Booking",
+            filters={
+                "meeting_room": meeting_room,
+                "booking_date": getdate(date),
+            },
+            fields=[
+                "name", "employee", "employee_name", "start_time", "end_time",
+                "duration_hours", "reason"
+            ],
+            order_by="start_time asc",
+            ignore_permissions=True,
+        )
+        
+        # Format bookings with employee info
+        formatted_bookings = []
+        for booking in bookings:
+            employee_name = booking.employee_name
+            if not employee_name and booking.employee:
+                employee_name = frappe.get_value("Employee", booking.employee, "employee_name")
+            
+            formatted_bookings.append({
+                "booking_id": booking.name,
+                "employee": booking.employee,
+                "employee_name": employee_name,
+                "start_time": str(booking.start_time),
+                "end_time": str(booking.end_time),
+                "duration_hours": booking.duration_hours,
+                "reason": booking.reason,
+            })
+        
+        # Calculate available slots (working hours: 9 AM - 6 PM)
+        from datetime import datetime, time as dt_time
+        
+        work_start = dt_time(9, 0)
+        work_end = dt_time(18, 0)
+        
+        # Build list of booked time ranges
+        booked_ranges = []
+        for b in bookings:
+            start = b.start_time
+            end = b.end_time
+            if isinstance(start, timedelta):
+                start = (datetime.min + start).time()
+            if isinstance(end, timedelta):
+                end = (datetime.min + end).time()
+            booked_ranges.append((start, end))
+        
+        # Sort by start time
+        booked_ranges.sort(key=lambda x: x[0])
+        
+        # Find available slots
+        available_slots = []
+        current_time = work_start
+        
+        for booked_start, booked_end in booked_ranges:
+            if current_time < booked_start:
+                available_slots.append({
+                    "start_time": str(current_time),
+                    "end_time": str(booked_start),
+                })
+            current_time = max(current_time, booked_end)
+        
+        # Add remaining time until work end
+        if current_time < work_end:
+            available_slots.append({
+                "start_time": str(current_time),
+                "end_time": str(work_end),
+            })
+        
+        return {
+            "status": "success",
+            "data": {
+                "room": {
+                    "name": room.name,
+                    "room_name": room.room_name,
+                    "location": room.location,
+                    "capacity": room.capacity,
+                },
+                "date": str(date),
+                "bookings": formatted_bookings,
+                "total_bookings": len(formatted_bookings),
+                "available_slots": available_slots,
+                "is_fully_booked": len(available_slots) == 0,
+            },
+            "message": _("Room availability fetched successfully"),
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Get Room Availability Error: {str(e)}\n{frappe.get_traceback()}", "Room Availability")
+        return {
+            "status": "error",
+            "message": str(e),
+            "data": None,
+        }
+
+
+@frappe.whitelist()
+def get_meeting_room_bookings(
+    from_date: str | None = None,
+    to_date: str | None = None,
+    meeting_room: str | None = None,
+    employee: str | None = None,
+    my_bookings_only: int = 0,
+) -> dict:
+    """
+    Get meeting room bookings with filters.
+    Default: current month bookings.
+    
+    Args:
+        from_date: Start date filter (defaults to first day of current month)
+        to_date: End date filter (defaults to last day of current month)
+        meeting_room: Filter by specific room (optional)
+        employee: Filter by employee (optional, admin only)
+        my_bookings_only: If 1, show only current user's bookings
+    
+    Returns:
+        Dict with bookings and summary statistics
+    """
+    try:
+        # Get current employee
+        current_employee = get_employee_by_user()
+        
+        # Set default date range (current month)
+        if not from_date:
+            today = getdate()
+            from_date = today.replace(day=1)
+        else:
+            from_date = getdate(from_date)
+        
+        if not to_date:
+            today = getdate()
+            next_month = today.replace(day=28) + timedelta(days=4)
+            to_date = next_month.replace(day=1) - timedelta(days=1)
+        else:
+            to_date = getdate(to_date)
+        
+        # Build filters
+        filters = {
+            "booking_date": ["between", [from_date, to_date]],
+        }
+        
+        if meeting_room:
+            filters["meeting_room"] = meeting_room
+        
+        # If my_bookings_only or employee is current user
+        if cint(my_bookings_only) and current_employee:
+            filters["employee"] = current_employee
+        elif employee:
+            # Check if user is admin for filtering by other employees
+            user_roles = frappe.get_roles()
+            is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+            if is_admin or employee == current_employee:
+                filters["employee"] = employee
+        
+        # Get bookings - all users can see all bookings to check availability
+        bookings = frappe.get_all(
+            "Meeting Room Booking",
+            filters=filters,
+            fields=[
+                "name", "meeting_room", "employee", "employee_name",
+                "booking_date", "start_time", "end_time", "duration_hours",
+                "reason", "cost", "creation", "modified"
+            ],
+            order_by="booking_date desc, start_time asc",
+            ignore_permissions=True,
+        )
+        
+        # Enrich with room and employee details
+        formatted_bookings = []
+        for booking in bookings:
+            # Get employee name if not set
+            employee_name = booking.employee_name
+            if not employee_name and booking.employee:
+                employee_name = frappe.get_value("Employee", booking.employee, "employee_name")
+            
+            # Get room details
+            room_info = frappe.get_value(
+                "Meeting Room", 
+                booking.meeting_room, 
+                ["room_name", "location", "capacity"],
+                as_dict=True
+            )
+            
+            formatted_bookings.append({
+                "booking_id": booking.name,
+                "meeting_room": booking.meeting_room,
+                "room_name": room_info.room_name if room_info else booking.meeting_room,
+                "location": room_info.location if room_info else None,
+                "capacity": room_info.capacity if room_info else None,
+                "employee": booking.employee,
+                "employee_name": employee_name,
+                "booking_date": str(booking.booking_date),
+                "start_time": str(booking.start_time),
+                "end_time": str(booking.end_time),
+                "duration_hours": booking.duration_hours,
+                "reason": booking.reason,
+                "cost": booking.cost,
+                "is_own_booking": booking.employee == current_employee if current_employee else False,
+            })
+        
+        # Calculate statistics
+        total_hours = sum(b["duration_hours"] or 0 for b in formatted_bookings)
+        total_cost = sum(b["cost"] or 0 for b in formatted_bookings)
+        unique_rooms = len(set(b["meeting_room"] for b in formatted_bookings))
+        unique_employees = len(set(b["employee"] for b in formatted_bookings))
+        
+        # Group by date for calendar view
+        bookings_by_date = {}
+        for b in formatted_bookings:
+            date_key = b["booking_date"]
+            if date_key not in bookings_by_date:
+                bookings_by_date[date_key] = []
+            bookings_by_date[date_key].append(b)
+        
+        return {
+            "status": "success",
+            "data": {
+                "from_date": str(from_date),
+                "to_date": str(to_date),
+                "bookings": formatted_bookings,
+                "bookings_by_date": bookings_by_date,
+                "statistics": {
+                    "total_bookings": len(formatted_bookings),
+                    "total_hours": round(total_hours, 2),
+                    "total_cost": total_cost,
+                    "unique_rooms": unique_rooms,
+                    "unique_employees": unique_employees,
+                },
+            },
+            "message": _("Bookings fetched successfully"),
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Get Meeting Room Bookings Error: {str(e)}\n{frappe.get_traceback()}", "Meeting Bookings")
+        return {
+            "status": "error",
+            "message": str(e),
+            "data": None,
+        }
+
+
+@frappe.whitelist()
+def create_meeting_room_booking(
+    meeting_room: str,
+    booking_date: str,
+    start_time: str,
+    end_time: str,
+    reason: str | None = None,
+    employee: str | None = None,
+) -> dict:
+    """
+    Create a new meeting room booking.
+    Employees can book for themselves, admins can book for others.
+    
+    Args:
+        meeting_room: Meeting Room name
+        booking_date: Date of booking (YYYY-MM-DD)
+        start_time: Start time (HH:MM or HH:MM:SS)
+        end_time: End time (HH:MM or HH:MM:SS)
+        reason: Reason for booking (optional)
+        employee: Employee ID (optional, admin only for booking for others)
+    
+    Returns:
+        Dict with created booking details
+    """
+    try:
+        # Get current employee
+        current_employee = get_employee_by_user()
+        
+        # Determine who the booking is for
+        if employee:
+            # Check if user is admin for booking on behalf of others
+            user_roles = frappe.get_roles()
+            is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+            if not is_admin and employee != current_employee:
+                frappe.throw(_("You can only book meeting rooms for yourself"))
+            booking_employee = employee
+        else:
+            if not current_employee:
+                frappe.throw(_("No employee record found for current user"))
+            booking_employee = current_employee
+        
+        # Validate room exists
+        if not frappe.db.exists("Meeting Room", meeting_room):
+            frappe.throw(_("Meeting Room {0} does not exist").format(meeting_room))
+        
+        # Parse times
+        from datetime import datetime
+        
+        booking_date_obj = getdate(booking_date)
+        
+        # Parse start and end times
+        if len(start_time) == 5:  # HH:MM format
+            start_time += ":00"
+        if len(end_time) == 5:  # HH:MM format
+            end_time += ":00"
+        
+        start_dt = datetime.strptime(start_time, "%H:%M:%S").time()
+        end_dt = datetime.strptime(end_time, "%H:%M:%S").time()
+        
+        # Validate times
+        if start_dt >= end_dt:
+            frappe.throw(_("End time must be after start time"))
+        
+        # Check for booking date in the past
+        if booking_date_obj < getdate():
+            frappe.throw(_("Cannot book meeting room for past dates"))
+        
+        # Check for conflicting bookings
+        conflicts = frappe.db.sql("""
+            SELECT name, employee_name, start_time, end_time
+            FROM `tabMeeting Room Booking`
+            WHERE meeting_room = %s
+            AND booking_date = %s
+            AND (
+                (start_time < %s AND end_time > %s)
+                OR (start_time >= %s AND start_time < %s)
+                OR (end_time > %s AND end_time <= %s)
+            )
+        """, (meeting_room, booking_date_obj, end_time, start_time, start_time, end_time, start_time, end_time), as_dict=True)
+        
+        if conflicts:
+            conflict_info = conflicts[0]
+            frappe.throw(
+                _("Room is already booked from {0} to {1} by {2}").format(
+                    conflict_info.start_time, 
+                    conflict_info.end_time,
+                    conflict_info.employee_name or "another employee"
+                )
+            )
+        
+        # Calculate duration
+        start_minutes = start_dt.hour * 60 + start_dt.minute
+        end_minutes = end_dt.hour * 60 + end_dt.minute
+        duration_hours = (end_minutes - start_minutes) / 60
+        
+        # Get employee name
+        employee_name = frappe.get_value("Employee", booking_employee, "employee_name")
+        
+        # Create booking
+        booking = frappe.get_doc({
+            "doctype": "Meeting Room Booking",
+            "meeting_room": meeting_room,
+            "employee": booking_employee,
+            "employee_name": employee_name,
+            "booking_date": booking_date_obj,
+            "start_time": start_time,
+            "end_time": end_time,
+            "duration_hours": duration_hours,
+            "reason": reason or "",
+        })
+        
+        booking.insert(ignore_permissions=True)
+        frappe.db.commit()
+        
+        # Get room details
+        room_info = frappe.get_value(
+            "Meeting Room", 
+            meeting_room, 
+            ["room_name", "location", "capacity"],
+            as_dict=True
+        )
+        
+        return {
+            "status": "success",
+            "message": _("Meeting room booked successfully"),
+            "data": {
+                "booking_id": booking.name,
+                "meeting_room": meeting_room,
+                "room_name": room_info.room_name if room_info else meeting_room,
+                "location": room_info.location if room_info else None,
+                "employee": booking_employee,
+                "employee_name": employee_name,
+                "booking_date": str(booking_date_obj),
+                "start_time": start_time,
+                "end_time": end_time,
+                "duration_hours": duration_hours,
+                "reason": reason,
+            },
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Create Meeting Room Booking Error: {str(e)}\n{frappe.get_traceback()}", "Create Booking")
+        frappe.throw(_("Failed to create booking: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def update_meeting_room_booking(
+    booking_id: str,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    reason: str | None = None,
+) -> dict:
+    """
+    Update an existing meeting room booking.
+    Only the booking owner or admin can update.
+    
+    Args:
+        booking_id: Booking ID
+        start_time: New start time (optional)
+        end_time: New end time (optional)
+        reason: New reason (optional)
+    
+    Returns:
+        Dict with updated booking details
+    """
+    try:
+        # Get current employee
+        current_employee = get_employee_by_user()
+        
+        # Get booking
+        if not frappe.db.exists("Meeting Room Booking", booking_id):
+            frappe.throw(_("Booking {0} does not exist").format(booking_id))
+        
+        booking = frappe.get_doc("Meeting Room Booking", booking_id)
+        
+        # Check permission
+        user_roles = frappe.get_roles()
+        is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+        
+        if not is_admin and booking.employee != current_employee:
+            frappe.throw(_("You can only update your own bookings"))
+        
+        # Check if booking date is in the past
+        if booking.booking_date < getdate():
+            frappe.throw(_("Cannot update past bookings"))
+        
+        # Update fields if provided
+        from datetime import datetime
+        
+        new_start = start_time or str(booking.start_time)
+        new_end = end_time or str(booking.end_time)
+        
+        # Parse times
+        if len(new_start) == 5:
+            new_start += ":00"
+        if len(new_end) == 5:
+            new_end += ":00"
+        
+        start_dt = datetime.strptime(new_start, "%H:%M:%S").time()
+        end_dt = datetime.strptime(new_end, "%H:%M:%S").time()
+        
+        # Validate times
+        if start_dt >= end_dt:
+            frappe.throw(_("End time must be after start time"))
+        
+        # Check for conflicts (excluding current booking)
+        if start_time or end_time:
+            conflicts = frappe.db.sql("""
+                SELECT name, employee_name, start_time, end_time
+                FROM `tabMeeting Room Booking`
+                WHERE meeting_room = %s
+                AND booking_date = %s
+                AND name != %s
+                AND (
+                    (start_time < %s AND end_time > %s)
+                    OR (start_time >= %s AND start_time < %s)
+                    OR (end_time > %s AND end_time <= %s)
+                )
+            """, (booking.meeting_room, booking.booking_date, booking_id, 
+                  new_end, new_start, new_start, new_end, new_start, new_end), as_dict=True)
+            
+            if conflicts:
+                conflict_info = conflicts[0]
+                frappe.throw(
+                    _("Room is already booked from {0} to {1} by {2}").format(
+                        conflict_info.start_time, 
+                        conflict_info.end_time,
+                        conflict_info.employee_name or "another employee"
+                    )
+                )
+        
+        # Update booking
+        if start_time:
+            booking.start_time = new_start
+        if end_time:
+            booking.end_time = new_end
+        if reason is not None:
+            booking.reason = reason
+        
+        # Recalculate duration
+        start_minutes = start_dt.hour * 60 + start_dt.minute
+        end_minutes = end_dt.hour * 60 + end_dt.minute
+        booking.duration_hours = (end_minutes - start_minutes) / 60
+        
+        booking.save(ignore_permissions=True)
+        frappe.db.commit()
+        
+        # Get room details
+        room_info = frappe.get_value(
+            "Meeting Room", 
+            booking.meeting_room, 
+            ["room_name", "location", "capacity"],
+            as_dict=True
+        )
+        
+        return {
+            "status": "success",
+            "message": _("Booking updated successfully"),
+            "data": {
+                "booking_id": booking.name,
+                "meeting_room": booking.meeting_room,
+                "room_name": room_info.room_name if room_info else booking.meeting_room,
+                "employee": booking.employee,
+                "employee_name": booking.employee_name,
+                "booking_date": str(booking.booking_date),
+                "start_time": str(booking.start_time),
+                "end_time": str(booking.end_time),
+                "duration_hours": booking.duration_hours,
+                "reason": booking.reason,
+            },
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Update Meeting Room Booking Error: {str(e)}\n{frappe.get_traceback()}", "Update Booking")
+        frappe.throw(_("Failed to update booking: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def cancel_meeting_room_booking(booking_id: str) -> dict:
+    """
+    Cancel/delete a meeting room booking.
+    Only the booking owner or admin can cancel.
+    
+    Args:
+        booking_id: Booking ID to cancel
+    
+    Returns:
+        Dict with cancellation status
+    """
+    try:
+        # Get current employee
+        current_employee = get_employee_by_user()
+        
+        # Get booking
+        if not frappe.db.exists("Meeting Room Booking", booking_id):
+            frappe.throw(_("Booking {0} does not exist").format(booking_id))
+        
+        booking = frappe.get_doc("Meeting Room Booking", booking_id)
+        
+        # Check permission
+        user_roles = frappe.get_roles()
+        is_admin = bool(set(user_roles) & {"Administrator", "System Manager", "HR Manager", "HR User"})
+        
+        if not is_admin and booking.employee != current_employee:
+            frappe.throw(_("You can only cancel your own bookings"))
+        
+        # Store info before deletion
+        booking_info = {
+            "booking_id": booking.name,
+            "meeting_room": booking.meeting_room,
+            "employee": booking.employee,
+            "booking_date": str(booking.booking_date),
+            "start_time": str(booking.start_time),
+            "end_time": str(booking.end_time),
+        }
+        
+        # Delete booking
+        frappe.delete_doc("Meeting Room Booking", booking_id, ignore_permissions=True)
+        frappe.db.commit()
+        
+        return {
+            "status": "success",
+            "message": _("Booking cancelled successfully"),
+            "data": booking_info,
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Cancel Meeting Room Booking Error: {str(e)}\n{frappe.get_traceback()}", "Cancel Booking")
+        frappe.throw(_("Failed to cancel booking: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_room_booking_calendar(
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> dict:
+    """
+    Get calendar view of all room bookings for date range.
+    Shows all rooms with their booking status for each day.
+    
+    Args:
+        from_date: Start date (defaults to first day of current month)
+        to_date: End date (defaults to last day of current month)
+    
+    Returns:
+        Dict with calendar data showing bookings by room and date
+    """
+    try:
+        # Set default date range (current month)
+        if not from_date:
+            today = getdate()
+            from_date = today.replace(day=1)
+        else:
+            from_date = getdate(from_date)
+        
+        if not to_date:
+            today = getdate()
+            next_month = today.replace(day=28) + timedelta(days=4)
+            to_date = next_month.replace(day=1) - timedelta(days=1)
+        else:
+            to_date = getdate(to_date)
+        
+        # Get all rooms - visible to everyone
+        rooms = frappe.get_all(
+            "Meeting Room",
+            fields=["name", "room_name", "location", "capacity"],
+            order_by="room_name asc",
+            ignore_permissions=True,
+        )
+        
+        # Get all bookings in date range - visible to everyone for calendar view
+        bookings = frappe.get_all(
+            "Meeting Room Booking",
+            filters={
+                "booking_date": ["between", [from_date, to_date]],
+            },
+            fields=[
+                "name", "meeting_room", "employee", "employee_name",
+                "booking_date", "start_time", "end_time", "duration_hours", "reason"
+            ],
+            order_by="booking_date asc, start_time asc",
+            ignore_permissions=True,
+        )
+        
+        # Build calendar data structure
+        # Format: { date: { room: [bookings] } }
+        calendar_data = {}
+        
+        # Initialize all dates
+        current_date = from_date
+        while current_date <= to_date:
+            date_str = str(current_date)
+            calendar_data[date_str] = {
+                "date": date_str,
+                "day_name": current_date.strftime("%A"),
+                "is_weekend": current_date.weekday() >= 5,
+                "rooms": {},
+            }
+            for room in rooms:
+                calendar_data[date_str]["rooms"][room.name] = {
+                    "room_name": room.room_name,
+                    "location": room.location,
+                    "capacity": room.capacity,
+                    "bookings": [],
+                    "total_hours_booked": 0,
+                }
+            current_date = current_date + timedelta(days=1)
+        
+        # Populate bookings
+        for booking in bookings:
+            date_str = str(booking.booking_date)
+            room_name = booking.meeting_room
+            
+            if date_str in calendar_data and room_name in calendar_data[date_str]["rooms"]:
+                employee_name = booking.employee_name
+                if not employee_name and booking.employee:
+                    employee_name = frappe.get_value("Employee", booking.employee, "employee_name")
+                
+                calendar_data[date_str]["rooms"][room_name]["bookings"].append({
+                    "booking_id": booking.name,
+                    "employee": booking.employee,
+                    "employee_name": employee_name,
+                    "start_time": str(booking.start_time),
+                    "end_time": str(booking.end_time),
+                    "duration_hours": booking.duration_hours,
+                    "reason": booking.reason,
+                })
+                calendar_data[date_str]["rooms"][room_name]["total_hours_booked"] += (booking.duration_hours or 0)
+        
+        # Convert to list format for easier consumption
+        calendar_list = []
+        for date_str in sorted(calendar_data.keys()):
+            day_data = calendar_data[date_str]
+            rooms_list = []
+            for room_name, room_data in day_data["rooms"].items():
+                rooms_list.append({
+                    "room_id": room_name,
+                    **room_data,
+                })
+            calendar_list.append({
+                "date": day_data["date"],
+                "day_name": day_data["day_name"],
+                "is_weekend": day_data["is_weekend"],
+                "rooms": rooms_list,
+            })
+        
+        # Calculate summary
+        total_bookings = len(bookings)
+        total_hours = sum(b.duration_hours or 0 for b in bookings)
+        
+        return {
+            "status": "success",
+            "data": {
+                "from_date": str(from_date),
+                "to_date": str(to_date),
+                "rooms": rooms,
+                "calendar": calendar_list,
+                "summary": {
+                    "total_rooms": len(rooms),
+                    "total_days": len(calendar_list),
+                    "total_bookings": total_bookings,
+                    "total_hours_booked": round(total_hours, 2),
+                },
+            },
+            "message": _("Calendar data fetched successfully"),
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Get Room Booking Calendar Error: {str(e)}\n{frappe.get_traceback()}", "Booking Calendar")
+        return {
+            "status": "error",
+            "message": str(e),
+            "data": None,
+        }
+
+
+@frappe.whitelist()
+def get_my_bookings(
+    from_date: str | None = None,
+    to_date: str | None = None,
+    upcoming_only: int = 0,
+) -> dict:
+    """
+    Get current user's meeting room bookings.
+    
+    Args:
+        from_date: Start date filter (optional)
+        to_date: End date filter (optional)
+        upcoming_only: If 1, show only future bookings
+    
+    Returns:
+        Dict with user's bookings
+    """
+    try:
+        current_employee = get_employee_by_user()
+        if not current_employee:
+            frappe.throw(_("No employee record found for current user"))
+        
+        employee_name = frappe.get_value("Employee", current_employee, "employee_name")
+        
+        # Build filters
+        filters = {
+            "employee": current_employee,
+        }
+        
+        if cint(upcoming_only):
+            filters["booking_date"] = [">=", getdate()]
+        elif from_date and to_date:
+            filters["booking_date"] = ["between", [getdate(from_date), getdate(to_date)]]
+        elif from_date:
+            filters["booking_date"] = [">=", getdate(from_date)]
+        elif to_date:
+            filters["booking_date"] = ["<=", getdate(to_date)]
+        
+        # Get bookings - ignore permissions for own bookings
+        bookings = frappe.get_all(
+            "Meeting Room Booking",
+            filters=filters,
+            fields=[
+                "name", "meeting_room", "booking_date", "start_time", "end_time",
+                "duration_hours", "reason", "cost"
+            ],
+            order_by="booking_date asc, start_time asc",
+            ignore_permissions=True,
+        )
+        
+        # Enrich with room details
+        formatted_bookings = []
+        for booking in bookings:
+            room_info = frappe.get_value(
+                "Meeting Room",
+                booking.meeting_room,
+                ["room_name", "location", "capacity"],
+                as_dict=True
+            )
+            
+            is_upcoming = getdate(booking.booking_date) >= getdate()
+            
+            formatted_bookings.append({
+                "booking_id": booking.name,
+                "meeting_room": booking.meeting_room,
+                "room_name": room_info.room_name if room_info else booking.meeting_room,
+                "location": room_info.location if room_info else None,
+                "capacity": room_info.capacity if room_info else None,
+                "booking_date": str(booking.booking_date),
+                "start_time": str(booking.start_time),
+                "end_time": str(booking.end_time),
+                "duration_hours": booking.duration_hours,
+                "reason": booking.reason,
+                "cost": booking.cost,
+                "is_upcoming": is_upcoming,
+                "is_today": getdate(booking.booking_date) == getdate(),
+            })
+        
+        # Calculate statistics
+        upcoming_bookings = [b for b in formatted_bookings if b["is_upcoming"]]
+        past_bookings = [b for b in formatted_bookings if not b["is_upcoming"]]
+        
+        return {
+            "status": "success",
+            "data": {
+                "employee": current_employee,
+                "employee_name": employee_name,
+                "bookings": formatted_bookings,
+                "statistics": {
+                    "total_bookings": len(formatted_bookings),
+                    "upcoming_bookings": len(upcoming_bookings),
+                    "past_bookings": len(past_bookings),
+                    "total_hours": round(sum(b["duration_hours"] or 0 for b in formatted_bookings), 2),
+                },
+            },
+            "message": _("Your bookings fetched successfully"),
+        }
+        
+    except Exception as e:
+        frappe.log_error(f"Get My Bookings Error: {str(e)}\n{frappe.get_traceback()}", "My Bookings")
+        return {
+            "status": "error",
+            "message": str(e),
+            "data": None,
+        }
+
