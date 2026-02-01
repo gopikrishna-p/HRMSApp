@@ -8,10 +8,12 @@ import {
     ActivityIndicator,
     Animated,
     ImageBackground,
+    Switch,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { Text, useTheme, Avatar, Divider } from 'react-native-paper';
 import { useAuth } from '../../context/AuthContext';
+import { useAppTheme } from '../../context/ThemeContext';
 import AppHeader from '../../components/ui/AppHeader';
 import ApiService from '../../services/api.service';
 import showToast from '../../utils/Toast';
@@ -19,6 +21,7 @@ import showToast from '../../utils/Toast';
 const ProfileScreen = ({ navigation }) => {
     const { employee, user, logout } = useAuth();
     const { custom } = useTheme();
+    const { colors, isDarkMode, toggleTheme, themeMode, setTheme } = useAppTheme();
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [profileData, setProfileData] = useState({
@@ -114,7 +117,7 @@ const ProfileScreen = ({ navigation }) => {
     };
 
     return (
-        <View style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
+        <View style={{ flex: 1, backgroundColor: colors.background }}>
             
 
             <ScrollView
@@ -321,6 +324,89 @@ const ProfileScreen = ({ navigation }) => {
                         value={profileData.pan_number ? '••••' + profileData.pan_number.slice(-4) : 'N/A'}
                         color="#7C3AED"
                     />
+                </InfoCard>
+
+                {/* Settings Section */}
+                <InfoCard title="⚙️ Settings" icon="cog">
+                    <View style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        paddingVertical: 12,
+                        paddingHorizontal: 4,
+                    }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <View style={{
+                                width: 36,
+                                height: 36,
+                                borderRadius: 10,
+                                backgroundColor: isDarkMode ? '#6366F115' : '#1F293715',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                marginRight: 12,
+                            }}>
+                                <Icon
+                                    name={isDarkMode ? 'moon' : 'sun'}
+                                    size={16}
+                                    color={isDarkMode ? '#818CF8' : '#F59E0B'}
+                                />
+                            </View>
+                            <View>
+                                <Text style={{ fontSize: 14, fontWeight: '600', color: colors.text }}>
+                                    Dark Mode
+                                </Text>
+                                <Text style={{ fontSize: 11, color: colors.textSecondary }}>
+                                    {isDarkMode ? 'On' : 'Off'}
+                                </Text>
+                            </View>
+                        </View>
+                        <Switch
+                            value={isDarkMode}
+                            onValueChange={toggleTheme}
+                            trackColor={{ false: '#E5E7EB', true: '#818CF8' }}
+                            thumbColor={isDarkMode ? '#6366F1' : '#F3F4F6'}
+                        />
+                    </View>
+
+                    {/* Theme Mode Selector */}
+                    <View style={{ marginTop: 8 }}>
+                        <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 8 }}>
+                            Theme Preference
+                        </Text>
+                        <View style={{ flexDirection: 'row', gap: 8 }}>
+                            {['light', 'dark', 'system'].map((mode) => (
+                                <TouchableOpacity
+                                    key={mode}
+                                    onPress={() => setTheme(mode)}
+                                    style={{
+                                        flex: 1,
+                                        paddingVertical: 10,
+                                        paddingHorizontal: 12,
+                                        borderRadius: 10,
+                                        backgroundColor: themeMode === mode
+                                            ? (isDarkMode ? '#6366F1' : '#111827')
+                                            : (isDarkMode ? colors.surfaceVariant : '#F3F4F6'),
+                                        alignItems: 'center',
+                                    }}
+                                >
+                                    <Icon
+                                        name={mode === 'light' ? 'sun' : mode === 'dark' ? 'moon' : 'mobile-alt'}
+                                        size={14}
+                                        color={themeMode === mode ? '#FFFFFF' : colors.textSecondary}
+                                    />
+                                    <Text style={{
+                                        fontSize: 11,
+                                        fontWeight: '600',
+                                        marginTop: 4,
+                                        color: themeMode === mode ? '#FFFFFF' : colors.textSecondary,
+                                        textTransform: 'capitalize',
+                                    }}>
+                                        {mode}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    </View>
                 </InfoCard>
 
                 {/* Logout Button */}

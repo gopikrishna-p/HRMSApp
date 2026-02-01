@@ -7,14 +7,14 @@ import {
     FlatList,
     RefreshControl,
     TouchableOpacity,
+    Modal,
+    Pressable,
+    TextInput as RNTextInput,
 } from 'react-native';
 import {
     Text,
     useTheme,
     ActivityIndicator,
-    Dialog,
-    Portal,
-    TextInput,
     Button as PaperButton,
     Chip,
     Divider,
@@ -24,10 +24,12 @@ import AppHeader from '../../components/ui/AppHeader';
 import Section from '../../components/ui/Section';
 import ListItem from '../../components/ui/ListItem';
 import StandupService from '../../services/standup.service';
+import { useAppTheme } from '../../context/ThemeContext';
 
 const AdminStandupDetailScreen = ({ navigation, route }) => {
     const { standupId, employeeName } = route.params || {};
     const { custom } = useTheme();
+    const { colors, isDarkMode } = useAppTheme();
 
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
@@ -568,40 +570,79 @@ const AdminStandupDetailScreen = ({ navigation, route }) => {
                 <View style={{ height: 20 }} />
             </ScrollView>
 
-            {/* Remarks Dialog */}
-            <Portal>
-                <Dialog
-                    visible={showRemarksDialog}
-                    onDismiss={() => setShowRemarksDialog(false)}
-                    style={styles.dialog}
+            {/* Remarks Modal - Bottom Sheet Style */}
+            <Modal
+                transparent
+                animationType="slide"
+                visible={showRemarksDialog}
+                onRequestClose={() => !submitting && setShowRemarksDialog(false)}
+            >
+                <Pressable
+                    style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}
+                    onPress={() => !submitting && setShowRemarksDialog(false)}
                 >
-                    <Dialog.Title>Manager Remarks</Dialog.Title>
-                    <Dialog.Content>
-                        <TextInput
-                            mode="outlined"
-                            placeholder="Enter your remarks here..."
-                            multiline
-                            numberOfLines={5}
-                            value={remarks}
-                            onChangeText={setRemarks}
-                            style={styles.remarksInput}
-                            editable={!submitting}
-                        />
-                    </Dialog.Content>
-                    <Dialog.Actions>
-                        <PaperButton onPress={() => setShowRemarksDialog(false)} disabled={submitting}>
-                            Cancel
-                        </PaperButton>
-                        <PaperButton
-                            onPress={handleSubmitRemarks}
-                            loading={submitting}
+                    <View />
+                </Pressable>
+                <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+                    <View style={[styles.modalHeader, { borderBottomColor: isDarkMode ? colors.border : '#F3F4F6' }]}>
+                        <Text style={[styles.modalTitle, { color: colors.text }]}>Manager Remarks</Text>
+                        <TouchableOpacity
+                            onPress={() => !submitting && setShowRemarksDialog(false)}
+                            style={[styles.closeButton, { backgroundColor: isDarkMode ? colors.surfaceVariant : '#F3F4F6' }]}
                             disabled={submitting}
                         >
-                            Save
-                        </PaperButton>
-                    </Dialog.Actions>
-                </Dialog>
-            </Portal>
+                            <Icon name="times" size={18} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                    </View>
+
+                    <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+                        <View style={styles.inputGroup}>
+                            <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>
+                                Your Remarks
+                            </Text>
+                            <RNTextInput
+                                value={remarks}
+                                onChangeText={setRemarks}
+                                placeholder="Enter your remarks here..."
+                                placeholderTextColor={colors.textTertiary}
+                                multiline
+                                numberOfLines={5}
+                                textAlignVertical="top"
+                                style={[styles.input, styles.textArea, {
+                                    backgroundColor: isDarkMode ? colors.surfaceVariant : '#F9FAFB',
+                                    borderColor: colors.border,
+                                    color: colors.text,
+                                }]}
+                                editable={!submitting}
+                            />
+                        </View>
+
+                        <View style={styles.modalActions}>
+                            <TouchableOpacity
+                                onPress={() => setShowRemarksDialog(false)}
+                                style={[styles.cancelButton, { backgroundColor: isDarkMode ? colors.surfaceVariant : '#F3F4F6' }]}
+                                disabled={submitting}
+                            >
+                                <Text style={[styles.cancelButtonText, { color: colors.textSecondary }]}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                onPress={handleSubmitRemarks}
+                                style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
+                                disabled={submitting}
+                            >
+                                {submitting ? (
+                                    <ActivityIndicator size="small" color="#FFFFFF" />
+                                ) : (
+                                    <>
+                                        <Icon name="save" size={14} color="#FFFFFF" />
+                                        <Text style={styles.submitButtonText}>Save</Text>
+                                    </>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    </ScrollView>
+                </View>
+            </Modal>
         </View>
     );
 };
@@ -923,6 +964,99 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#991B1B',
         lineHeight: 18,
+    },
+    // Modal Styles
+    modalOverlay: {
+        flex: 1,
+    },
+    modalContent: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 0,
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        maxHeight: '70%',
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: 20,
+        paddingBottom: 16,
+        borderBottomWidth: 1,
+    },
+    modalTitle: {
+        fontSize: 20,
+        fontWeight: '800',
+    },
+    closeButton: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    modalBody: {
+        padding: 20,
+        paddingBottom: 40,
+    },
+    inputGroup: {
+        marginBottom: 16,
+    },
+    inputLabel: {
+        fontSize: 13,
+        fontWeight: '600',
+        marginBottom: 8,
+    },
+    input: {
+        borderWidth: 1,
+        borderRadius: 12,
+        padding: 14,
+        fontSize: 15,
+    },
+    textArea: {
+        minHeight: 120,
+        textAlignVertical: 'top',
+    },
+    modalActions: {
+        flexDirection: 'row',
+        gap: 12,
+        marginTop: 8,
+    },
+    cancelButton: {
+        flex: 1,
+        paddingVertical: 14,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    cancelButtonText: {
+        fontSize: 15,
+        fontWeight: '700',
+    },
+    submitButton: {
+        flex: 1,
+        flexDirection: 'row',
+        paddingVertical: 14,
+        borderRadius: 12,
+        backgroundColor: '#111827',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        elevation: 2,
+        shadowColor: '#000',
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+        shadowOffset: { width: 0, height: 2 },
+    },
+    submitButtonDisabled: {
+        backgroundColor: '#9CA3AF',
+    },
+    submitButtonText: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#FFFFFF',
     },
 });
 

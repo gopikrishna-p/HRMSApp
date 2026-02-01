@@ -6,16 +6,20 @@ import Toast from 'react-native-toast-message';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AuthProvider } from './context/AuthContext';
+import { ThemeProvider, useAppTheme } from './context/ThemeContext';
 import AppNavigator from './navigation/AppNavigator';
-import { theme } from './theme/theme';
+import { getTheme } from './theme/theme';
 
-const App = () => {
+// Inner app component that uses theme
+const AppContent = () => {
+    const { isDarkMode, colors } = useAppTheme();
+    const paperTheme = getTheme(isDarkMode);
+
     useEffect(() => {
         // Initialize notification service with error handling
         const initializeNotifications = async () => {
             try {
                 console.log('🚀 App.js: Starting notification initialization...');
-                // Try to import and initialize notification service
                 const NotificationService = require('./services/notification.service').default || require('./services/notification.service');
                 const initialized = await NotificationService.initialize();
                 if (initialized) {
@@ -26,13 +30,11 @@ const App = () => {
             } catch (error) {
                 console.warn('⚠️ App.js: Notification service initialization failed:', error.message);
                 console.log('📱 App will continue without native notifications');
-                // App continues to work without notifications
             }
         };
 
         initializeNotifications();
-        
-        // Cleanup on unmount
+
         return () => {
             try {
                 const NotificationService = require('./services/notification.service').default || require('./services/notification.service');
@@ -47,15 +49,26 @@ const App = () => {
     }, []);
 
     return (
+        <PaperProvider theme={paperTheme}>
+            <AuthProvider>
+                <StatusBar
+                    barStyle={isDarkMode ? 'light-content' : 'dark-content'}
+                    backgroundColor={colors.background}
+                />
+                <AppNavigator />
+                <Toast />
+            </AuthProvider>
+        </PaperProvider>
+    );
+};
+
+const App = () => {
+    return (
         <GestureHandlerRootView style={{ flex: 1 }}>
             <SafeAreaProvider>
-                <PaperProvider theme={theme}>
-                    <AuthProvider>
-                        <StatusBar barStyle="light-content" />
-                        <AppNavigator />
-                        <Toast />
-                    </AuthProvider>
-                </PaperProvider>
+                <ThemeProvider>
+                    <AppContent />
+                </ThemeProvider>
             </SafeAreaProvider>
         </GestureHandlerRootView>
     );

@@ -6,6 +6,9 @@ import {
   Alert,
   RefreshControl,
   TouchableOpacity,
+  Modal,
+  Pressable,
+  TextInput as RNTextInput,
 } from 'react-native';
 import {
   Text,
@@ -14,17 +17,16 @@ import {
   Button as PaperButton,
   Chip,
   Divider,
-  Dialog,
-  Portal,
-  TextInput,
 } from 'react-native-paper';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import AppHeader from '../../components/ui/AppHeader';
 import Section from '../../components/ui/Section';
 import StandupService from '../../services/standup.service';
+import { useAppTheme } from '../../context/ThemeContext';
 
 const EmployeeTodayStandupScreen = ({ navigation, route }) => {
   const { custom } = useTheme();
+  const { colors, isDarkMode } = useAppTheme();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -359,56 +361,101 @@ const EmployeeTodayStandupScreen = ({ navigation, route }) => {
         <View style={{ height: 20 }} />
       </ScrollView>
 
-      {/* Create First Task Dialog */}
-      <Portal>
-        <Dialog
-          visible={showCreateTaskDialog}
-          onDismiss={() => !creatingTask && setShowCreateTaskDialog(false)}
-          style={styles.dialog}
+      {/* Create First Task Modal - Bottom Sheet Style */}
+      <Modal
+        transparent
+        animationType="slide"
+        visible={showCreateTaskDialog}
+        onRequestClose={() => !creatingTask && setShowCreateTaskDialog(false)}
+      >
+        <Pressable
+          style={[styles.modalOverlay, { backgroundColor: colors.overlay }]}
+          onPress={() => !creatingTask && setShowCreateTaskDialog(false)}
         >
-          <Dialog.Title>Create Your First Task</Dialog.Title>
-          <Dialog.Content>
-            <Text style={styles.dialogHelper}>
+          <View />
+        </Pressable>
+        <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+          <View style={[styles.modalHeader, { borderBottomColor: isDarkMode ? colors.border : '#F3F4F6' }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Create Your First Task</Text>
+            <TouchableOpacity
+              onPress={() => !creatingTask && setShowCreateTaskDialog(false)}
+              style={[styles.closeButton, { backgroundColor: isDarkMode ? colors.surfaceVariant : '#F3F4F6' }]}
+              disabled={creatingTask}
+            >
+              <Icon name="times" size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+            <Text style={[styles.dialogHelper, { color: colors.textSecondary }]}>
               Describe what you plan to accomplish today
             </Text>
-            <TextInput
-              mode="outlined"
-              label="Task Title"
-              placeholder="e.g., API Development for Login Module"
-              value={taskTitle}
-              onChangeText={setTaskTitle}
-              editable={!creatingTask}
-              style={styles.dialogInput}
-            />
-            <TextInput
-              mode="outlined"
-              label="Planned Output"
-              placeholder="What do you plan to achieve?"
-              multiline
-              numberOfLines={4}
-              value={plannedOutput}
-              onChangeText={setPlannedOutput}
-              editable={!creatingTask}
-              style={styles.dialogInput}
-            />
-          </Dialog.Content>
-          <Dialog.Actions>
-            <PaperButton
-              onPress={() => setShowCreateTaskDialog(false)}
-              disabled={creatingTask}
-            >
-              Cancel
-            </PaperButton>
-            <PaperButton
-              onPress={handleCreateFirstTask}
-              loading={creatingTask}
-              disabled={creatingTask}
-            >
-              Create Task
-            </PaperButton>
-          </Dialog.Actions>
-        </Dialog>
-      </Portal>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>
+                Task Title <Text style={{ color: colors.error }}>*</Text>
+              </Text>
+              <RNTextInput
+                value={taskTitle}
+                onChangeText={setTaskTitle}
+                placeholder="e.g., API Development for Login Module"
+                placeholderTextColor={colors.textTertiary}
+                style={[styles.input, {
+                  backgroundColor: isDarkMode ? colors.surfaceVariant : '#F9FAFB',
+                  borderColor: colors.border,
+                  color: colors.text,
+                }]}
+                editable={!creatingTask}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>
+                Planned Output
+              </Text>
+              <RNTextInput
+                value={plannedOutput}
+                onChangeText={setPlannedOutput}
+                placeholder="What do you plan to achieve?"
+                placeholderTextColor={colors.textTertiary}
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+                style={[styles.input, styles.textArea, {
+                  backgroundColor: isDarkMode ? colors.surfaceVariant : '#F9FAFB',
+                  borderColor: colors.border,
+                  color: colors.text,
+                }]}
+                editable={!creatingTask}
+              />
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                onPress={() => setShowCreateTaskDialog(false)}
+                style={[styles.cancelButton, { backgroundColor: isDarkMode ? colors.surfaceVariant : '#F3F4F6' }]}
+                disabled={creatingTask}
+              >
+                <Text style={[styles.cancelButtonText, { color: colors.textSecondary }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleCreateFirstTask}
+                style={[styles.submitButton, (!taskTitle || creatingTask) && styles.submitButtonDisabled]}
+                disabled={!taskTitle || creatingTask}
+              >
+                {creatingTask ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Icon name="plus" size={14} color="#FFFFFF" />
+                    <Text style={styles.submitButtonText}>Create Task</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -583,17 +630,102 @@ const styles = StyleSheet.create({
     color: '#4B5563',
     marginTop: 4,
   },
-  dialog: {
-    marginHorizontal: 16,
-  },
   dialogHelper: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginBottom: 12,
+    fontSize: 13,
+    marginBottom: 16,
   },
-  dialogInput: {
-    backgroundColor: '#FFF',
-    marginBottom: 12,
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+  },
+  modalContent: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  closeButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalBody: {
+    padding: 20,
+    paddingBottom: 40,
+  },
+  inputGroup: {
+    marginBottom: 16,
+  },
+  inputLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 15,
+  },
+  textArea: {
+    minHeight: 100,
+    textAlignVertical: 'top',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  submitButton: {
+    flex: 1,
+    flexDirection: 'row',
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#111827',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  submitButtonDisabled: {
+    backgroundColor: '#9CA3AF',
+  },
+  submitButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 });
 
