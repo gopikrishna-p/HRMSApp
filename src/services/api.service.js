@@ -226,6 +226,49 @@ class ApiService {
         });
     }
 
+    // On Site APIs
+    getOnSiteRequests() {
+        return this.get(m('get_on_site_requests'));
+    }
+
+    getPendingOnSiteRequests() {
+        return this.get(m('get_pending_on_site_requests'));
+    }
+
+    getAllOnSiteRequestsForAdmin() {
+        return this.get(m('get_all_on_site_requests_admin'));
+    }
+
+    submitOnSiteRequest(requestData) {
+        return this.post(m('submit_on_site_request'), requestData);
+    }
+
+    deleteOnSiteRequest(requestId) {
+        return this.post(m('delete_on_site_request'), { 
+            request_id: requestId 
+        });
+    }
+
+    approveOnSiteRequest(requestId) {
+        return this.post(m('on_site_request_action'), { 
+            request_id: requestId, 
+            action: 'approve' 
+        });
+    }
+
+    rejectOnSiteRequest(requestId) {
+        return this.post(m('on_site_request_action'), { 
+            request_id: requestId, 
+            action: 'reject' 
+        });
+    }
+
+    enableOnSiteForEmployee(employeeId) {
+        return this.post(m('enable_on_site_for_employee'), { 
+            employee_id: employeeId 
+        });
+    }
+
     geoAttendance({ employee, action, latitude, longitude, work_type }) {
         // action: "Check-In" | "Check-Out"
         return this.post(m('geo_attendance'), {
@@ -988,6 +1031,15 @@ class ApiService {
 
     downloadSalarySlip({ name }) {
         return this.get(m('download_salary_slip'), { name });
+    }
+
+    /**
+     * Debug endpoint to check user session and employee data
+     * Uses: debug_user_session from backend
+     * @returns {Promise} Response with debug information
+     */
+    debugUserSession() {
+        return this.get(m('debug_user_session'));
     }
 
 

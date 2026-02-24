@@ -66,7 +66,8 @@ class AttendanceService {
                     checkInTime: record.in_time,
                     checkOutTime: record.out_time || record.custom_out_time_copy,
                     status: record.status,
-                    workType: record.work_type || 'Office'
+                    // Handle both standard and custom work_type field names
+                    workType: record.custom_work_type || record.work_type || 'Office'
                 };
             }
             

@@ -32,7 +32,6 @@ const LeaveApprovalsScreen = ({ navigation }) => {
     // Filters
     const [selectedDepartment, setSelectedDepartment] = useState('');
     const [selectedEmployee, setSelectedEmployee] = useState('');
-    const [selectedLeaveType, setSelectedLeaveType] = useState('');
     const [historyStatusFilter, setHistoryStatusFilter] = useState('');
     
     // Data for filters
@@ -103,7 +102,6 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                 status: 'Open',
                 department: selectedDepartment || null,
                 employee: selectedEmployee || null,
-                leave_type: selectedLeaveType || null,
             };
 
             console.log('📋 Fetching pending leaves with filters:', filters);
@@ -131,7 +129,6 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                 status: historyStatusFilter || null,
                 department: selectedDepartment || null,
                 employee: selectedEmployee || null,
-                leave_type: selectedLeaveType || null,
             };
 
             const response = await apiService.getAllLeaves(filters);
@@ -170,7 +167,7 @@ const LeaveApprovalsScreen = ({ navigation }) => {
         } finally {
             setRefreshing(false);
         }
-    }, [activeTab, selectedDepartment, selectedEmployee, selectedLeaveType, historyStatusFilter]);
+    }, [activeTab, selectedDepartment, selectedEmployee, historyStatusFilter]);
 
     useEffect(() => {
         if (activeTab === 'pending') {
@@ -178,7 +175,7 @@ const LeaveApprovalsScreen = ({ navigation }) => {
         } else if (activeTab === 'history') {
             fetchHistoryLeaves();
         }
-    }, [activeTab, selectedDepartment, selectedEmployee, selectedLeaveType, historyStatusFilter]);
+    }, [activeTab, selectedDepartment, selectedEmployee, historyStatusFilter]);
 
     const openActionModal = (leave, action) => {
         setSelectedLeave(leave);

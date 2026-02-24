@@ -107,15 +107,19 @@ const CheckInOutScreen = () => {
         }
     }, [employeeId, fetchWFHInfo, fetchOfficeLocation, fetchTodayAttendance]);
 
-    // Run location check exactly once after officeLocation is available
+    // Run location check when officeLocation becomes available OR when WFH is toggled off
     useEffect(() => {
-        if (officeLocation) {
+        if (isWFH) {
+            setLocationStatus('wfh');
+            setDistance(null);
+            setLocationError(null);
+        } else if (officeLocation) {
             checkGeofenceStatus();
         } else {
-            setLocationStatus(isWFH ? 'wfh' : 'checking');
+            setLocationStatus('checking');
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [officeLocation]);
+    }, [officeLocation, isWFH]);
 
     const canDoWFH = useMemo(() => wfhEligible, [wfhEligible]);
 
@@ -175,14 +179,20 @@ const CheckInOutScreen = () => {
                 work_type,
             });
 
-            if (res.success && res.data?.message) {
-                const m = res.data.message;
-                Alert.alert('Success', `${action} successful!\nRef: ${m.geo_log || m.attendance}\n${isWFH ? 'Mode: WFH' : `Distance: ${distance}m`}`);
+            // Check actual response status (Frappe wraps errors in HTTP 200)
+            const responseData = res.data?.message;
+            const isActualSuccess = res.success && responseData && responseData.status !== 'error';
+
+            if (isActualSuccess) {
+                const m = responseData;
+                Alert.alert('Success', `${action} successful!\nRef: ${m.geo_log || m.attendance || 'Done'}\n${isWFH ? 'Mode: WFH' : `Distance: ${distance ?? 0}m`}`);
                 
                 // Refresh today's attendance after check-in/out
                 fetchTodayAttendance();
+                // Also refresh location after action
+                if (!isWFH) checkGeofenceStatus();
             } else {
-                const msg = parseBackendError(res);
+                const msg = parseBackendError(res.data || res);
                 Alert.alert('Failed', msg);
             }
         } catch (e) {

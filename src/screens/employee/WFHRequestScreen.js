@@ -228,12 +228,12 @@ const WFHRequestScreen = ({ navigation }) => {
             const response = await ApiService.submitWFHRequest(requestData);
             console.log('📥 Submit response:', response);
 
-            // Backend returns: { status: "success", message: "...", name: "..." }
+            // Backend returns: { success: true, message: "...", request_id: "..." }
             // Frappe wraps it: { success: true, data: { message: {...} } }
             if (response.success) {
                 const backendData = response.data?.message || response.data || {};
                 
-                if (backendData.status === 'success') {
+                if (backendData.success === true) {
                     showToast({
                         type: 'success',
                         text1: 'Request Submitted',
@@ -302,7 +302,7 @@ const WFHRequestScreen = ({ navigation }) => {
             if (response.success) {
                 const backendData = response.data?.message || response.data || {};
                 
-                if (backendData.status === 'success') {
+                if (backendData.success === true) {
                     showToast({
                         type: 'success',
                         text1: 'Request Deleted',

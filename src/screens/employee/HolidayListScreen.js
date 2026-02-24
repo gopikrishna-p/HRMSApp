@@ -74,7 +74,18 @@ const HolidayListScreen = ({ navigation }) => {
 
                 const processedHolidays = holidaysList.map(holiday => {
                     const holidayDate = new Date(holiday.holiday_date);
-                    const isWeeklyOff = holiday.weekly_off === 1 || holiday.weekly_off === true;
+                    
+                    // Detect weekly offs (weekends) based on day of week or description
+                    const dayOfWeek = holidayDate.getDay(); // 0 = Sunday, 6 = Saturday
+                    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // Sunday or Saturday
+                    const isDescriptionWeekend = holiday.description && 
+                        (holiday.description.toLowerCase().includes('saturday') || 
+                         holiday.description.toLowerCase().includes('sunday'));
+                    
+                    const isWeeklyOff = holiday.weekly_off === 1 || 
+                                       holiday.weekly_off === true || 
+                                       isWeekend || 
+                                       isDescriptionWeekend;
                     
                     return {
                         ...holiday,
@@ -90,6 +101,13 @@ const HolidayListScreen = ({ navigation }) => {
                         dayOfMonth: holidayDate.getDate(),
                     };
                 });
+
+                console.log('First few processed holidays:', processedHolidays.slice(0, 5).map(h => ({
+                    date: h.holiday_date,
+                    description: h.description,
+                    isWeeklyOff: h.isWeeklyOff,
+                    dayName: h.dayName
+                })));
 
                 // Sort by date (ascending)
                 processedHolidays.sort((a, b) => a.dateObj - b.dateObj);

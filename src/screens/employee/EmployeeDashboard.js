@@ -131,24 +131,18 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
             console.log('Analytics API Response:', JSON.stringify(response, null, 2));
 
             if (response.success && response.data) {
-                // Backend returns: { message: { status: "success", data: {...}, message: "..." } }
-                // Extract the analytics data - it's nested inside message.data
-                const messageData = response.data.message;
-                let analyticsData = null;
+                // Handle nested API response structure
+                let analyticsData = response.data.message;
                 
-                if (messageData && messageData.data) {
-                    analyticsData = messageData.data;
-                } else if (messageData && typeof messageData === 'object' && messageData.attendance) {
-                    // Sometimes the data IS the message object itself
-                    analyticsData = messageData;
-                } else {
-                    analyticsData = response.data;
+                // Check if data is nested further (API returns extra layers)
+                if (analyticsData && analyticsData.data && analyticsData.data.message) {
+                    analyticsData = analyticsData.data.message;
                 }
                 
-                    console.log('Extracted Analytics Data:', JSON.stringify(analyticsData, null, 2));
+                console.log('Extracted Analytics Data:', JSON.stringify(analyticsData, null, 2));
 
-                    // Check if we have the attendance and leave data
-                    if (analyticsData && analyticsData.attendance && analyticsData.leave) {
+                // Check if we have the attendance and leave data
+                if (analyticsData && analyticsData.attendance && analyticsData.leave) {
                         console.log('=== ANALYTICS DATA BREAKDOWN ===');
                         console.log('Attendance Data:', analyticsData.attendance);
                         console.log('Leave Data:', analyticsData.leave);

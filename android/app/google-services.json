@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1087657081609",
+    "project_id": "dghrms-new",
+    "storage_bucket": "dghrms-new.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1087657081609:android:83a0b2a477127e5ecfb1d8",
+        "android_client_info": {
+          "package_name": "com.hrmsapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA9FyTA70U1Lms4eLQyzb0jzeRaBC9qxuc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

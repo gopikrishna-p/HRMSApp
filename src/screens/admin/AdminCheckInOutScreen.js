@@ -103,15 +103,19 @@ const AdminCheckInOutScreen = () => {
         }
     }, [adminEmployeeId, fetchWFHInfo, fetchOfficeLocation]);
 
-    // Run location check exactly once, after officeLocation becomes available
+    // Run location check when officeLocation becomes available OR when WFH is toggled off
     useEffect(() => {
-        if (officeLocation) {
+        if (isWFH) {
+            setLocationStatus('wfh');
+            setDistance(null);
+            setLocationError(null);
+        } else if (officeLocation) {
             checkGeofenceStatus();
         } else {
-            setLocationStatus(isWFH ? 'wfh' : 'checking');
+            setLocationStatus('checking');
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [officeLocation]);
+    }, [officeLocation, isWFH]);
 
     // Kiosk list load (once when enabled)
     useEffect(() => {
@@ -209,15 +213,23 @@ const AdminCheckInOutScreen = () => {
                 work_type,
             });
 
-            if (res.success && res.data?.message) {
-                const m = res.data.message;
+            // Check actual response status (Frappe wraps errors in HTTP 200)
+            const responseData = res.data?.message;
+            const isActualSuccess = res.success && responseData && responseData.status !== 'error';
+
+            if (isActualSuccess) {
+                const m = responseData;
                 Alert.alert(
                     'Success',
-                    `${action} successful for ${displayName}!\nRef: ${m.geo_log || m.attendance}\n${isWFH ? 'Mode: WFH' : `Distance: ${distance}m`}`,
-                    [{ text: 'OK', onPress: () => { if (kioskMode) { setSelectedEmployee(null); setSearchQuery(''); } } }]
+                    `${action} successful for ${displayName}!\nRef: ${m.geo_log || m.attendance || 'Done'}\n${isWFH ? 'Mode: WFH' : `Distance: ${distance ?? 0}m`}`,
+                    [{ text: 'OK', onPress: () => { 
+                        if (kioskMode) { setSelectedEmployee(null); setSearchQuery(''); } 
+                        // Refresh location after action
+                        if (!isWFH) checkGeofenceStatus();
+                    } }]
                 );
             } else {
-                const msg = parseBackendError(res);
+                const msg = parseBackendError(res.data || res);
                 Alert.alert('Failed', msg);
             }
         } catch (e) {
