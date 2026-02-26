@@ -496,6 +496,8 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                             tint={custom.palette.primary} onPress={() => navigation.navigate('AttendanceHistory')} />
                         <ListItem title="WFH Request" subtitle="Apply for work from home" leftIcon="home"
                             tint={custom.palette.primary} onPress={() => navigation.navigate('WFHRequest')} />
+                        <ListItem title="On Site Request" subtitle="Request to work on client site" leftIcon="map-marker-alt"
+                            tint="#2196F3" onPress={() => navigation.navigate('OnSiteRequest')} />
                     </Section>
 
                     <Section title="Leaves" icon="umbrella-beach" tint={custom.palette.success}>

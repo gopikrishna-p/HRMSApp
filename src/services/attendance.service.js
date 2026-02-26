@@ -7,6 +7,9 @@ const ENDPOINTS = {
     GET_USER_WFH_INFO: '/api/method/hrms.api.get_user_wfh_info',
     GET_EMPLOYEE_WFH_LIST: '/api/method/hrms.api.get_employee_wfh_list',
     TOGGLE_WFH_ELIGIBILITY: '/api/method/hrms.api.toggle_wfh_eligibility',
+    // OnSite endpoints
+    GET_EMPLOYEE_ONSITE_LIST: '/api/method/hrms.api.get_employee_on_site_list',
+    TOGGLE_ONSITE_ELIGIBILITY: '/api/method/hrms.api.toggle_on_site_eligibility',
     TODAY_ATTENDANCE: '/api/method/hrms.api.get_today_attendance',
     GET_HOLIDAYS: '/api/method/hrms.api.get_holidays',
     GET_LEAVE_APPLICATIONS: '/api/method/hrms.api.get_leave_applications',
@@ -26,9 +29,12 @@ class AttendanceService {
     }
     async geoAttendance({ employee, action, latitude, longitude, work_type }) {
         const isWFH = work_type === 'WFH';
+        const isOnsite = work_type === 'Onsite' || work_type === 'On Site';
         const lat = isWFH ? 0 : Number(latitude ?? 0);
         const lon = isWFH ? 0 : Number(longitude ?? 0);
-        return ApiService.post(ENDPOINTS.GEO_ATTENDANCE, { employee, action, latitude: lat, longitude: lon, work_type: isWFH ? 'WFH' : undefined });
+        // Send work_type for WFH, On Site (backend expects 'On Site'), or Office (default)
+        const finalWorkType = isWFH ? 'WFH' : isOnsite ? 'On Site' : 'Office';
+        return ApiService.post(ENDPOINTS.GEO_ATTENDANCE, { employee, action, latitude: lat, longitude: lon, work_type: finalWorkType });
     }
 
     async getOfficeLocation(employee) {
@@ -99,6 +105,15 @@ class AttendanceService {
 
     async toggleWFHEligibility(employee_id, wfh_eligible) {
         return ApiService.post(ENDPOINTS.TOGGLE_WFH_ELIGIBILITY, { employee_id, wfh_eligible: !!wfh_eligible ? 1 : 0 });
+    }
+
+    // OnSite eligibility management
+    async getEmployeeOnSiteList() {
+        return ApiService.get(ENDPOINTS.GET_EMPLOYEE_ONSITE_LIST);
+    }
+
+    async toggleOnSiteEligibility(employee_id, on_site_eligible) {
+        return ApiService.post(ENDPOINTS.TOGGLE_ONSITE_ELIGIBILITY, { employee_id, on_site_eligible: !!on_site_eligible ? 1 : 0 });
     }
 
     // ✅ date is optional: 'YYYY-MM-DD'

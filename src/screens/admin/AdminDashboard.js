@@ -40,6 +40,7 @@ const AdminDashboard = ({ navigation }) => {
 
     const [pendingData, setPendingData] = useState({
         wfhApprovals: 0,
+        onsiteApprovals: 0,
         leaveApprovals: 0,
         expenseApprovals: 0,
         travelApprovals: 0,
@@ -107,25 +108,28 @@ const AdminDashboard = ({ navigation }) => {
                     leave: approvals.leave_applications?.length || 0,
                     expense: approvals.expense_claims?.length || 0,
                     wfh: approvals.wfh_requests?.length || 0,
+                    onsite: approvals.on_site_requests?.length || 0,
                     travel: approvals.travel_requests?.length || 0,
                     compLeave: approvals.comp_leave_requests?.length || 0,
                 });
                 
                 const data = {
                     wfhApprovals: approvals.wfh_requests?.length || 0,
+                    onsiteApprovals: approvals.on_site_requests?.length || 0,
                     leaveApprovals: approvals.leave_applications?.length || 0,
                     expenseApprovals: approvals.expense_claims?.length || 0,
                     travelApprovals: approvals.travel_requests?.length || 0,
                     compLeaveApprovals: approvals.comp_leave_requests?.length || 0,
                 };
                 
-                data.notifications = data.wfhApprovals + data.leaveApprovals + data.expenseApprovals + 
+                data.notifications = data.wfhApprovals + data.onsiteApprovals + data.leaveApprovals + data.expenseApprovals + 
                                     data.travelApprovals + data.compLeaveApprovals;
                 
                 console.log('✅ Admin pending approvals fetched:', {
                     leave: data.leaveApprovals,
                     expense: data.expenseApprovals,
                     wfh: data.wfhApprovals,
+                    onsite: data.onsiteApprovals,
                     travel: data.travelApprovals,
                     compLeave: data.compLeaveApprovals,
                     total: data.notifications
@@ -263,6 +267,13 @@ const AdminDashboard = ({ navigation }) => {
                         tint={custom.palette.success} onPress={() => navigation.navigate('WFHSettings')} />
                     <ListItem title="WFH Approvals" subtitle="Approve/reject requests" leftIcon="check-circle" badge={pendingData.wfhApprovals || null}
                         tint={custom.palette.success} onPress={() => navigation.navigate('WFHApprovals')} />
+                </Section>
+
+                <Section title="On Site Policy & Settings" icon="map-marker-alt" tint="#2196F3">
+                    <ListItem title="Manage On Site Settings" subtitle="Configure rules & eligibility" leftIcon="cog"
+                        tint="#2196F3" onPress={() => navigation.navigate('OnSiteSettings')} />
+                    <ListItem title="On Site Approvals" subtitle="Approve/reject requests" leftIcon="check-circle" badge={pendingData.onsiteApprovals || null}
+                        tint="#2196F3" onPress={() => navigation.navigate('OnSiteApprovals')} />
                 </Section>
 
                 <Section title="Analytics & Reports" icon="chart-line" tint={custom.palette.warning}>

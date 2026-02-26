@@ -10,16 +10,19 @@ import {
     Modal,
     TextInput,
     ActivityIndicator,
+    Platform,
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
+import Input from '../../components/common/Input';
 import apiService from '../../services/api.service';
 
 const CompApprovalScreen = ({ navigation }) => {
     // State management
-    const [activeTab, setActiveTab] = useState('pending'); // 'pending', 'history', 'statistics'
+    const [activeTab, setActiveTab] = useState('pending'); // 'pending', 'apply', 'history', 'statistics'
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
 
@@ -41,6 +44,19 @@ const CompApprovalScreen = ({ navigation }) => {
     const [filterEmployee, setFilterEmployee] = useState('');
     const [filterStatus, setFilterStatus] = useState(''); // For history: 1=Approved, 2=Cancelled
 
+    // Apply Form States
+    const [applyEmployee, setApplyEmployee] = useState('');
+    const [applyWorkFromDate, setApplyWorkFromDate] = useState(new Date());
+    const [applyWorkEndDate, setApplyWorkEndDate] = useState(new Date());
+    const [showApplyFromPicker, setShowApplyFromPicker] = useState(false);
+    const [showApplyEndPicker, setShowApplyEndPicker] = useState(false);
+    const [applyReason, setApplyReason] = useState('');
+    const [applyHalfDay, setApplyHalfDay] = useState(false);
+    const [applyHalfDayDate, setApplyHalfDayDate] = useState(new Date());
+    const [showApplyHalfDayPicker, setShowApplyHalfDayPicker] = useState(false);
+    const [applyLeaveType, setApplyLeaveType] = useState('Compensatory Off');
+    const [leaveTypes, setLeaveTypes] = useState([]);
+
     // Action modal
     const [showActionModal, setShowActionModal] = useState(false);
     const [selectedRequest, setSelectedRequest] = useState(null);
@@ -50,6 +66,7 @@ const CompApprovalScreen = ({ navigation }) => {
     useEffect(() => {
         loadDepartments();
         loadEmployees();
+        loadLeaveTypes();
     }, []);
 
     useEffect(() => {
@@ -89,6 +106,32 @@ const CompApprovalScreen = ({ navigation }) => {
         } catch (error) {
             console.error('Load employees error:', error);
             setEmployees([]);
+        }
+    };
+
+    const loadLeaveTypes = async () => {
+        try {
+            const response = await apiService.getLeaveTypes();
+            if (response.success && response.data?.message) {
+                const types = response.data.message;
+                // Filter for compensatory off types or allow all
+                const compTypes = Array.isArray(types) 
+                    ? types.filter(t => t.is_compensatory === 1 || t.leave_type_name?.toLowerCase().includes('compensatory'))
+                    : [];
+                // If no compensatory types, use all
+                setLeaveTypes(compTypes.length > 0 ? compTypes : (Array.isArray(types) ? types : []));
+                // Set default
+                if (compTypes.length > 0) {
+                    setApplyLeaveType(compTypes[0].name);
+                } else if (Array.isArray(types) && types.length > 0) {
+                    setApplyLeaveType(types[0].name);
+                }
+            } else {
+                setLeaveTypes([]);
+            }
+        } catch (error) {
+            console.error('Load leave types error:', error);
+            setLeaveTypes([]);
         }
     };
 
@@ -248,6 +291,73 @@ const CompApprovalScreen = ({ navigation }) => {
         }
     };
 
+    // Admin Apply Comp-Off for Employee
+    const handleAdminApplyCompOff = async () => {
+        // Validation
+        if (!applyEmployee) {
+            Alert.alert('Validation Error', 'Please select an employee');
+            return;
+        }
+        if (!applyReason.trim()) {
+            Alert.alert('Validation Error', 'Please provide a reason for working on holiday');
+            return;
+        }
+        if (applyWorkEndDate < applyWorkFromDate) {
+            Alert.alert('Validation Error', 'Work end date cannot be before start date');
+            return;
+        }
+        if (applyHalfDay && !applyHalfDayDate) {
+            Alert.alert('Validation Error', 'Please select half day date');
+            return;
+        }
+
+        setLoading(true);
+        try {
+            const response = await apiService.submitCompLeave({
+                employee: applyEmployee,
+                work_from_date: applyWorkFromDate.toISOString().split('T')[0],
+                work_end_date: applyWorkEndDate.toISOString().split('T')[0],
+                reason: applyReason.trim(),
+                leave_type: applyLeaveType || 'Compensatory Off',
+                half_day: applyHalfDay ? 1 : 0,
+                half_day_date: applyHalfDay ? applyHalfDayDate.toISOString().split('T')[0] : null
+            });
+
+            if (response.success && response.data?.message) {
+                const data = response.data.message;
+                const empName = employees.find(e => e.name === applyEmployee)?.employee_name || applyEmployee;
+                Alert.alert(
+                    'Success',
+                    `Comp-off request for ${empName} submitted successfully!\n\n` +
+                    `Compensatory Days: ${data.compensatory_days || 'N/A'}\n` +
+                    `Status: ${data.docstatus === 1 ? 'Approved' : 'Pending'}`,
+                    [
+                        {
+                            text: 'OK',
+                            onPress: () => {
+                                // Reset form
+                                setApplyEmployee('');
+                                setApplyReason('');
+                                setApplyHalfDay(false);
+                                setApplyWorkFromDate(new Date());
+                                setApplyWorkEndDate(new Date());
+                                // Switch to pending tab
+                                setActiveTab('pending');
+                            }
+                        }
+                    ]
+                );
+            } else {
+                Alert.alert('Error', response.data?.message || 'Failed to submit comp-off request');
+            }
+        } catch (error) {
+            console.error('Admin apply comp-off error:', error);
+            Alert.alert('Error', error.message || 'Failed to submit comp-off request');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const clearFilters = () => {
         setFilterDepartment('');
         setFilterEmployee('');
@@ -266,6 +376,167 @@ const CompApprovalScreen = ({ navigation }) => {
         const date = new Date(dateString);
         return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
     };
+
+    // Render Apply Tab - Admin apply comp-off for employee
+    const renderApplyTab = () => (
+        <ScrollView style={styles.tabContent}>
+            <View style={styles.applyForm}>
+                <Text style={styles.applyTitle}>Apply Comp-Off for Employee</Text>
+                <Text style={styles.applySubtitle}>
+                    Submit compensatory leave request for employees who worked on holidays.
+                </Text>
+
+                {/* Employee Selection */}
+                <View style={styles.formGroup}>
+                    <Text style={styles.fieldLabel}>Select Employee *</Text>
+                    <View style={styles.pickerContainer}>
+                        <Picker
+                            selectedValue={applyEmployee}
+                            onValueChange={(value) => setApplyEmployee(value)}
+                            style={styles.picker}
+                        >
+                            <Picker.Item label="-- Select Employee --" value="" />
+                            {employees.map((emp) => (
+                                <Picker.Item key={emp.name} label={emp.employee_name} value={emp.name} />
+                            ))}
+                        </Picker>
+                    </View>
+                </View>
+
+                {/* Leave Type */}
+                <View style={styles.formGroup}>
+                    <Text style={styles.fieldLabel}>Leave Type</Text>
+                    <View style={styles.pickerContainer}>
+                        <Picker
+                            selectedValue={applyLeaveType}
+                            onValueChange={(value) => setApplyLeaveType(value)}
+                            style={styles.picker}
+                        >
+                            <Picker.Item label="Compensatory Off" value="Compensatory Off" />
+                            {leaveTypes.map((lt) => (
+                                <Picker.Item key={lt.name} label={lt.leave_type_name || lt.name} value={lt.name} />
+                            ))}
+                        </Picker>
+                    </View>
+                </View>
+
+                {/* Work From Date */}
+                <View style={styles.formGroup}>
+                    <Text style={styles.fieldLabel}>Work From Date (Holiday) *</Text>
+                    <TouchableOpacity 
+                        style={styles.dateButton}
+                        onPress={() => setShowApplyFromPicker(true)}
+                    >
+                        <Text style={styles.dateButtonText}>{formatDate(applyWorkFromDate)}</Text>
+                    </TouchableOpacity>
+                    {showApplyFromPicker && (
+                        <DateTimePicker
+                            value={applyWorkFromDate}
+                            mode="date"
+                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                            onChange={(event, date) => {
+                                setShowApplyFromPicker(Platform.OS === 'ios');
+                                if (date) setApplyWorkFromDate(date);
+                            }}
+                        />
+                    )}
+                </View>
+
+                {/* Work End Date */}
+                <View style={styles.formGroup}>
+                    <Text style={styles.fieldLabel}>Work End Date (Holiday) *</Text>
+                    <TouchableOpacity 
+                        style={styles.dateButton}
+                        onPress={() => setShowApplyEndPicker(true)}
+                    >
+                        <Text style={styles.dateButtonText}>{formatDate(applyWorkEndDate)}</Text>
+                    </TouchableOpacity>
+                    {showApplyEndPicker && (
+                        <DateTimePicker
+                            value={applyWorkEndDate}
+                            mode="date"
+                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                            onChange={(event, date) => {
+                                setShowApplyEndPicker(Platform.OS === 'ios');
+                                if (date) setApplyWorkEndDate(date);
+                            }}
+                        />
+                    )}
+                </View>
+
+                {/* Half Day Toggle */}
+                <View style={styles.formGroup}>
+                    <View style={styles.checkboxRow}>
+                        <TouchableOpacity 
+                            style={styles.checkbox}
+                            onPress={() => setApplyHalfDay(!applyHalfDay)}
+                        >
+                            <View style={[styles.checkboxInner, applyHalfDay && styles.checkboxChecked]}>
+                                {applyHalfDay && <Text style={styles.checkmark}>✓</Text>}
+                            </View>
+                        </TouchableOpacity>
+                        <Text style={styles.checkboxLabel}>Half Day</Text>
+                    </View>
+                </View>
+
+                {/* Half Day Date (conditional) */}
+                {applyHalfDay && (
+                    <View style={styles.formGroup}>
+                        <Text style={styles.fieldLabel}>Half Day Date *</Text>
+                        <TouchableOpacity 
+                            style={styles.dateButton}
+                            onPress={() => setShowApplyHalfDayPicker(true)}
+                        >
+                            <Text style={styles.dateButtonText}>{formatDate(applyHalfDayDate)}</Text>
+                        </TouchableOpacity>
+                        {showApplyHalfDayPicker && (
+                            <DateTimePicker
+                                value={applyHalfDayDate}
+                                mode="date"
+                                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                onChange={(event, date) => {
+                                    setShowApplyHalfDayPicker(Platform.OS === 'ios');
+                                    if (date) setApplyHalfDayDate(date);
+                                }}
+                            />
+                        )}
+                    </View>
+                )}
+
+                {/* Reason */}
+                <View style={styles.formGroup}>
+                    <Text style={styles.fieldLabel}>Reason for Working on Holiday *</Text>
+                    <Input
+                        value={applyReason}
+                        onChangeText={setApplyReason}
+                        placeholder="e.g., Employee worked on Christmas for urgent project delivery"
+                        multiline
+                        numberOfLines={4}
+                        style={styles.textArea}
+                    />
+                </View>
+
+                {/* Submit Button */}
+                <View style={styles.submitButtonContainer}>
+                    <Button
+                        title={loading ? 'Submitting...' : 'Submit Comp-Off Request'}
+                        onPress={handleAdminApplyCompOff}
+                        disabled={loading}
+                        mode="contained"
+                    />
+                </View>
+
+                {/* Info Box */}
+                <View style={styles.infoBox}>
+                    <Text style={styles.infoTitle}>ℹ️ Important Notes:</Text>
+                    <Text style={styles.infoText}>• Work dates must be actual holidays for the employee</Text>
+                    <Text style={styles.infoText}>• Employee must have attendance marked on those dates</Text>
+                    <Text style={styles.infoText}>• Compensatory days will be allocated on approval</Text>
+                    <Text style={styles.infoText}>• Admin-submitted requests are auto-approved</Text>
+                </View>
+            </View>
+        </ScrollView>
+    );
 
     // Render Pending Tab
     const renderPendingTab = () => (
@@ -600,6 +871,14 @@ const CompApprovalScreen = ({ navigation }) => {
 
     return (
         <View style={styles.container}>
+            {/* My Comp-Off Button */}
+            <TouchableOpacity 
+                style={styles.myCompOffButton}
+                onPress={() => navigation.navigate('MyCompensatoryLeave')}
+            >
+                <Text style={styles.myCompOffButtonText}>📋 Apply My Comp-Off</Text>
+            </TouchableOpacity>
+
             {/* Header Tabs */}
             <View style={styles.tabBar}>
                 <TouchableOpacity
@@ -608,6 +887,14 @@ const CompApprovalScreen = ({ navigation }) => {
                 >
                     <Text style={[styles.tabText, activeTab === 'pending' && styles.tabTextActive]}>
                         Pending ({statistics.by_status?.pending || 0})
+                    </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.tab, activeTab === 'apply' && styles.tabActive]}
+                    onPress={() => setActiveTab('apply')}
+                >
+                    <Text style={[styles.tabText, activeTab === 'apply' && styles.tabTextActive]}>
+                        Apply
                     </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -623,13 +910,14 @@ const CompApprovalScreen = ({ navigation }) => {
                     onPress={() => setActiveTab('statistics')}
                 >
                     <Text style={[styles.tabText, activeTab === 'statistics' && styles.tabTextActive]}>
-                        Statistics
+                        Stats
                     </Text>
                 </TouchableOpacity>
             </View>
 
             {/* Tab Content */}
             {activeTab === 'pending' && renderPendingTab()}
+            {activeTab === 'apply' && renderApplyTab()}
             {activeTab === 'history' && renderHistoryTab()}
             {activeTab === 'statistics' && renderStatisticsTab()}
 
@@ -650,6 +938,26 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: colors.background || '#F5F5F5',
+    },
+    myCompOffButton: {
+        backgroundColor: colors.primary || '#007AFF',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        marginHorizontal: 12,
+        marginTop: 12,
+        marginBottom: 8,
+        borderRadius: 10,
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    myCompOffButtonText: {
+        color: colors.white || '#FFFFFF',
+        fontSize: 16,
+        fontWeight: '600',
     },
     tabBar: {
         flexDirection: 'row',
@@ -683,6 +991,95 @@ const styles = StyleSheet.create({
     },
     tabContent: {
         flex: 1,
+    },
+    // Apply Form Styles
+    applyForm: {
+        padding: 16,
+    },
+    applyTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: colors.textPrimary || '#333',
+        marginBottom: 8,
+    },
+    applySubtitle: {
+        fontSize: 14,
+        color: colors.textSecondary || '#666',
+        marginBottom: 20,
+        lineHeight: 20,
+    },
+    formGroup: {
+        marginBottom: 16,
+    },
+    fieldLabel: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: colors.textPrimary || '#333',
+        marginBottom: 8,
+    },
+    dateButton: {
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1,
+        borderColor: '#DDDDDD',
+        borderRadius: 8,
+        padding: 12,
+    },
+    dateButtonText: {
+        fontSize: 16,
+        color: colors.textPrimary || '#333',
+    },
+    checkboxRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    checkbox: {
+        marginRight: 10,
+    },
+    checkboxInner: {
+        width: 24,
+        height: 24,
+        borderWidth: 2,
+        borderColor: colors.primary || '#007AFF',
+        borderRadius: 4,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    checkboxChecked: {
+        backgroundColor: colors.primary || '#007AFF',
+    },
+    checkmark: {
+        color: '#FFFFFF',
+        fontSize: 16,
+        fontWeight: 'bold',
+    },
+    checkboxLabel: {
+        fontSize: 16,
+        color: colors.textPrimary || '#333',
+    },
+    textArea: {
+        minHeight: 100,
+        textAlignVertical: 'top',
+    },
+    submitButtonContainer: {
+        marginVertical: 20,
+    },
+    infoBox: {
+        backgroundColor: '#E3F2FD',
+        borderRadius: 8,
+        padding: 16,
+        marginTop: 10,
+    },
+    infoTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#1976D2',
+        marginBottom: 8,
+    },
+    infoText: {
+        fontSize: 13,
+        color: '#1565C0',
+        marginBottom: 4,
+        lineHeight: 18,
     },
     filtersSection: {
         backgroundColor: '#FFFFFF',

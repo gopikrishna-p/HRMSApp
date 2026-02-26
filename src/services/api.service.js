@@ -613,6 +613,61 @@ class ApiService {
         });
     }
 
+    /**
+     * Admin submits leave application for any employee
+     * Uses: admin_submit_leave_application from backend
+     * @param {Object} leaveData - Leave application data
+     * @returns {Promise} Response with application details
+     */
+    adminSubmitLeave(leaveData) {
+        return this.post(m('admin_submit_leave_application'), {
+            employee: leaveData.employee,
+            leave_type: leaveData.leave_type,
+            from_date: leaveData.from_date,
+            to_date: leaveData.to_date,
+            half_day: leaveData.half_day || 0,
+            half_day_date: leaveData.half_day_date || null,
+            description: leaveData.description || '',
+            leave_approver: leaveData.leave_approver || null,
+            auto_approve: leaveData.auto_approve || 0
+        });
+    }
+
+    /**
+     * Get leave balance for any employee (Admin use)
+     * Uses: get_leave_balance_for_employee from backend
+     * @param {string} employee - Employee ID
+     * @returns {Promise} Response with leave balances
+     */
+    getEmployeeLeaveBalance(employee) {
+        return this.get(m('get_leave_balance_for_employee'), {
+            employee: employee
+        });
+    }
+
+    /**
+     * Get leave types for any employee (Admin use)
+     * Uses: get_leave_types_for_employee from backend
+     * @param {string} employee - Employee ID
+     * @param {string} date - Optional date
+     * @returns {Promise} Response with leave types
+     */
+    getEmployeeLeaveTypes(employee, date = null) {
+        return this.get(m('get_leave_types_for_employee'), {
+            employee: employee,
+            date: date
+        });
+    }
+
+    /**
+     * Get pending leave count for admin dashboard
+     * Uses: get_pending_leave_count from backend
+     * @returns {Promise} Response with pending count
+     */
+    getPendingLeaveCount() {
+        return this.get(m('get_pending_leave_count'));
+    }
+
     // ===== EXISTING/LEGACY APIs (Kept for compatibility) =====
 
     /**

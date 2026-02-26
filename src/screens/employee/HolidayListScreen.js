@@ -12,6 +12,22 @@ const HolidayListScreen = ({ navigation }) => {
     const { custom } = useTheme();
     const { employee } = useAuth();
     
+    // Strip HTML function to clean holiday descriptions
+    const stripHtml = (html) => {
+        if (!html) return '';
+        // Remove HTML tags and decode HTML entities
+        const tmp = html.replace(/<[^>]*>/g, '');
+        // Decode common HTML entities
+        return tmp
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'")
+            .trim();
+    };
+    
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [holidays, setHolidays] = useState([]);
@@ -78,9 +94,10 @@ const HolidayListScreen = ({ navigation }) => {
                     // Detect weekly offs (weekends) based on day of week or description
                     const dayOfWeek = holidayDate.getDay(); // 0 = Sunday, 6 = Saturday
                     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // Sunday or Saturday
-                    const isDescriptionWeekend = holiday.description && 
-                        (holiday.description.toLowerCase().includes('saturday') || 
-                         holiday.description.toLowerCase().includes('sunday'));
+                    const cleanDescription = stripHtml(holiday.description);
+                    const isDescriptionWeekend = cleanDescription && 
+                        (cleanDescription.toLowerCase().includes('saturday') || 
+                         cleanDescription.toLowerCase().includes('sunday'));
                     
                     const isWeeklyOff = holiday.weekly_off === 1 || 
                                        holiday.weekly_off === true || 
@@ -260,7 +277,7 @@ const HolidayListScreen = ({ navigation }) => {
                 <View style={styles.holidayDetails}>
                     <View style={styles.titleRow}>
                         <Text style={[styles.holidayTitle, { color: custom.palette.text }]} numberOfLines={2}>
-                            {item.description || 'Holiday'}
+                            {stripHtml(item.description) || 'Holiday'}
                         </Text>
                         {isWeeklyOff && (
                             <View style={[styles.badge, { backgroundColor: '#8B5CF6' }]}>
@@ -473,7 +490,7 @@ const HolidayListScreen = ({ navigation }) => {
                                 <View style={styles.miniHolidayDetails}>
                                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                                         <Text style={[styles.miniHolidayTitle, { color: custom.palette.text }]} numberOfLines={1}>
-                                            {holiday.description || 'Holiday'}
+                                            {stripHtml(holiday.description) || 'Holiday'}
                                         </Text>
                                         {isWeeklyOff && (
                                             <View style={[styles.miniBadge, { backgroundColor: '#8B5CF6' }]}>

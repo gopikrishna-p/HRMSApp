@@ -9,11 +9,14 @@ import {
     RefreshControl,
     TextInput,
     Modal,
+    Platform,
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
+import Input from '../../components/common/Input';
 import apiService from '../../services/api.service';
 
 const LeaveApprovalsScreen = ({ navigation }) => {
@@ -22,12 +25,27 @@ const LeaveApprovalsScreen = ({ navigation }) => {
     const [refreshing, setRefreshing] = useState(false);
     
     // Tab state
-    const [activeTab, setActiveTab] = useState('pending'); // 'pending', 'history', 'statistics'
+    const [activeTab, setActiveTab] = useState('pending'); // 'pending', 'history', 'statistics', 'apply'
     
     // Leave applications
     const [pendingLeaves, setPendingLeaves] = useState([]);
     const [historyLeaves, setHistoryLeaves] = useState([]);
     const [statistics, setStatistics] = useState(null);
+    
+    // Admin Apply Leave Form State
+    const [applyForEmployee, setApplyForEmployee] = useState('');
+    const [applyLeaveType, setApplyLeaveType] = useState('');
+    const [applyFromDate, setApplyFromDate] = useState(new Date());
+    const [applyToDate, setApplyToDate] = useState(new Date());
+    const [applyIsHalfDay, setApplyIsHalfDay] = useState(false);
+    const [applyHalfDayDate, setApplyHalfDayDate] = useState(new Date());
+    const [applyReason, setApplyReason] = useState('');
+    const [applyAutoApprove, setApplyAutoApprove] = useState(true);
+    const [leaveTypes, setLeaveTypes] = useState([]);
+    const [leaveBalances, setLeaveBalances] = useState({});
+    const [showApplyFromDatePicker, setShowApplyFromDatePicker] = useState(false);
+    const [showApplyToDatePicker, setShowApplyToDatePicker] = useState(false);
+    const [showApplyHalfDayPicker, setShowApplyHalfDayPicker] = useState(false);
     
     // Filters
     const [selectedDepartment, setSelectedDepartment] = useState('');
@@ -244,6 +262,188 @@ const LeaveApprovalsScreen = ({ navigation }) => {
             setLoading(false);
             setSelectedLeave(null);
         }
+    };
+
+    // ===== ADMIN APPLY LEAVE METHODS =====
+    
+    const loadLeaveTypesForEmployee = async (employeeId) => {
+        if (!employeeId) {
+            setLeaveTypes([]);
+            setApplyLeaveType('');
+            return;
+        }
+        
+        try {
+            const response = await apiService.getLeaveTypes(employeeId);
+            if (response.success && response.data?.message) {
+                const types = Array.isArray(response.data.message) ? response.data.message : [];
+                setLeaveTypes(types);
+                if (types.length > 0 && !applyLeaveType) {
+                    setApplyLeaveType(types[0]);
+                }
+            } else {
+                setLeaveTypes([]);
+            }
+        } catch (error) {
+            console.error('Error loading leave types:', error);
+            setLeaveTypes([]);
+        }
+    };
+
+    const loadLeaveBalancesForEmployee = async (employeeId) => {
+        if (!employeeId) {
+            setLeaveBalances({});
+            return;
+        }
+        
+        try {
+            const response = await apiService.getLeaveBalances(employeeId);
+            if (response.success && response.data?.message) {
+                setLeaveBalances(response.data.message || {});
+            } else {
+                setLeaveBalances({});
+            }
+        } catch (error) {
+            console.error('Error loading leave balances:', error);
+            setLeaveBalances({});
+        }
+    };
+
+    // Watch for employee selection changes to load their leave types
+    useEffect(() => {
+        if (applyForEmployee) {
+            loadLeaveTypesForEmployee(applyForEmployee);
+            loadLeaveBalancesForEmployee(applyForEmployee);
+        } else {
+            setLeaveTypes([]);
+            setLeaveBalances({});
+            setApplyLeaveType('');
+        }
+    }, [applyForEmployee]);
+
+    const handleAdminSubmitLeave = async () => {
+        // Validation
+        if (!applyForEmployee) {
+            Alert.alert('Validation Error', 'Please select an employee');
+            return;
+        }
+
+        if (!applyLeaveType) {
+            Alert.alert('Validation Error', 'Please select a leave type');
+            return;
+        }
+
+        if (applyFromDate > applyToDate) {
+            Alert.alert('Validation Error', 'From date cannot be after To date');
+            return;
+        }
+
+        if (!applyReason.trim()) {
+            Alert.alert('Validation Error', 'Please provide a reason for leave');
+            return;
+        }
+
+        // Check balance if available
+        const balance = leaveBalances[applyLeaveType];
+        if (balance && balance.balance_leaves !== undefined) {
+            const requestedDays = Math.ceil((applyToDate - applyFromDate) / (1000 * 60 * 60 * 24)) + 1;
+            if (balance.balance_leaves < requestedDays && !applyAutoApprove) {
+                Alert.alert(
+                    'Low Balance Warning',
+                    `Selected employee only has ${balance.balance_leaves} days remaining for ${applyLeaveType}. Continue anyway?`,
+                    [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Continue', onPress: () => submitAdminLeave() }
+                    ]
+                );
+                return;
+            }
+        }
+
+        submitAdminLeave();
+    };
+
+    const submitAdminLeave = async () => {
+        setLoading(true);
+        try {
+            const leaveData = {
+                employee: applyForEmployee,
+                leave_type: applyLeaveType,
+                from_date: applyFromDate.toISOString().split('T')[0],
+                to_date: applyToDate.toISOString().split('T')[0],
+                half_day: applyIsHalfDay ? 1 : 0,
+                half_day_date: applyIsHalfDay ? applyHalfDayDate.toISOString().split('T')[0] : null,
+                description: applyReason.trim(),
+                auto_approve: applyAutoApprove ? 1 : 0
+            };
+
+            const response = await apiService.adminSubmitLeave(leaveData);
+
+            if (response.success && response.data?.message) {
+                const result = response.data.message;
+                const selectedEmployeeName = employees.find(e => e.name === applyForEmployee)?.employee_name || applyForEmployee;
+                
+                Alert.alert(
+                    'Success',
+                    `Leave submitted successfully for ${selectedEmployeeName}!\n${result.total_leave_days} day(s) requested.${applyAutoApprove ? ' (Auto-approved)' : ''}`,
+                    [
+                        {
+                            text: 'OK',
+                            onPress: () => {
+                                // Reset form
+                                setApplyReason('');
+                                setApplyIsHalfDay(false);
+                                setApplyFromDate(new Date());
+                                setApplyToDate(new Date());
+                                // Refresh data
+                                loadLeaveBalancesForEmployee(applyForEmployee);
+                                fetchPendingLeaves();
+                                // Switch to pending tab
+                                setActiveTab('pending');
+                            }
+                        }
+                    ]
+                );
+            } else {
+                Alert.alert('Error', response.message || 'Failed to submit leave application');
+            }
+        } catch (error) {
+            console.error('Error submitting leave:', error);
+            Alert.alert('Error', error.message || 'Failed to submit leave application');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const renderBalanceCard = () => {
+        if (!applyLeaveType || !leaveBalances[applyLeaveType]) {
+            return null;
+        }
+
+        const balance = leaveBalances[applyLeaveType];
+        return (
+            <View style={styles.applyBalanceCard}>
+                <Text style={styles.applyBalanceTitle}>{applyLeaveType} Balance</Text>
+                <View style={styles.applyBalanceRow}>
+                    <View style={styles.applyBalanceItem}>
+                        <Text style={styles.applyBalanceValue}>{balance.allocated_leaves || 0}</Text>
+                        <Text style={styles.applyBalanceLabel}>Allocated</Text>
+                    </View>
+                    <View style={styles.applyBalanceItem}>
+                        <Text style={[styles.applyBalanceValue, styles.applyBalanceRemaining]}>
+                            {balance.balance_leaves || 0}
+                        </Text>
+                        <Text style={styles.applyBalanceLabel}>Remaining</Text>
+                    </View>
+                    <View style={styles.applyBalanceItem}>
+                        <Text style={styles.applyBalanceValue}>
+                            {(balance.allocated_leaves || 0) - (balance.balance_leaves || 0)}
+                        </Text>
+                        <Text style={styles.applyBalanceLabel}>Used</Text>
+                    </View>
+                </View>
+            </View>
+        );
     };
 
     const renderFilters = () => (
@@ -518,6 +718,182 @@ const LeaveApprovalsScreen = ({ navigation }) => {
         );
     };
 
+    // ===== RENDER APPLY LEAVE TAB =====
+    const renderApplyLeaveTab = () => (
+        <ScrollView
+            style={styles.tabContent}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+            <View style={styles.applyFormContainer}>
+                <Text style={styles.applyFormTitle}>Apply Leave for Employee</Text>
+                
+                {/* Employee Selection */}
+                <View style={styles.applyInputGroup}>
+                    <Text style={styles.applyLabel}>Select Employee *</Text>
+                    <View style={styles.pickerContainer}>
+                        <Picker
+                            selectedValue={applyForEmployee}
+                            onValueChange={(value) => setApplyForEmployee(value)}
+                            style={styles.picker}
+                        >
+                            <Picker.Item label="Select Employee" value="" />
+                            {employees.map((emp) => (
+                                <Picker.Item
+                                    key={emp.name}
+                                    label={emp.employee_name}
+                                    value={emp.name}
+                                />
+                            ))}
+                        </Picker>
+                    </View>
+                </View>
+
+                {/* Leave Type Selection */}
+                <View style={styles.applyInputGroup}>
+                    <Text style={styles.applyLabel}>Leave Type *</Text>
+                    <View style={styles.pickerContainer}>
+                        <Picker
+                            selectedValue={applyLeaveType}
+                            onValueChange={(value) => setApplyLeaveType(value)}
+                            style={styles.picker}
+                            enabled={leaveTypes.length > 0}
+                        >
+                            <Picker.Item label={leaveTypes.length > 0 ? "Select Leave Type" : "Select Employee First"} value="" />
+                            {leaveTypes.map((type) => (
+                                <Picker.Item key={type} label={type} value={type} />
+                            ))}
+                        </Picker>
+                    </View>
+                </View>
+
+                {/* Leave Balance Card */}
+                {renderBalanceCard()}
+
+                {/* From Date */}
+                <View style={styles.applyInputGroup}>
+                    <Text style={styles.applyLabel}>From Date *</Text>
+                    <TouchableOpacity
+                        style={styles.applyDateButton}
+                        onPress={() => setShowApplyFromDatePicker(true)}
+                    >
+                        <Text style={styles.applyDateText}>{applyFromDate.toDateString()}</Text>
+                    </TouchableOpacity>
+                    {showApplyFromDatePicker && (
+                        <DateTimePicker
+                            value={applyFromDate}
+                            mode="date"
+                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                            onChange={(event, date) => {
+                                setShowApplyFromDatePicker(Platform.OS === 'ios');
+                                if (date) {
+                                    setApplyFromDate(date);
+                                    if (date > applyToDate) setApplyToDate(date);
+                                }
+                            }}
+                        />
+                    )}
+                </View>
+
+                {/* To Date */}
+                <View style={styles.applyInputGroup}>
+                    <Text style={styles.applyLabel}>To Date *</Text>
+                    <TouchableOpacity
+                        style={styles.applyDateButton}
+                        onPress={() => setShowApplyToDatePicker(true)}
+                    >
+                        <Text style={styles.applyDateText}>{applyToDate.toDateString()}</Text>
+                    </TouchableOpacity>
+                    {showApplyToDatePicker && (
+                        <DateTimePicker
+                            value={applyToDate}
+                            mode="date"
+                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                            minimumDate={applyFromDate}
+                            onChange={(event, date) => {
+                                setShowApplyToDatePicker(Platform.OS === 'ios');
+                                if (date) setApplyToDate(date);
+                            }}
+                        />
+                    )}
+                </View>
+
+                {/* Half Day Toggle */}
+                <TouchableOpacity
+                    style={styles.applyCheckboxContainer}
+                    onPress={() => setApplyIsHalfDay(!applyIsHalfDay)}
+                >
+                    <View style={[styles.applyCheckbox, applyIsHalfDay && styles.applyCheckboxChecked]}>
+                        {applyIsHalfDay && <Text style={styles.applyCheckmark}>✓</Text>}
+                    </View>
+                    <Text style={styles.applyCheckboxLabel}>Half Day Leave</Text>
+                </TouchableOpacity>
+
+                {/* Half Day Date (conditional) */}
+                {applyIsHalfDay && (
+                    <View style={styles.applyInputGroup}>
+                        <Text style={styles.applyLabel}>Half Day Date</Text>
+                        <TouchableOpacity
+                            style={styles.applyDateButton}
+                            onPress={() => setShowApplyHalfDayPicker(true)}
+                        >
+                            <Text style={styles.applyDateText}>{applyHalfDayDate.toDateString()}</Text>
+                        </TouchableOpacity>
+                        {showApplyHalfDayPicker && (
+                            <DateTimePicker
+                                value={applyHalfDayDate}
+                                mode="date"
+                                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                minimumDate={applyFromDate}
+                                maximumDate={applyToDate}
+                                onChange={(event, date) => {
+                                    setShowApplyHalfDayPicker(Platform.OS === 'ios');
+                                    if (date) setApplyHalfDayDate(date);
+                                }}
+                            />
+                        )}
+                    </View>
+                )}
+
+                {/* Reason */}
+                <View style={styles.applyInputGroup}>
+                    <Text style={styles.applyLabel}>Reason *</Text>
+                    <TextInput
+                        style={styles.applyTextArea}
+                        placeholder="Enter reason for leave"
+                        value={applyReason}
+                        onChangeText={setApplyReason}
+                        multiline
+                        numberOfLines={4}
+                        textAlignVertical="top"
+                    />
+                </View>
+
+                {/* Auto Approve Toggle */}
+                <TouchableOpacity
+                    style={styles.applyCheckboxContainer}
+                    onPress={() => setApplyAutoApprove(!applyAutoApprove)}
+                >
+                    <View style={[styles.applyCheckbox, applyAutoApprove && styles.applyCheckboxChecked]}>
+                        {applyAutoApprove && <Text style={styles.applyCheckmark}>✓</Text>}
+                    </View>
+                    <Text style={styles.applyCheckboxLabel}>Auto Approve Leave</Text>
+                </TouchableOpacity>
+                <Text style={styles.applyHint}>
+                    When enabled, leave will be automatically approved upon submission
+                </Text>
+
+                {/* Submit Button */}
+                <View style={styles.applySubmitContainer}>
+                    <Button
+                        title="Submit Leave Application"
+                        onPress={handleAdminSubmitLeave}
+                        disabled={loading || !applyForEmployee || !applyLeaveType}
+                    />
+                </View>
+            </View>
+        </ScrollView>
+    );
+
     const renderActionModal = () => (
         <Modal
             visible={showActionModal}
@@ -601,6 +977,14 @@ const LeaveApprovalsScreen = ({ navigation }) => {
 
     return (
         <View style={styles.container}>
+            {/* My Leave Button for Admin Self */}
+            <TouchableOpacity
+                style={styles.myLeaveButton}
+                onPress={() => navigation.navigate('MyLeaveApplication')}
+            >
+                <Text style={styles.myLeaveButtonText}>📝 Apply My Leave</Text>
+            </TouchableOpacity>
+
             {/* Tab Navigation */}
             <View style={styles.tabContainer}>
                 <TouchableOpacity
@@ -609,6 +993,14 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                 >
                     <Text style={[styles.tabText, activeTab === 'pending' && styles.tabTextActive]}>
                         Pending ({pendingLeaves.length})
+                    </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.tab, activeTab === 'apply' && styles.tabActive]}
+                    onPress={() => setActiveTab('apply')}
+                >
+                    <Text style={[styles.tabText, activeTab === 'apply' && styles.tabTextActive]}>
+                        Apply Leave
                     </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -624,13 +1016,14 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                     onPress={() => setActiveTab('statistics')}
                 >
                     <Text style={[styles.tabText, activeTab === 'statistics' && styles.tabTextActive]}>
-                        Statistics
+                        Stats
                     </Text>
                 </TouchableOpacity>
             </View>
 
             {/* Tab Content */}
             {activeTab === 'pending' && renderPendingTab()}
+            {activeTab === 'apply' && renderApplyLeaveTab()}
             {activeTab === 'history' && renderHistoryTab()}
             {activeTab === 'statistics' && renderStatisticsTab()}
 
@@ -644,6 +1037,26 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: colors.background,
+    },
+    myLeaveButton: {
+        backgroundColor: colors.primary,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        marginHorizontal: 12,
+        marginTop: 12,
+        marginBottom: 8,
+        borderRadius: 10,
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    myLeaveButtonText: {
+        color: colors.white,
+        fontSize: 16,
+        fontWeight: '600',
     },
     tabContainer: {
         flexDirection: 'row',
@@ -966,6 +1379,120 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: '600',
         color: colors.white,
+    },
+    // ===== APPLY LEAVE FORM STYLES =====
+    applyFormContainer: {
+        padding: 16,
+    },
+    applyFormTitle: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: colors.textPrimary,
+        marginBottom: 16,
+    },
+    applyInputGroup: {
+        marginBottom: 16,
+    },
+    applyLabel: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: colors.textPrimary,
+        marginBottom: 8,
+    },
+    applyDateButton: {
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: 8,
+        padding: 14,
+        backgroundColor: colors.white,
+    },
+    applyDateText: {
+        fontSize: 15,
+        color: colors.textPrimary,
+    },
+    applyCheckboxContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    applyCheckbox: {
+        width: 24,
+        height: 24,
+        borderWidth: 2,
+        borderColor: colors.border,
+        borderRadius: 6,
+        marginRight: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: colors.white,
+    },
+    applyCheckboxChecked: {
+        backgroundColor: colors.primary,
+        borderColor: colors.primary,
+    },
+    applyCheckmark: {
+        color: colors.white,
+        fontSize: 14,
+        fontWeight: 'bold',
+    },
+    applyCheckboxLabel: {
+        fontSize: 14,
+        color: colors.textPrimary,
+    },
+    applyTextArea: {
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: 8,
+        padding: 12,
+        fontSize: 14,
+        color: colors.textPrimary,
+        backgroundColor: colors.white,
+        minHeight: 100,
+        textAlignVertical: 'top',
+    },
+    applyHint: {
+        fontSize: 12,
+        color: colors.textSecondary,
+        fontStyle: 'italic',
+        marginBottom: 16,
+        marginLeft: 34,
+    },
+    applySubmitContainer: {
+        marginTop: 10,
+        marginBottom: 30,
+    },
+    applyBalanceCard: {
+        backgroundColor: colors.lightBlue,
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 16,
+    },
+    applyBalanceTitle: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: colors.textPrimary,
+        textAlign: 'center',
+        marginBottom: 12,
+    },
+    applyBalanceRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+    },
+    applyBalanceItem: {
+        alignItems: 'center',
+    },
+    applyBalanceValue: {
+        fontSize: 24,
+        fontWeight: 'bold',
+        color: colors.textPrimary,
+    },
+    applyBalanceRemaining: {
+        color: colors.success,
+    },
+    applyBalanceLabel: {
+        fontSize: 12,
+        color: colors.textSecondary,
+        marginTop: 4,
     },
 });
 
