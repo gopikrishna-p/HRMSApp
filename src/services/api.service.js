@@ -1069,6 +1069,24 @@ class ApiService {
         return this.get(m('get_purpose_of_travel_list'));
     }
 
+    /**
+     * Get all travel requests for admin with advanced filters
+     * Uses: get_admin_travel_requests from backend
+     * @param {Object} filters - {department, employee, travel_type, status, from_date, to_date, limit}
+     * @returns {Promise} Response with requests and statistics
+     */
+    getAdminTravelRequests(filters = {}) {
+        return this.get(m('get_admin_travel_requests'), {
+            department: filters.department || null,
+            employee: filters.employee || null,
+            travel_type: filters.travel_type || null,
+            status: filters.status || null,
+            from_date: filters.from_date || null,
+            to_date: filters.to_date || null,
+            limit: filters.limit || 500
+        });
+    }
+
     /* -------------------------
      * FILES (upload/download/attach)
      * -----------------------*/
