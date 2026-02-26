@@ -8,8 +8,10 @@ import {
     Alert,
     RefreshControl,
     Modal,
-    TextInput
+    TextInput,
+    Platform,
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
@@ -18,7 +20,7 @@ import Loading from '../../components/common/Loading';
 import apiService from '../../services/api.service';
 
 const ExpenseClaimApprovalScreen = ({ navigation }) => {
-    const [activeTab, setActiveTab] = useState('pending'); // pending, history, statistics
+    const [activeTab, setActiveTab] = useState('pending'); // pending, apply, history, statistics
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
     
@@ -30,6 +32,19 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
     // Payable accounts
     const [payableAccounts, setPayableAccounts] = useState([]);
     const [defaultPayableAccount, setDefaultPayableAccount] = useState('');
+
+    // Apply tab states (for admin creating expense claims for employees)
+    const [employees, setEmployees] = useState([]);
+    const [expenseTypes, setExpenseTypes] = useState([]);
+    const [applyEmployee, setApplyEmployee] = useState('');
+    const [applyExpenses, setApplyExpenses] = useState([{
+        expense_type: '',
+        amount: '',
+        description: '',
+        expense_date: new Date()
+    }]);
+    const [applyRemark, setApplyRemark] = useState('');
+    const [showDatePicker, setShowDatePicker] = useState({ show: false, index: -1 });
 
     // Action modal state
     const [actionModal, setActionModal] = useState({
@@ -50,7 +65,40 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
     }, [activeTab, filterStatus]);
     
     const loadInitialData = async () => {
-        await loadPayableAccounts();
+        await Promise.all([
+            loadPayableAccounts(),
+            loadEmployees(),
+            loadExpenseTypes()
+        ]);
+    };
+    
+    const loadEmployees = async () => {
+        try {
+            const response = await apiService.getAllEmployees();
+            if (response.success && response.data?.message) {
+                const empData = response.data.message;
+                setEmployees(Array.isArray(empData) ? empData : []);
+            } else {
+                setEmployees([]);
+            }
+        } catch (error) {
+            console.error('Load employees error:', error);
+            setEmployees([]);
+        }
+    };
+
+    const loadExpenseTypes = async () => {
+        try {
+            const response = await apiService.getExpenseClaimTypes();
+            if (response.success && response.data?.message) {
+                setExpenseTypes(response.data.message);
+            } else {
+                setExpenseTypes([]);
+            }
+        } catch (error) {
+            console.error('Load expense types error:', error);
+            setExpenseTypes([]);
+        }
     };
     
     const loadPayableAccounts = async () => {
@@ -146,6 +194,127 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
             sanctionedAmounts: {},
             selectedPayableAccount: ''
         });
+    };
+
+    // Apply Tab Helper Functions
+    const addExpenseItem = () => {
+        setApplyExpenses([...applyExpenses, {
+            expense_type: '',
+            amount: '',
+            description: '',
+            expense_date: new Date()
+        }]);
+    };
+
+    const removeExpenseItem = (index) => {
+        if (applyExpenses.length > 1) {
+            const newExpenses = applyExpenses.filter((_, i) => i !== index);
+            setApplyExpenses(newExpenses);
+        }
+    };
+
+    const updateExpenseItem = (index, field, value) => {
+        const newExpenses = [...applyExpenses];
+        newExpenses[index][field] = value;
+        setApplyExpenses(newExpenses);
+    };
+
+    const handleDateChange = (event, selectedDate, index) => {
+        setShowDatePicker({ show: false, index: -1 });
+        if (selectedDate) {
+            updateExpenseItem(index, 'expense_date', selectedDate);
+        }
+    };
+
+    const calculateApplyTotal = () => {
+        return applyExpenses.reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0);
+    };
+
+    const validateApplyForm = () => {
+        if (!applyEmployee) {
+            Alert.alert('Error', 'Please select an employee');
+            return false;
+        }
+
+        if (applyExpenses.length === 0) {
+            Alert.alert('Error', 'Add at least one expense item');
+            return false;
+        }
+
+        for (let i = 0; i < applyExpenses.length; i++) {
+            const exp = applyExpenses[i];
+            
+            if (!exp.expense_type) {
+                Alert.alert('Error', `Expense type is required for item ${i + 1}`);
+                return false;
+            }
+            
+            if (!exp.amount || parseFloat(exp.amount) <= 0) {
+                Alert.alert('Error', `Valid amount is required for item ${i + 1}`);
+                return false;
+            }
+            
+            if (!exp.description || !exp.description.trim()) {
+                Alert.alert('Error', `Description is required for item ${i + 1}`);
+                return false;
+            }
+        }
+
+        return true;
+    };
+
+    const handleApplySubmit = async () => {
+        if (!validateApplyForm()) return;
+
+        setLoading(true);
+        try {
+            const expenseItems = applyExpenses.map(exp => ({
+                expense_type: exp.expense_type,
+                amount: parseFloat(exp.amount),
+                description: exp.description.trim(),
+                expense_date: exp.expense_date.toISOString().split('T')[0]
+            }));
+
+            console.log('Admin submitting expense claim for employee:', {
+                employee: applyEmployee,
+                expenses: expenseItems,
+                remark: applyRemark.trim()
+            });
+
+            const response = await apiService.submitExpenseClaim(
+                applyEmployee,
+                expenseItems,
+                { remark: applyRemark.trim() }
+            );
+
+            if (response.success && response.data?.message) {
+                const data = response.data.message;
+                Alert.alert(
+                    'Success',
+                    `Expense claim created successfully!\nClaim ID: ${data.claim_id || 'N/A'}\nTotal Amount: ₹${data.total_claimed_amount || calculateApplyTotal().toFixed(2)}`,
+                    [{ text: 'OK', onPress: () => {
+                        // Reset form
+                        setApplyEmployee('');
+                        setApplyExpenses([{
+                            expense_type: '',
+                            amount: '',
+                            description: '',
+                            expense_date: new Date()
+                        }]);
+                        setApplyRemark('');
+                        setActiveTab('pending');
+                        loadClaims();
+                    }}]
+                );
+            } else {
+                Alert.alert('Error', response.message || 'Failed to create expense claim');
+            }
+        } catch (error) {
+            console.error('Submit expense claim error:', error);
+            Alert.alert('Error', error.message || 'Failed to create expense claim');
+        } finally {
+            setLoading(false);
+        }
     };
 
     const confirmAction = async () => {
@@ -351,6 +520,148 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
         </ScrollView>
     );
 
+    const renderApplyTab = () => (
+        <ScrollView
+            style={styles.tabContent}
+            refreshControl={
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            }
+        >
+            {/* My Expense Claim Button */}
+            <TouchableOpacity
+                style={styles.myExpenseButton}
+                onPress={() => navigation.navigate('MyExpenseClaim')}
+            >
+                <Text style={styles.myExpenseButtonText}>+ Apply My Expense Claim</Text>
+            </TouchableOpacity>
+
+            <View style={styles.applySection}>
+                <Text style={styles.applySectionTitle}>Create Expense Claim for Employee</Text>
+                
+                {/* Employee Selector */}
+                <Text style={styles.applyLabel}>Select Employee *</Text>
+                <View style={styles.pickerContainer}>
+                    <Picker
+                        selectedValue={applyEmployee}
+                        onValueChange={(value) => setApplyEmployee(value)}
+                        style={styles.picker}
+                    >
+                        <Picker.Item label="Select employee..." value="" />
+                        {employees.map((emp) => (
+                            <Picker.Item
+                                key={emp.name}
+                                label={`${emp.employee_name} (${emp.name})`}
+                                value={emp.name}
+                            />
+                        ))}
+                    </Picker>
+                </View>
+
+                {/* Expense Items */}
+                <Text style={styles.applyLabel}>Expense Items</Text>
+                {applyExpenses.map((expense, index) => (
+                    <View key={index} style={styles.expenseFormCard}>
+                        <View style={styles.expenseFormHeader}>
+                            <Text style={styles.expenseFormNumber}>Item {index + 1}</Text>
+                            {applyExpenses.length > 1 && (
+                                <TouchableOpacity
+                                    onPress={() => removeExpenseItem(index)}
+                                    style={styles.removeButton}
+                                >
+                                    <Text style={styles.removeButtonText}>Remove</Text>
+                                </TouchableOpacity>
+                            )}
+                        </View>
+
+                        <Text style={styles.inputLabel}>Expense Type *</Text>
+                        <View style={styles.pickerContainer}>
+                            <Picker
+                                selectedValue={expense.expense_type}
+                                onValueChange={(value) => updateExpenseItem(index, 'expense_type', value)}
+                                style={styles.picker}
+                            >
+                                <Picker.Item label="Select type..." value="" />
+                                {expenseTypes.map((type) => (
+                                    <Picker.Item
+                                        key={type.name}
+                                        label={type.name}
+                                        value={type.name}
+                                    />
+                                ))}
+                            </Picker>
+                        </View>
+
+                        <Text style={styles.inputLabel}>Amount (₹) *</Text>
+                        <Input
+                            value={expense.amount}
+                            onChangeText={(text) => updateExpenseItem(index, 'amount', text)}
+                            placeholder="Enter amount"
+                            keyboardType="decimal-pad"
+                        />
+
+                        <Text style={styles.inputLabel}>Description *</Text>
+                        <Input
+                            value={expense.description}
+                            onChangeText={(text) => updateExpenseItem(index, 'description', text)}
+                            placeholder="Describe the expense"
+                            multiline
+                            numberOfLines={3}
+                        />
+
+                        <Text style={styles.inputLabel}>Expense Date *</Text>
+                        <TouchableOpacity
+                            onPress={() => setShowDatePicker({ show: true, index })}
+                            style={styles.dateButton}
+                        >
+                            <Text style={styles.dateText}>
+                                {expense.expense_date.toLocaleDateString()}
+                            </Text>
+                        </TouchableOpacity>
+
+                        {showDatePicker.show && showDatePicker.index === index && (
+                            <DateTimePicker
+                                value={expense.expense_date}
+                                mode="date"
+                                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                onChange={(event, date) => handleDateChange(event, date, index)}
+                                maximumDate={new Date()}
+                            />
+                        )}
+                    </View>
+                ))}
+
+                <TouchableOpacity
+                    onPress={addExpenseItem}
+                    style={styles.addButton}
+                >
+                    <Text style={styles.addButtonText}>+ Add Another Expense</Text>
+                </TouchableOpacity>
+
+                <View style={styles.totalContainer}>
+                    <Text style={styles.totalLabel}>Total Amount:</Text>
+                    <Text style={styles.totalAmount}>₹{calculateApplyTotal().toFixed(2)}</Text>
+                </View>
+
+                <Text style={styles.applyLabel}>Remarks (Optional)</Text>
+                <Input
+                    value={applyRemark}
+                    onChangeText={setApplyRemark}
+                    placeholder="Any additional remarks..."
+                    multiline
+                    numberOfLines={3}
+                />
+
+                <Button
+                    title="Submit Expense Claim"
+                    onPress={handleApplySubmit}
+                    disabled={loading || applyExpenses.length === 0}
+                />
+            </View>
+
+            <View style={styles.bottomPadding} />
+        </ScrollView>
+    );
+
     const renderHistoryTab = () => (
         <View style={styles.tabContent}>
             {/* Filter Pills */}
@@ -422,19 +733,19 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
                     </View>
                     <View style={styles.statCard}>
                         <Text style={[styles.statValue, { color: colors.success }]}>
-                            ₹{(statistics.total_claimed || 0).toFixed(0)}
+                            ₹{(statistics.total_claimed_amount || 0).toFixed(0)}
                         </Text>
                         <Text style={styles.statLabel}>Total Claimed</Text>
                     </View>
                     <View style={styles.statCard}>
                         <Text style={[styles.statValue, { color: colors.primary }]}>
-                            ₹{(statistics.total_sanctioned || 0).toFixed(0)}
+                            ₹{(statistics.total_sanctioned_amount || 0).toFixed(0)}
                         </Text>
                         <Text style={styles.statLabel}>Total Sanctioned</Text>
                     </View>
                     <View style={styles.statCard}>
                         <Text style={[styles.statValue, { color: colors.warning }]}>
-                            ₹{(statistics.total_reimbursed || 0).toFixed(0)}
+                            ₹{(statistics.total_reimbursed_amount || 0).toFixed(0)}
                         </Text>
                         <Text style={styles.statLabel}>Total Reimbursed</Text>
                     </View>
@@ -483,6 +794,14 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
                     </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
+                    style={[styles.tab, activeTab === 'apply' && styles.activeTab]}
+                    onPress={() => setActiveTab('apply')}
+                >
+                    <Text style={[styles.tabText, activeTab === 'apply' && styles.activeTabText]}>
+                        Apply
+                    </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
                     style={[styles.tab, activeTab === 'history' && styles.activeTab]}
                     onPress={() => setActiveTab('history')}
                 >
@@ -502,6 +821,7 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
 
             {/* Tab Content */}
             {activeTab === 'pending' && renderPendingTab()}
+            {activeTab === 'apply' && renderApplyTab()}
             {activeTab === 'history' && renderHistoryTab()}
             {activeTab === 'statistics' && renderStatisticsTab()}
 
@@ -1207,6 +1527,129 @@ const styles = StyleSheet.create({
     },
     bottomPadding: {
         height: 60,
+    },
+    // Apply Tab Styles
+    myExpenseButton: {
+        backgroundColor: colors.success,
+        marginHorizontal: 12,
+        marginTop: 12,
+        paddingVertical: 14,
+        borderRadius: 10,
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    myExpenseButtonText: {
+        color: colors.white,
+        fontSize: 15,
+        fontWeight: '600',
+    },
+    applySection: {
+        padding: 12,
+    },
+    applySectionTitle: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: colors.textPrimary,
+        marginBottom: 16,
+        marginTop: 8,
+    },
+    applyLabel: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: colors.textPrimary,
+        marginBottom: 8,
+        marginTop: 12,
+    },
+    inputLabel: {
+        fontSize: 12,
+        fontWeight: '500',
+        color: colors.textPrimary,
+        marginBottom: 6,
+        marginTop: 10,
+    },
+    expenseFormCard: {
+        backgroundColor: colors.white,
+        borderRadius: 10,
+        padding: 12,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: colors.border,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 3,
+        elevation: 2,
+    },
+    expenseFormHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    expenseFormNumber: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: colors.primary,
+    },
+    removeButton: {
+        backgroundColor: colors.error,
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 6,
+    },
+    removeButtonText: {
+        color: colors.white,
+        fontSize: 11,
+        fontWeight: '600',
+    },
+    dateButton: {
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: 8,
+        padding: 12,
+        backgroundColor: colors.white,
+    },
+    dateText: {
+        fontSize: 14,
+        color: colors.textPrimary,
+    },
+    addButton: {
+        borderWidth: 1,
+        borderColor: colors.primary,
+        borderStyle: 'dashed',
+        borderRadius: 10,
+        padding: 14,
+        alignItems: 'center',
+        marginTop: 8,
+        marginBottom: 16,
+    },
+    addButtonText: {
+        color: colors.primary,
+        fontSize: 14,
+        fontWeight: '600',
+    },
+    totalContainer: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        backgroundColor: colors.cardBackground,
+        borderRadius: 10,
+        padding: 16,
+        marginBottom: 16,
+    },
+    totalLabel: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: colors.textPrimary,
+    },
+    totalAmount: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: colors.success,
     },
 });
 

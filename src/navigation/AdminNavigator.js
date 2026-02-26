@@ -24,9 +24,10 @@ import ExpenseClaimApprovalScreen from '../screens/admin/ExpenseClaimApprovalScr
 import TravelRequestApproval from '../screens/admin/TravelRequestApproval';
 import CreateNotificationScreen from '../screens/admin/CreateNotificationScreen';
 
-// Import Employee Screen for Admin Self Leave
+// Import Employee Screen for Admin Self Leave / Self Expense
 import LeaveApplicationScreen from '../screens/employee/LeaveApplicationScreen';
 import CompensatoryLeaveScreen from '../screens/employee/CompensatoryLeaveScreen';
+import ExpenseClaimScreen from '../screens/employee/ExpenseClaimScreen';
 
 import ProjectsOverviewScreen from '../screens/admin/ProjectsOverviewScreen';
 import ProjectLogsScreen from '../screens/admin/ProjectLogsScreen';
@@ -73,6 +74,7 @@ const AdminNavigator = () => {
             <Stack.Screen name="CompApprovals" component={CompApprovalScreen} options={{ title: 'Compensatory Leave Approvals' }} />
             <Stack.Screen name="MyCompensatoryLeave" component={CompensatoryLeaveScreen} options={{ title: 'My Comp-Off Request' }} />
             <Stack.Screen name="ExpenseClaimApproval" component={ExpenseClaimApprovalScreen} options={{ title: 'Expense Claim Approvals' }} />
+            <Stack.Screen name="MyExpenseClaim" component={ExpenseClaimScreen} options={{ title: 'My Expense Claim' }} />
             <Stack.Screen name="TravelRequestApproval" component={TravelRequestApproval} options={{ title: 'Travel Request Approvals' }} />
             <Stack.Screen name="CreateNotification" component={CreateNotificationScreen} options={{ title: 'Create Notification' }} />
 
