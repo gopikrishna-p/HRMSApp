@@ -1115,6 +1115,146 @@ class ApiService {
         return this.get(m('debug_user_session'));
     }
 
+    /* -------------------------
+     * EMPLOYEE PROFILE MANAGEMENT
+     * -----------------------*/
+    
+    /**
+     * Get complete employee profile with edit permission status
+     * Uses: get_employee_profile from backend
+     * @param {string} employee - Employee ID
+     * @returns {Promise} Response with employee profile data
+     */
+    getEmployeeProfile(employee) {
+        return this.get(m('get_employee_profile'), { employee });
+    }
+
+    /**
+     * Request edit permission for employee profile
+     * Uses: request_profile_edit from backend
+     * @param {string} employee - Employee ID
+     * @param {string} reason - Reason for requesting edit access
+     * @returns {Promise} Response with request result
+     */
+    requestProfileEdit(employee, reason = '') {
+        return this.post(m('request_profile_edit'), { employee, reason });
+    }
+
+    /**
+     * Check employee's edit permission status
+     * Uses: check_edit_permission from backend
+     * @param {string} employee - Employee ID
+     * @returns {Promise} Response with permission status
+     */
+    checkEditPermission(employee) {
+        return this.get(m('check_edit_permission'), { employee });
+    }
+
+    /**
+     * Update employee profile (requires edit permission)
+     * Uses: update_employee_profile from backend
+     * @param {string} employee - Employee ID
+     * @param {Object} updates - Fields to update
+     * @returns {Promise} Response with update result
+     */
+    updateEmployeeProfile(employee, updates) {
+        return this.post(m('update_employee_profile'), { 
+            employee, 
+            updates: typeof updates === 'string' ? updates : JSON.stringify(updates)
+        });
+    }
+
+    /**
+     * Get all employees for admin management
+     * Uses: get_all_employees from backend
+     * @param {Object} filters - Optional filters (status, department, company, search, limit)
+     * @returns {Promise} Response with employee list and statistics
+     */
+    getAllEmployees(filters = {}) {
+        return this.get(m('get_all_employees'), {
+            status: filters.status || null,
+            department: filters.department || null,
+            company: filters.company || null,
+            search: filters.search || null,
+            limit: filters.limit || 500
+        });
+    }
+
+    /**
+     * Get detailed employee information for admin
+     * Uses: get_employee_details from backend
+     * @param {string} employee - Employee ID
+     * @returns {Promise} Response with full employee details
+     */
+    getEmployeeDetails(employee) {
+        return this.get(m('get_employee_details'), { employee });
+    }
+
+    /**
+     * Get all pending edit requests for admin
+     * Uses: get_pending_edit_requests from backend
+     * @returns {Promise} Response with pending requests list
+     */
+    getPendingEditRequests() {
+        return this.get(m('get_pending_edit_requests'));
+    }
+
+    /**
+     * Grant edit permission to an employee (admin only)
+     * Uses: grant_edit_permission from backend
+     * @param {string} employee - Employee ID
+     * @param {string} remarks - Optional remarks
+     * @returns {Promise} Response with grant result
+     */
+    grantEditPermission(employee, remarks = '') {
+        return this.post(m('grant_edit_permission'), { employee, remarks });
+    }
+
+    /**
+     * Revoke edit permission from an employee (admin only)
+     * Uses: revoke_edit_permission from backend
+     * @param {string} employee - Employee ID
+     * @param {string} remarks - Optional remarks
+     * @returns {Promise} Response with revoke result
+     */
+    revokeEditPermission(employee, remarks = '') {
+        return this.post(m('revoke_edit_permission'), { employee, remarks });
+    }
+
+    /**
+     * Reject an edit request (admin only)
+     * Uses: reject_edit_request from backend
+     * @param {string} employee - Employee ID
+     * @param {string} reason - Rejection reason
+     * @returns {Promise} Response with rejection result
+     */
+    rejectEditRequest(employee, reason = '') {
+        return this.post(m('reject_edit_request'), { employee, reason });
+    }
+
+    /**
+     * Admin update any employee's profile
+     * Uses: admin_update_employee from backend
+     * @param {string} employee - Employee ID
+     * @param {Object} updates - Fields to update
+     * @returns {Promise} Response with update result
+     */
+    adminUpdateEmployee(employee, updates) {
+        return this.post(m('admin_update_employee'), { 
+            employee, 
+            updates: typeof updates === 'string' ? updates : JSON.stringify(updates)
+        });
+    }
+
+    /**
+     * Get departments and designations for dropdowns
+     * Uses: get_departments_and_designations from backend
+     * @returns {Promise} Response with lists
+     */
+    getDepartmentsAndDesignations() {
+        return this.get(m('get_departments_and_designations'));
+    }
+
 
 }
 
