@@ -57,9 +57,9 @@ const EmployeeNavigator = () => {
             <Stack.Screen name="ExpenseClaim" component={ExpenseClaimScreen} options={{ title: 'Expense Claim' }} />
             <Stack.Screen name="TravelRequest" component={TravelRequestScreen} options={{ title: 'Travel Request' }} />
 
-            <Stack.Screen name="MyProjectsScreen" component={MyProjectsScreen} options={{ title: 'My Projects' }} />
-            <Stack.Screen name="MyTasksScreen" component={MyTasksScreen} options={{ title: 'Tasks' }} />
-            <Stack.Screen name="MyLogsScreen" component={MyLogsScreen} options={{ title: 'My Tasks Logs' }} />
+            <Stack.Screen name="MyProjectsScreen" component={MyProjectsScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="MyTasksScreen" component={MyTasksScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="MyLogsScreen" component={MyLogsScreen} options={{ headerShown: false }} />
 
             <Stack.Screen name="SalaryStructure" component={SalaryStructureScreen} options={{ title: 'Salary Structure' }} />
             <Stack.Screen name="Payslip" component={PayslipScreen} options={{ title: 'Payslips' }} />

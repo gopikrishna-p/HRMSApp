@@ -29,13 +29,29 @@ const CreateNotificationScreen = ({ navigation }) => {
     const [sending, setSending] = useState(false);
     const [departments, setDepartments] = useState([]);
     const [employees, setEmployees] = useState([]);
+    const [templates, setTemplates] = useState([]);
     
     // Form states
     const [title, setTitle] = useState('');
     const [message, setMessage] = useState('');
+    const [notificationType, setNotificationType] = useState('Info');
+    const [category, setCategory] = useState('General');
+    const [priority, setPriority] = useState('Medium');
     const [targetType, setTargetType] = useState('all');
     const [selectedDepartment, setSelectedDepartment] = useState('');
     const [selectedEmployees, setSelectedEmployees] = useState([]);
+    
+    // Template states
+    const [useTemplate, setUseTemplate] = useState(false);
+    const [selectedTemplate, setSelectedTemplate] = useState('');
+    const [templateVariables, setTemplateVariables] = useState({});
+    const [templatePreview, setTemplatePreview] = useState(null);
+    
+    // Advanced options
+    const [actionRequired, setActionRequired] = useState(false);
+    const [expiresAfterDays, setExpiresAfterDays] = useState('');
+    const [sendPushNotification, setSendPushNotification] = useState(true);
+    const [sendEmail, setSendEmail] = useState(false);
 
     useEffect(() => {
         loadInitialData();
@@ -44,17 +60,35 @@ const CreateNotificationScreen = ({ navigation }) => {
     const loadInitialData = async () => {
         setLoading(true);
         try {
-            const [deptResponse, empResponse] = await Promise.all([
+            const [deptResponse, empResponse, templatesResponse] = await Promise.all([
                 ApiService.getDepartments(),
-                ApiService.getAllEmployees()
+                ApiService.getAllEmployees(),
+                ApiService.getNotificationTemplates()
             ]);
 
             if (deptResponse.success && deptResponse.data?.message) {
-                setDepartments(deptResponse.data.message);
+                const deptData = deptResponse.data.message;
+                setDepartments(Array.isArray(deptData) ? deptData : []);
             }
 
             if (empResponse.success && empResponse.data?.message) {
-                setEmployees(empResponse.data.message.filter(emp => emp.status === 'Active'));
+                const empData = empResponse.data.message;
+                const normalizedEmployees = Array.isArray(empData)
+                    ? empData
+                    : Array.isArray(empData?.employees)
+                        ? empData.employees
+                        : null;
+
+                if (normalizedEmployees) {
+                    setEmployees(normalizedEmployees.filter(emp => emp.status === 'Active'));
+                } else {
+                    console.warn('Employee data could not be normalized:', empData);
+                    setEmployees([]);
+                }
+            }
+            
+            if (templatesResponse.success) {
+                setTemplates(templatesResponse.templates || []);
             }
         } catch (error) {
             console.error('Error loading initial data:', error);
@@ -65,6 +99,43 @@ const CreateNotificationScreen = ({ navigation }) => {
             });
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleTemplateSelection = async (templateName) => {
+        setSelectedTemplate(templateName);
+        
+        if (templateName) {
+            // Load template preview
+            try {
+                const response = await ApiService.getTemplatePreview(templateName);
+                if (response.success) {
+                    setTemplatePreview(response.preview);
+                    setTitle(response.preview.title);
+                    setMessage(response.preview.message);
+                    setNotificationType(response.preview.notification_type);
+                    setCategory(response.preview.category);
+                    setPriority(response.preview.priority);
+                }
+            } catch (error) {
+                console.error('Error loading template preview:', error);
+            }
+        } else {
+            setTemplatePreview(null);
+            setTitle('');
+            setMessage('');
+        }
+    };
+
+    const updateTemplateVariable = (key, value) => {
+        setTemplateVariables(prev => ({
+            ...prev,
+            [key]: value
+        }));
+        
+        // Update preview if template is selected
+        if (selectedTemplate) {
+            handleTemplateSelection(selectedTemplate);
         }
     };
 
@@ -118,56 +189,68 @@ const CreateNotificationScreen = ({ navigation }) => {
     const confirmSendNotification = async () => {
         setSending(true);
         try {
-            const notificationData = {
-                title: title.trim(),
-                message: message.trim(),
-                target_type: targetType,
-                department: targetType === 'department' ? selectedDepartment : null,
-                target_employees: targetType === 'specific' ? selectedEmployees : null,
-            };
-
-            const response = await ApiService.createNotification(notificationData);
+            let response;
+            
+            if (useTemplate && selectedTemplate) {
+                // Send via template
+                const recipients = getRecipientsList();
+                
+                const templateData = {
+                    template_name: selectedTemplate,
+                    recipients: recipients,
+                    variables: templateVariables,
+                    override_settings: {
+                        // Override template defaults if needed
+                        ...(actionRequired && { action_required: 1 }),
+                        ...(expiresAfterDays && { expires_at: getExpiryDate() })
+                    }
+                };
+                
+                response = await ApiService.createNotificationFromTemplate(templateData);
+            } else {
+                // Send regular notification
+                const notificationData = {
+                    title: title.trim(),
+                    message: message.trim(),
+                    notification_type: notificationType,
+                    category: category,
+                    priority: priority,
+                    action_required: actionRequired ? 1 : 0,
+                    expires_at: expiresAfterDays ? getExpiryDate() : null,
+                    target_type: targetType,
+                    department: targetType === 'department' ? selectedDepartment : null,
+                    target_employees: targetType === 'specific' ? selectedEmployees : null,
+                };
+                
+                response = await ApiService.createNotification(notificationData);
+            }
 
             if (response.success) {
-                // Send via notification service as well (if available)
-                if (NotificationService) {
-                    try {
-                        await NotificationService.sendAdminNotification({
-                            title: title.trim(),
-                            body: message.trim(),
-                            target_type: targetType,
-                            target_ids: selectedEmployees,
-                            department_id: selectedDepartment,
-                        });
-                    } catch (error) {
-                        console.warn('Failed to send via NotificationService:', error);
-                    }
-                }
-
+                const count = response.notification_count || 0;
+                const pushCount = response.push_stats?.sent || response.fcm_sent || 0;
+                
                 showToast({
                     type: 'success',
                     text1: 'Notification Sent',
-                    text2: 'Notification has been sent successfully',
+                    text2: `${count} notifications created${pushCount > 0 ? `, ${pushCount} push notifications sent` : ''}`,
                 });
 
                 // Reset form
-                setTitle('');
-                setMessage('');
-                setTargetType('all');
-                setSelectedDepartment('');
-                setSelectedEmployees([]);
+                resetForm();
 
                 // Go back after a delay
                 setTimeout(() => {
                     navigation.goBack();
                 }, 1500);
+            } else {
+                throw new Error(response.message || 'Failed to send notification');
             }
         } catch (error) {
             console.error('Error sending notification:', error);
             showToast({
                 type: 'error',
                 text1: 'Send Failed',
-                text2: 'Failed to send notification',
+                text2: error.message || 'Failed to send notification',
             });
         } finally {
             setSending(false);
@@ -186,6 +269,50 @@ const CreateNotificationScreen = ({ navigation }) => {
             default:
                 return 'selected targets';
         }
+    };
+
+    const getRecipientsList = () => {
+        switch (targetType) {
+            case 'all':
+                return employees.map(emp => emp.name);
+            case 'department':
+                return employees
+                    .filter(emp => emp.department === selectedDepartment)
+                    .map(emp => emp.name);
+            case 'specific':
+                return selectedEmployees;
+            default:
+                return [];
+        }
+    };
+
+    const getExpiryDate = () => {
+        if (!expiresAfterDays) return null;
+        const days = parseInt(expiresAfterDays);
+        if (isNaN(days) || days <= 0) return null;
+        
+        const expiryDate = new Date();
+        expiryDate.setDate(expiryDate.getDate() + days);
+        return expiryDate.toISOString();
+    };
+
+    const resetForm = () => {
+        setTitle('');
+        setMessage('');
+        setNotificationType('Info');
+        setCategory('General');
+        setPriority('Medium');
+        setTargetType('all');
+        setSelectedDepartment('');
+        setSelectedEmployees([]);
+        setUseTemplate(false);
+        setSelectedTemplate('');
+        setTemplateVariables({});
+        setTemplatePreview(null);
+        setActionRequired(false);
+        setExpiresAfterDays('');
+        setSendPushNotification(true);
+        setSendEmail(false);
     };
 
     const toggleEmployeeSelection = (employeeId) => {
@@ -212,7 +339,7 @@ const CreateNotificationScreen = ({ navigation }) => {
             <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
             
             {/* Header */}
-            <View style={styles.headerSection}>
+            {/* <View style={styles.headerSection}>
                 <View style={styles.headerTop}>
                     <TouchableOpacity
                         onPress={() => navigation.goBack()}
@@ -225,7 +352,7 @@ const CreateNotificationScreen = ({ navigation }) => {
                         <Text style={styles.headerSubtitle}>Send notifications to employees</Text>
                     </View>
                 </View>
-            </View>
+            </View> */}
 
             <ScrollView style={styles.scrollContainer} showsVerticalScrollIndicator={false}>
                 {/* Notification Details */}

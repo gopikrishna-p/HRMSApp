@@ -1255,6 +1255,267 @@ class ApiService {
         return this.get(m('get_departments_and_designations'));
     }
 
+    // ============================================================================
+    // NOTIFICATION MANAGEMENT APIs
+    // ============================================================================
+
+    /**
+     * Create notification(s) for employee(s)
+     * Uses: create_notification from backend
+     * @param {Object} notificationData - Notification data
+     * @returns {Promise} Response with notification count
+     */
+    createNotification(notificationData) {
+        return this.post(m('create_notification'), notificationData);
+    }
+
+    /**
+     * Get notifications for current employee
+     * Uses: get_my_notifications from backend
+     * @param {Object} params - Query parameters (limit, skip, unread_only, category)
+     * @returns {Promise} Response with notifications list
+     */
+    getMyNotifications(params = {}) {
+        const queryParams = new URLSearchParams(params).toString();
+        const url = m('get_my_notifications') + (queryParams ? `?${queryParams}` : '');
+        return this.get(url);
+    }
+
+    /**
+     * Mark notification as read
+     * Uses: mark_notification_read from backend
+     * @param {string} notificationId - Notification ID
+     * @returns {Promise} Response with success status
+     */
+    markNotificationRead(notificationId) {
+        return this.post(m('mark_notification_read'), {
+            notification_id: notificationId
+        });
+    }
+
+    /**
+     * Archive notification
+     * Uses: archive_notification from backend
+     * @param {string} notificationId - Notification ID
+     * @returns {Promise} Response with success status
+     */
+    archiveNotification(notificationId) {
+        return this.post(m('archive_notification'), {
+            notification_id: notificationId
+        });
+    }
+
+    /**
+     * Delete notification permanently
+     * Uses: delete_notification from backend
+     * @param {string} notificationId - Notification ID
+     * @returns {Promise} Response with success status
+     */
+    deleteNotification(notificationId) {
+        return this.post(m('delete_notification'), {
+            notification_id: notificationId
+        });
+    }
+
+    /**
+     * Mark all notifications as read
+     * Uses: mark_all_notifications_read from backend
+     * @param {string} employee - Employee ID (optional, auto-detected)
+     * @returns {Promise} Response with success status
+     */
+    markAllNotificationsRead(employee = null) {
+        return this.post(m('mark_all_notifications_read'), {
+            employee: employee
+        });
+    }
+
+    /**
+     * Get notification statistics
+     * Uses: get_notification_stats from backend
+     * @param {string} employee - Employee ID (optional, auto-detected)
+     * @returns {Promise} Response with notification counts
+     */
+    getNotificationStats(employee = null) {
+        const queryParams = employee ? `?employee=${employee}` : '';
+        return this.get(m('get_notification_stats') + queryParams);
+    }
+
+    /**
+     * Get notification settings for employee
+     * Uses: get_notification_settings from backend
+     * @param {string} employee - Employee ID (optional, auto-detected)
+     * @returns {Promise} Response with notification settings
+     */
+    getNotificationSettings(employee = null) {
+        const queryParams = employee ? `?employee=${employee}` : '';
+        return this.get(m('get_notification_settings') + queryParams);
+    }
+
+    /**
+     * Update notification settings
+     * Uses: update_notification_settings from backend
+     * @param {Object} settings - Settings object
+     * @returns {Promise} Response with success status
+     */
+    updateNotificationSettings(settings) {
+        return this.post(m('update_notification_settings'), settings);
+    }
+
+    // ============================================================================
+    // END NOTIFICATION MANAGEMENT APIs
+    // ============================================================================
+
+    // ============================================================================
+    // FCM PUSH NOTIFICATION APIs
+    // ============================================================================
+
+    /**
+     * Register FCM token with backend
+     * Uses: register_fcm_token from backend
+     * @param {Object} tokenData - {fcm_token, device_platform, device_id, employee}
+     * @returns {Promise} Response with registration status
+     */
+    registerFCMToken(tokenData) {
+        return this.post(m('register_fcm_token'), tokenData);
+    }
+
+    /**
+     * Unregister FCM token from backend
+     * Uses: unregister_fcm_token from backend  
+     * @param {string} employee - Employee ID (optional, auto-detected)
+     * @returns {Promise} Response with unregistration status
+     */
+    unregisterFCMToken(employee = null) {
+        const data = employee ? { employee } : {};
+        return this.post(m('unregister_fcm_token'), data);
+    }
+
+    /**
+     * Send push notifications to specific employees
+     * Uses: send_push_notification_to_employees from backend
+     * @param {Object} notificationData - Notification data with employee_ids array
+     * @returns {Promise} Response with send status and delivery stats
+     */
+    sendPushNotificationToEmployees(notificationData) {
+        return this.post(m('send_push_notification_to_employees'), notificationData);
+    }
+
+    /**
+     * Get FCM delivery statistics for a notification
+     * Uses: get_fcm_delivery_stats from backend
+     * @param {string} notificationId - Notification ID
+     * @returns {Promise} Response with delivery statistics
+     */
+    getFCMDeliveryStats(notificationId) {
+        return this.get(m('get_fcm_delivery_stats'), { notification_id: notificationId });
+    }
+
+    /**
+     * Test FCM connection and configuration
+     * Uses: test_fcm_connection from backend
+     * @returns {Promise} Response with connection test results
+     */
+    testFCMConnection() {
+        return this.get(m('test_fcm_connection'));
+    }
+
+    // ============================================================================
+    // END FCM PUSH NOTIFICATION APIs  
+    // ============================================================================
+
+    // ============================================================================
+    // ADVANCED NOTIFICATION FEATURES APIs
+    // ============================================================================
+
+    /**
+     * Get notification templates
+     * Uses: get_notification_templates from backend
+     * @param {string} category - Filter by category (optional)
+     * @param {boolean} activeOnly - Only return active templates
+     * @returns {Promise} Response with templates list
+     */
+    getNotificationTemplates(category = null, activeOnly = true) {
+        const params = {};
+        if (category) params.category = category;
+        if (activeOnly !== undefined) params.active_only = activeOnly ? 1 : 0;
+        
+        return this.get(m('get_notification_templates'), params);
+    }
+
+    /**
+     * Create notifications from template
+     * Uses: create_notification_from_template from backend
+     * @param {Object} templateData - Template notification data
+     * @returns {Promise} Response with creation result
+     */
+    createNotificationFromTemplate(templateData) {
+        return this.post(m('create_notification_from_template'), {
+            template_name: templateData.template_name,
+            recipients: JSON.stringify(templateData.recipients),
+            variables: templateData.variables ? JSON.stringify(templateData.variables) : null,
+            override_settings: templateData.override_settings ? JSON.stringify(templateData.override_settings) : null
+        });
+    }
+
+    /**
+     * Get template preview with sample data
+     * Uses: get_template_preview from backend
+     * @param {string} templateName - Template name
+     * @param {Object} sampleVariables - Sample variables for preview
+     * @returns {Promise} Response with template preview
+     */
+    getTemplatePreview(templateName, sampleVariables = null) {
+        return this.post(m('get_template_preview'), {
+            template_name: templateName,
+            sample_variables: sampleVariables ? JSON.stringify(sampleVariables) : null
+        });
+    }
+
+    /**
+     * Perform bulk operations on notifications
+     * Uses: bulk_notification_operations from backend
+     * @param {string} operation - Operation to perform
+     * @param {Array} notificationIds - Array of notification IDs
+     * @param {Object} data - Additional data for operation
+     * @returns {Promise} Response with operation results
+     */
+    bulkNotificationOperations(operation, notificationIds, data = null) {
+        return this.post(m('bulk_notification_operations'), {
+            operation: operation,
+            notification_ids: JSON.stringify(notificationIds),
+            data: data ? JSON.stringify(data) : null
+        });
+    }
+
+    /**
+     * Get advanced notification analytics
+     * Uses: get_notification_analytics from backend
+     * @param {Object} filters - Analytics filters
+     * @returns {Promise} Response with analytics data
+     */
+    getNotificationAnalytics(filters = {}) {
+        return this.get(m('get_notification_analytics'), filters);
+    }
+
+    /**
+     * Schedule notification for future delivery
+     * Uses: schedule_notification from backend
+     * @param {Object} scheduleData - Schedule configuration
+     * @returns {Promise} Response with schedule result
+     */
+    scheduleNotification(scheduleData) {
+        return this.post(m('schedule_notification'), {
+            schedule_type: scheduleData.schedule_type,
+            schedule_data: JSON.stringify(scheduleData.schedule_info),
+            notification_data: JSON.stringify(scheduleData.notification_data),
+            recipients: JSON.stringify(scheduleData.recipients)
+        });
+    }
+
+    // ============================================================================
+    // END ADVANCED NOTIFICATION FEATURES APIs
+    // ============================================================================
+
 
 }
 

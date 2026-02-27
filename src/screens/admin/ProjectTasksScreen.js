@@ -39,6 +39,7 @@ const TaskCard = ({ task, onPress }) => {
 
     const status = task.status || 'Open';
     const priority = task.priority || '';
+    const progress = task.progress || 0;
 
     return (
         <TouchableOpacity onPress={onPress} style={styles.taskCard}>
@@ -63,6 +64,13 @@ const TaskCard = ({ task, onPress }) => {
                             </View>
                         )}
                     </View>
+                    {/* Progress Bar */}
+                    <View style={styles.progressContainer}>
+                        <View style={styles.progressBar}>
+                            <View style={[styles.progressFill, { width: `${progress}%`, backgroundColor: getStatusColor(status) }]} />
+                        </View>
+                        <Text style={styles.progressText}>{progress}%</Text>
+                    </View>
                 </View>
                 <Icon name="chevron-right" size={14} color="#9CA3AF" />
             </View>
@@ -83,6 +91,7 @@ const ProjectTasksScreen = () => {
     const [newVisible, setNewVisible] = useState(false);
     const [title, setTitle] = useState('');
     const [desc, setDesc] = useState('');
+    const [priority, setPriority] = useState('Medium');
     const [saving, setSaving] = useState(false);
 
     const counts = useMemo(() => {
@@ -125,10 +134,11 @@ const ProjectTasksScreen = () => {
         if (!title.trim()) return;
         setSaving(true);
         try {
-            await createTask(projectId, title.trim(), desc.trim());
+            await createTask(projectId, title.trim(), desc.trim(), { priority });
             setNewVisible(false);
             setTitle('');
             setDesc('');
+            setPriority('Medium');
             fetch();
         } catch (e) {
             console.warn('Task create error', e);
@@ -146,6 +156,7 @@ const ProjectTasksScreen = () => {
                     projectName: detail?.project?.project_name || projectName,
                     taskId: item.name,
                     taskSubject: item.subject,
+                    taskProgress: item.progress || 0,
                 })
             }
         />
@@ -234,6 +245,37 @@ const ProjectTasksScreen = () => {
                                 style={[styles.input, styles.textArea]}
                                 placeholderTextColor="#9CA3AF"
                             />
+                        </View>
+
+                        <View style={styles.inputGroup}>
+                            <Text style={styles.inputLabel}>Priority</Text>
+                            <View style={styles.prioritySelector}>
+                                {['Low', 'Medium', 'High', 'Urgent'].map((p) => {
+                                    const colors = {
+                                        Low: '#10B981',
+                                        Medium: '#F59E0B',
+                                        High: '#EF4444',
+                                        Urgent: '#DC2626'
+                                    };
+                                    const isSelected = priority === p;
+                                    return (
+                                        <TouchableOpacity
+                                            key={p}
+                                            onPress={() => setPriority(p)}
+                                            style={[
+                                                styles.priorityOption,
+                                                isSelected && { backgroundColor: colors[p] + '20', borderColor: colors[p] }
+                                            ]}
+                                        >
+                                            <Icon name="flag" size={12} color={isSelected ? colors[p] : '#9CA3AF'} />
+                                            <Text style={[
+                                                styles.priorityOptionText,
+                                                isSelected && { color: colors[p], fontWeight: '700' }
+                                            ]}>{p}</Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </View>
                         </View>
 
                         <View style={styles.modalActions}>
@@ -398,6 +440,30 @@ const styles = StyleSheet.create({
         fontSize: 10,
         fontWeight: '700',
     },
+    progressContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 8,
+        gap: 8,
+    },
+    progressBar: {
+        flex: 1,
+        height: 6,
+        backgroundColor: '#E5E7EB',
+        borderRadius: 3,
+        overflow: 'hidden',
+    },
+    progressFill: {
+        height: '100%',
+        borderRadius: 3,
+    },
+    progressText: {
+        fontSize: 10,
+        fontWeight: '700',
+        color: '#6B7280',
+        minWidth: 32,
+        textAlign: 'right',
+    },
     centerContainer: {
         flex: 1,
         alignItems: 'center',
@@ -492,6 +558,28 @@ const styles = StyleSheet.create({
     textArea: {
         minHeight: 120,
         textAlignVertical: 'top',
+    },
+    prioritySelector: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    priorityOption: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 12,
+        paddingHorizontal: 8,
+        borderRadius: 10,
+        borderWidth: 1.5,
+        borderColor: '#E5E7EB',
+        backgroundColor: '#FFFFFF',
+        gap: 6,
+    },
+    priorityOptionText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#6B7280',
     },
     modalActions: {
         flexDirection: 'row',

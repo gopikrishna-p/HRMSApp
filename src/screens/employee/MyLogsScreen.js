@@ -17,7 +17,7 @@ import {
 import { useFocusEffect, useRoute, useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 
-import { listProjectLogs, startLog, stopLog } from '../../services/project.service';
+import { listProjectLogs, startLog, stopLog, updateTask } from '../../services/project.service';
 
 const LogListItem = ({ log, onStop }) => {
     const getStatusColor = (status) => {
@@ -93,7 +93,7 @@ const LogListItem = ({ log, onStop }) => {
 const ProjectLogsScreen = () => {
     const route = useRoute();
     const navigation = useNavigation();
-    const { projectId, projectName, taskId, taskSubject } = route.params || {};
+    const { projectId, projectName, taskId, taskSubject, taskProgress: initialProgress } = route.params || {};
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -101,6 +101,24 @@ const ProjectLogsScreen = () => {
     const [startVisible, setStartVisible] = useState(false);
     const [starting, setStarting] = useState(false);
     const [message, setMessage] = useState('');
+    const [hours, setHours] = useState('1');
+
+    const [taskProgress, setTaskProgress] = useState(initialProgress || 0);
+    const [updatingProgress, setUpdatingProgress] = useState(false);
+
+    const onUpdateProgress = async (newProgress) => {
+        if (!taskId) return;
+        setUpdatingProgress(true);
+        try {
+            await updateTask(taskId, { progress: newProgress });
+            setTaskProgress(newProgress);
+        } catch (e) {
+            console.warn('Update progress error', e);
+            Alert.alert('Error', 'Failed to update progress');
+        } finally {
+            setUpdatingProgress(false);
+        }
+    };
 
     const fetch = async () => {
         setLoading(true);
@@ -132,9 +150,11 @@ const ProjectLogsScreen = () => {
     const onStartSubmit = async () => {
         setStarting(true);
         try {
-            await startLog({ project: projectId, task: taskId, message });
+            const hoursValue = parseFloat(hours) || 1;
+            await startLog({ project: projectId, task: taskId, message, hours: hoursValue });
             setStartVisible(false);
             setMessage('');
+            setHours('1');
             fetch();
         } catch (e) {
             console.warn('Start log error', e);
@@ -195,6 +215,37 @@ const ProjectLogsScreen = () => {
                 </TouchableOpacity>
             </View>
 
+            {/* Task Progress Section */}
+            {taskId && (
+                <View style={styles.progressSection}>
+                    <View style={styles.progressHeader}>
+                        <Text style={styles.progressLabel}>Task Progress</Text>
+                        <Text style={styles.progressValue}>{taskProgress}%</Text>
+                    </View>
+                    <View style={styles.progressBarBg}>
+                        <View style={[styles.progressBarFill, { width: `${taskProgress}%` }]} />
+                    </View>
+                    <View style={styles.progressButtons}>
+                        {[0, 25, 50, 75, 100].map((val) => (
+                            <TouchableOpacity
+                                key={val}
+                                onPress={() => onUpdateProgress(val)}
+                                disabled={updatingProgress}
+                                style={[
+                                    styles.progressBtn,
+                                    taskProgress === val && styles.progressBtnActive
+                                ]}
+                            >
+                                <Text style={[
+                                    styles.progressBtnText,
+                                    taskProgress === val && styles.progressBtnTextActive
+                                ]}>{val}%</Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                </View>
+            )}
+
             {loading ? (
                 <View style={styles.centerContainer}>
                     <ActivityIndicator size="large" color="#8B5CF6" />
@@ -211,7 +262,7 @@ const ProjectLogsScreen = () => {
             ) : (
                 <FlatList
                     data={logs}
-                    keyExtractor={(l) => l.name}
+                    keyExtractor={(l) => l.log_id || `${l.timesheet}_${l.from_time}`}
                     renderItem={renderLog}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
                     contentContainerStyle={styles.listContainer}
@@ -232,6 +283,18 @@ const ProjectLogsScreen = () => {
                     </View>
 
                     <View style={styles.modalBody}>
+                        <View style={styles.inputGroup}>
+                            <Text style={styles.inputLabel}>Hours Worked *</Text>
+                            <TextInput
+                                placeholder="Enter hours (e.g., 2.5)"
+                                value={hours}
+                                onChangeText={setHours}
+                                keyboardType="decimal-pad"
+                                style={styles.input}
+                                placeholderTextColor="#9CA3AF"
+                            />
+                        </View>
+
                         <View style={styles.inputGroup}>
                             <Text style={styles.inputLabel}>Notes (Optional)</Text>
                             <TextInput
@@ -355,6 +418,64 @@ const styles = StyleSheet.create({
         fontSize: 15,
         fontWeight: '700',
         marginLeft: 8,
+    },
+    progressSection: {
+        backgroundColor: '#FFFFFF',
+        padding: 16,
+        paddingTop: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: '#F3F4F6',
+    },
+    progressHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    progressLabel: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#374151',
+    },
+    progressValue: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: '#8B5CF6',
+    },
+    progressBarBg: {
+        height: 8,
+        backgroundColor: '#E5E7EB',
+        borderRadius: 4,
+        overflow: 'hidden',
+        marginBottom: 12,
+    },
+    progressBarFill: {
+        height: '100%',
+        backgroundColor: '#8B5CF6',
+        borderRadius: 4,
+    },
+    progressButtons: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        gap: 8,
+    },
+    progressBtn: {
+        flex: 1,
+        paddingVertical: 8,
+        borderRadius: 8,
+        backgroundColor: '#F3F4F6',
+        alignItems: 'center',
+    },
+    progressBtnActive: {
+        backgroundColor: '#8B5CF6',
+    },
+    progressBtnText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#6B7280',
+    },
+    progressBtnTextActive: {
+        color: '#FFFFFF',
     },
     listContainer: {
         padding: 16,

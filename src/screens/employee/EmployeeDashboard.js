@@ -1,4 +1,3 @@
-    // src/screens/employee/EmployeeDashboard.js
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, ScrollView, RefreshControl, ActivityIndicator, Dimensions } from 'react-native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
@@ -11,6 +10,7 @@ import StatCard from '../../components/ui/StatCard';
 import Button from '../../components/common/Button';
 import ApiService from '../../services/api.service';
 import AttendanceService from '../../services/attendance.service';
+import FCMService from '../../services/fcm.service';
 import showToast from '../../utils/Toast';
 
 const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navigation }) => {
@@ -227,6 +227,9 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
             if (employee?.name) {
                 fetchAnalytics();
                 fetchPendingNotifications();
+                
+                // Initialize FCM for push notifications
+                initializeFCM();
             } else {
                 setLoading(false);
             }
@@ -235,6 +238,9 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
             return () => {
                 setLoading(false);
                 setRefreshing(false);
+                
+                // Cleanup FCM listeners
+                FCMService.cleanup();
             };
         }, [employee?.name]);
 
@@ -251,17 +257,38 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
         try {
             if (!employee?.name) return;
 
-            // For employees, notifications are typically announcements/broadcasts from admin
-            // We can count pending items that might require attention
-            // For now, set to 0 unless there's a specific notification API
-            console.log('📢 Fetching pending notifications for employee:', employee.name);
+            console.log('📢 Fetching notification stats for employee:', employee.name);
             
-            // Placeholder - employees typically receive broadcast notifications
-            // In real implementation, this would fetch from a notifications API
-            setPendingNotifications(0);
+            // Fetch unread notification count using our notification API
+            const response = await ApiService.getNotificationStats();
+            if (response.success && response.data?.message?.status === 'success') {
+                const stats = response.data.message.stats || { total: 0, unread: 0, urgent: 0 };
+                setPendingNotifications(stats.unread || 0);
+                console.log('Notification stats:', stats);
+            } else {
+                setPendingNotifications(0);
+            }
         } catch (error) {
-            console.error('Error fetching pending notifications:', error);
+            console.log('Error fetching notification stats:', error);
             setPendingNotifications(0);
+        }
+    };
+    
+    // Initialize FCM for push notifications
+    const initializeFCM = async () => {
+        try {
+            console.log('📱 Initializing FCM for employee:', employee?.name);
+            
+            // FCM Service handles initialization and token registration automatically
+            // The token will be registered with the backend if permission is granted
+            
+            // Get current FCM token to verify registration
+            const token = FCMService.getToken();
+            if (token) {
+                console.log('FCM token available:', token.substring(0, 20) + '...');
+            }
+        } catch (error) {
+            console.error('FCM initialization error:', error);
         }
     };        // Quick stats for display - All in one row
         const quickStats = [
@@ -311,7 +338,7 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                     canGoBack={false} 
                     rightIcon="bell" 
                     badge={pendingNotifications > 0 ? pendingNotifications : null}
-                    onRightPress={() => navigation.navigate('NotificationScreen')}
+                    onRightPress={() => navigation.navigate('Notifications')}
                 />
                 
 

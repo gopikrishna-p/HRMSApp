@@ -205,7 +205,7 @@ export const addTaskLog = async ({ task, description, log_time = null }) => {
 /**
  * Legacy: Start a log (now just creates a log entry)
  */
-export const startLog = async ({ project, task = null, message = '' }) => {
+export const startLog = async ({ project, task = null, message = '', hours = null }) => {
     try {
         if (!task) {
             throw new Error('Task ID is required');
@@ -214,10 +214,16 @@ export const startLog = async ({ project, task = null, message = '' }) => {
             throw new Error('Log message is required');
         }
 
-        const res = await ApiService.post(`${BASE}.add_task_log`, {
+        const params = {
             task,
             description: message.trim()
-        });
+        };
+        
+        if (hours && !isNaN(hours)) {
+            params.hours = parseFloat(hours);
+        }
+
+        const res = await ApiService.post(`${BASE}.add_task_log`, params);
 
         return unwrap(res);
     } catch (error) {
@@ -234,6 +240,170 @@ export const stopLog = async ({ log_name, message = '', new_status = 'Completed'
         ok: true,
         message: 'Stop not required with single-entry logs'
     };
+};
+
+/** ============ Task Management ============ */
+
+/**
+ * Update an existing task
+ */
+export const updateTask = async (taskId, updates = {}) => {
+    try {
+        if (!taskId) {
+            throw new Error('Task ID is required');
+        }
+
+        const res = await ApiService.post(`${BASE}.update_task`, {
+            task: taskId,
+            ...updates
+        });
+
+        return unwrap(res);
+    } catch (error) {
+        handleError(error, 'Update Task');
+    }
+};
+
+/**
+ * Delete a task
+ */
+export const deleteTask = async (taskId) => {
+    try {
+        if (!taskId) {
+            throw new Error('Task ID is required');
+        }
+
+        const res = await ApiService.post(`${BASE}.delete_task`, { task: taskId });
+        return unwrap(res);
+    } catch (error) {
+        handleError(error, 'Delete Task');
+    }
+};
+
+/** ============ Project Management ============ */
+
+/**
+ * Create a new project
+ */
+export const createProject = async ({
+    project_name,
+    project_type = null,
+    department = null,
+    company = null,
+    expected_start_date = null,
+    expected_end_date = null,
+    priority = 'Medium',
+    description = null
+}) => {
+    try {
+        if (!project_name || !project_name.trim()) {
+            throw new Error('Project name is required');
+        }
+
+        const res = await ApiService.post(`${BASE}.create_project`, {
+            project_name: project_name.trim(),
+            project_type,
+            department,
+            company,
+            expected_start_date,
+            expected_end_date,
+            priority,
+            description
+        });
+
+        return unwrap(res);
+    } catch (error) {
+        handleError(error, 'Create Project');
+    }
+};
+
+/**
+ * Update an existing project
+ */
+export const updateProject = async (projectId, updates = {}) => {
+    try {
+        if (!projectId) {
+            throw new Error('Project ID is required');
+        }
+
+        const res = await ApiService.post(`${BASE}.update_project`, {
+            project: projectId,
+            ...updates
+        });
+
+        return unwrap(res);
+    } catch (error) {
+        handleError(error, 'Update Project');
+    }
+};
+
+/**
+ * Get project statistics
+ */
+export const getProjectStatistics = async (projectId) => {
+    try {
+        if (!projectId) {
+            throw new Error('Project ID is required');
+        }
+
+        const res = await ApiService.post(`${BASE}.get_project_statistics`, { project: projectId });
+        return unwrap(res);
+    } catch (error) {
+        handleError(error, 'Get Project Statistics');
+    }
+};
+
+/** ============ Reference Data ============ */
+
+/**
+ * Get all project types
+ */
+export const getProjectTypes = async () => {
+    try {
+        const res = await ApiService.post(`${BASE}.get_project_types`);
+        return unwrap(res);
+    } catch (error) {
+        handleError(error, 'Get Project Types');
+    }
+};
+
+/**
+ * Get all activity types for time logging
+ */
+export const getActivityTypes = async () => {
+    try {
+        const res = await ApiService.post(`${BASE}.get_activity_types`);
+        return unwrap(res);
+    } catch (error) {
+        handleError(error, 'Get Activity Types');
+    }
+};
+
+/** ============ Timesheet APIs ============ */
+
+/**
+ * Get employee timesheets
+ */
+export const getEmployeeTimesheets = async ({
+    employee = null,
+    project = null,
+    from_date = null,
+    to_date = null,
+    limit = 100
+} = {}) => {
+    try {
+        const res = await ApiService.post(`${BASE}.get_employee_timesheets`, {
+            employee,
+            project,
+            from_date,
+            to_date,
+            limit
+        });
+
+        return unwrap(res);
+    } catch (error) {
+        handleError(error, 'Get Employee Timesheets');
+    }
 };
 
 /** ============ Admin Views ============ */
@@ -281,7 +451,7 @@ export const adminListProjectLogs = async (project = null, { task = null, limit 
  */
 export const getAllEmployees = async () => {
     try {
-        const res = await ApiService.get('/api/method/hrms.api.get_all_employees');
+        const res = await ApiService.get('/api/method/hrms.api.get_all_employees_simple');
         return unwrap(res);
     } catch (error) {
         handleError(error, 'Get All Employees');
@@ -328,6 +498,8 @@ export default {
     getProjectDetail,
     listTasks,
     createTask,
+    updateTask,
+    deleteTask,
     listProjectLogs,
     addTaskLog,
     startLog,
@@ -339,6 +511,16 @@ export default {
     adminListProjectLogs,
     assignMembers,
     removeMember,
+
+    // Project management
+    createProject,
+    updateProject,
+    getProjectStatistics,
+
+    // Reference data
+    getProjectTypes,
+    getActivityTypes,
+    getEmployeeTimesheets,
 
     // Helper functions
     getAllEmployees,

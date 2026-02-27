@@ -107,6 +107,22 @@ android {
     }
 }
 
+// Exclude old Android Support Library to prevent duplicate class conflicts with AndroidX
+configurations.all {
+    exclude group: 'com.android.support', module: 'support-compat'
+    exclude group: 'com.android.support', module: 'support-v4'
+    exclude group: 'com.android.support', module: 'support-annotations'
+    exclude group: 'com.android.support', module: 'support-core-utils'
+    exclude group: 'com.android.support', module: 'support-core-ui'
+    exclude group: 'com.android.support', module: 'support-fragment'
+    
+    resolutionStrategy {
+        // Force AndroidX versions
+        force 'androidx.core:core:1.12.0'
+        force 'androidx.appcompat:appcompat:1.6.1'
+    }
+}
+
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")

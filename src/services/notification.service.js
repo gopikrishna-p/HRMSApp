@@ -106,7 +106,7 @@ class NotificationService {
                 return false;
             }
 
-            // Request Firebase messaging permission
+            // Request Firebase messaging permission using namespace API
             const authStatus = await messaging().requestPermission();
             const enabled =
                 authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
@@ -162,6 +162,11 @@ class NotificationService {
     // ==========================================
     async getFCMToken() {
         try {
+            if (!messaging) {
+                console.warn('Messaging not available');
+                return null;
+            }
+            
             const token = await messaging().getToken();
             this.fcmToken = token;
             console.log('FCM Token:', token);
@@ -179,7 +184,7 @@ class NotificationService {
                 this.tokenRefreshUnsubscribe = null;
             }
             
-            // Listen for token refresh (only register once!)
+            // Listen for token refresh (only register once!) - using namespace API
             this.tokenRefreshUnsubscribe = messaging().onTokenRefresh(async (newToken) => {
                 console.log('FCM Token refreshed:', newToken);
                 this.fcmToken = newToken;
@@ -296,6 +301,19 @@ class NotificationService {
             return;
         }
         
+        // Check if messaging is available
+        if (!messaging) {
+            console.warn('Messaging not available for handlers');
+            return;
+        }
+        
+        // Get messaging instance and verify it's valid
+        const messagingInstance = messaging();
+        if (!messagingInstance) {
+            console.warn('Messaging instance not available for handlers');
+            return;
+        }
+        
         // Clean up existing handlers to prevent duplicates
         if (this.unsubscribe) {
             console.log('🧹 Cleaning up existing message handler...');
@@ -303,26 +321,32 @@ class NotificationService {
             this.unsubscribe = null;
         }
         
-        // Handle foreground messages
-        this.unsubscribe = messaging().onMessage(async (remoteMessage) => {
+        // Handle foreground messages - using namespace API
+        this.unsubscribe = messagingInstance.onMessage(async (remoteMessage) => {
             await this.handleForegroundMessage(remoteMessage);
         });
 
-        // Handle notification opened app (when app is in background)
-        messaging().onNotificationOpenedApp((remoteMessage) => {
+        // Handle notification opened app (when app is in background) - using namespace API
+        messagingInstance.onNotificationOpenedApp((remoteMessage) => {
             console.log('📲 Notification opened app (background):', remoteMessage);
             this.handleNotificationPress(remoteMessage);
         });
 
-        // Check if app was opened from notification (when app was quit/killed)
-        messaging()
-            .getInitialNotification()
-            .then((remoteMessage) => {
-                if (remoteMessage) {
-                    console.log('📲 App opened from notification (quit state):', remoteMessage);
-                    this.handleNotificationPress(remoteMessage);
-                }
-            });
+        // Check if app was opened from notification (when app was quit/killed) - using namespace API
+        // Verify getInitialNotification is available before calling
+        if (typeof messagingInstance.getInitialNotification === 'function') {
+            messagingInstance
+                .getInitialNotification()
+                .then((remoteMessage) => {
+                    if (remoteMessage) {
+                        console.log('📲 App opened from notification (quit state):', remoteMessage);
+                        this.handleNotificationPress(remoteMessage);
+                    }
+                })
+                .catch(error => {
+                    console.log('No initial notification or error:', error);
+                });
+        }
         
         // Mark as registered globally
         global.fcmHandlersRegistered = true;

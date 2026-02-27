@@ -153,7 +153,7 @@ const ProjectsOverviewScreen = () => {
                 (detail?.project && Array.isArray(detail.project.members) && detail.project.members) ||
                 (Array.isArray(detail?.members) && detail.members) ||
                 [];
-            const active = new Set(detailMembers.map((m) => m.employee).filter(Boolean));
+            const active = new Set(detailMembers.map((m) => m.employee_id || m.employee).filter(Boolean));
 
             setSelectedIds(active);
             setEmployees(emp || []);

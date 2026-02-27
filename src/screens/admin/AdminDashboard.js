@@ -19,6 +19,7 @@ import ListItem from '../../components/ui/ListItem';
 import StatCard from '../../components/ui/StatCard';
 import Button from '../../components/common/Button';
 import ApiService from '../../services/api.service';
+import FCMService from '../../services/fcm.service';
 import showToast from '../../utils/Toast';
 
 const AdminDashboard = ({ navigation }) => {
@@ -54,11 +55,17 @@ const AdminDashboard = ({ navigation }) => {
 
     useEffect(() => {
         fetchDashboardData();
+        
+        // Initialize FCM for push notifications
+        initializeFCM();
 
         // Cleanup on unmount to prevent memory leaks
         return () => {
             setLoading(false);
             setRefreshing(false);
+            
+            // Cleanup FCM listeners
+            FCMService.cleanup();
         };
     }, []);
 
@@ -142,6 +149,24 @@ const AdminDashboard = ({ navigation }) => {
         } catch (error) {
             console.error('❌ Error fetching pending approvals:', error?.message);
             // Silently fail - don't show error to user
+        }
+    };
+
+    // Initialize FCM for push notifications
+    const initializeFCM = async () => {
+        try {
+            console.log('📱 Initializing FCM for admin:', employee?.name || user?.name);
+            
+            // FCM Service handles initialization and token registration automatically
+            // The token will be registered with the backend if permission is granted
+            
+            // Get current FCM token to verify registration
+            const token = FCMService.getToken();
+            if (token) {
+                console.log('FCM token available:', token.substring(0, 20) + '...');
+            }
+        } catch (error) {
+            console.error('FCM initialization error:', error);
         }
     };
 
