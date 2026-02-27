@@ -49,6 +49,14 @@ const AdminDashboard = ({ navigation }) => {
         notifications: 0,
     });
 
+    // Leave balance state for admin (if they are also an employee)
+    const [leaveBalance, setLeaveBalance] = useState({
+        balances: {},
+        total_allocated: 0,
+        total_used: 0,
+        total_balance: 0
+    });
+
     const handleLogout = async () => { 
         await logout(); 
     };
@@ -75,11 +83,58 @@ const AdminDashboard = ({ navigation }) => {
             await Promise.all([
                 fetchDashboardStats(),
                 fetchPendingApprovals(),
+                fetchLeaveBalance(),
             ]);
         } catch (error) {
             console.error('Dashboard load error:', error);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const fetchLeaveBalance = async () => {
+        try {
+            const empId = employee?.name;
+            if (!empId) {
+                console.log('⚠️ No employee ID for admin, skipping leave balance fetch');
+                return;
+            }
+
+            const response = await ApiService.getLeaveBalances(empId);
+            console.log('📋 Leave balance response:', response);
+            
+            if (response && response.data?.message) {
+                const balanceData = response.data.message;
+                
+                // Process leave balances
+                const processedBalances = {};
+                let totalAllocated = 0;
+                let totalBalance = 0;
+                
+                Object.keys(balanceData).forEach(leaveType => {
+                    const leave = balanceData[leaveType];
+                    const allocated = leave.allocated_leaves || 0;
+                    const balance = leave.balance_leaves || 0;
+                    processedBalances[leaveType] = {
+                        allocated: allocated,
+                        balance: balance,
+                        used: allocated - balance
+                    };
+                    totalAllocated += allocated;
+                    totalBalance += balance;
+                });
+                
+                setLeaveBalance({
+                    balances: processedBalances,
+                    total_allocated: totalAllocated,
+                    total_used: totalAllocated - totalBalance,
+                    total_balance: totalBalance
+                });
+                
+                console.log('✅ Leave balance loaded:', { totalAllocated, totalBalance });
+            }
+        } catch (error) {
+            console.error('❌ Error fetching leave balance:', error?.message);
         }
     };
 
@@ -274,6 +329,63 @@ const AdminDashboard = ({ navigation }) => {
                         ))}
                     </View>
                 </View>
+
+                {/* Leave Balance Card - Only show if admin is also an employee */}
+                {employee?.name && Object.keys(leaveBalance.balances).length > 0 && (
+                    <View style={{
+                        backgroundColor: '#FFF',
+                        borderRadius: 12,
+                        padding: 16,
+                        marginBottom: 14,
+                        elevation: 2,
+                        shadowColor: '#000',
+                        shadowOpacity: 0.08,
+                        shadowRadius: 3,
+                        shadowOffset: { width: 0, height: 1 }
+                    }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <View style={{ backgroundColor: '#8B5CF6', borderRadius: 8, padding: 8, marginRight: 10 }}>
+                                    <Icon name="umbrella-beach" size={16} color="#FFF" />
+                                </View>
+                                <Text style={{ fontSize: 16, fontWeight: '700', color: '#000' }}>My Leave Balance</Text>
+                            </View>
+                            <View style={{ backgroundColor: '#F0F9FF', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
+                                <Text style={{ fontSize: 12, fontWeight: '600', color: '#8B5CF6' }}>
+                                    {leaveBalance.total_balance} left
+                                </Text>
+                            </View>
+                        </View>
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+                            {Object.keys(leaveBalance.balances).map((leaveType, index) => {
+                                const leave = leaveBalance.balances[leaveType];
+                                const colors = ['#10B981', '#3B82F6', '#F59E0B', '#EC4899', '#8B5CF6'];
+                                const color = colors[index % colors.length];
+                                return (
+                                    <View key={leaveType} style={{ 
+                                        width: '48%', 
+                                        backgroundColor: '#F8FAFC',
+                                        borderRadius: 8,
+                                        padding: 10,
+                                        marginBottom: 8
+                                    }}>
+                                        <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }} numberOfLines={1}>
+                                            {leaveType}
+                                        </Text>
+                                        <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
+                                            <Text style={{ fontSize: 18, fontWeight: '700', color: color }}>
+                                                {leave.balance}
+                                            </Text>
+                                            <Text style={{ fontSize: 11, color: '#9CA3AF', marginLeft: 4 }}>
+                                                / {leave.allocated}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                );
+                            })}
+                        </View>
+                    </View>
+                )}
 
                 {/* Sections */}
                 <Section title="Attendance Control" icon="clipboard-check" tint={custom.palette.primary}>

@@ -223,13 +223,29 @@ class AttendanceService {
     extractHolidaysData(response) {
         console.log('Extracting holidays data from:', response);
         
-        if (response?.success || response?.data?.message?.status === 'success') {
-            const holidays = response.data?.message?.data || response.data?.data || response.data?.message || [];
-            console.log('Extracted holidays:', holidays);
-            return Array.isArray(holidays) ? holidays : [];
+        try {
+            // Handle nested Frappe response structure: response.data.message.data.message
+            let holidays = null;
+            
+            // Try different paths where holidays might be
+            if (response?.data?.message?.data?.message && Array.isArray(response.data.message.data.message)) {
+                holidays = response.data.message.data.message;
+            } else if (response?.data?.message?.data && Array.isArray(response.data.message.data)) {
+                holidays = response.data.message.data;
+            } else if (response?.data?.data?.message && Array.isArray(response.data.data.message)) {
+                holidays = response.data.data.message;
+            } else if (response?.data?.data && Array.isArray(response.data.data)) {
+                holidays = response.data.data;
+            } else if (response?.data?.message && Array.isArray(response.data.message)) {
+                holidays = response.data.message;
+            }
+            
+            console.log('Extracted holidays array:', holidays);
+            return holidays || [];
+        } catch (error) {
+            console.error('Error extracting holidays:', error);
+            return [];
         }
-        console.log('No holidays data found, returning empty array');
-        return [];
     }
 
     // Extract leaves data from API response and filter by date range
@@ -306,15 +322,32 @@ class AttendanceService {
             calendar.set(date, mappedRecord);
         });
         
-        // Add holidays
+        // Create holiday lookup map using 'date' field (backend returns 'date' not 'holiday_date')
+        const holidayMap = new Map();
         safeHolidays.forEach(holiday => {
-            const date = holiday.holiday_date;
+            const date = holiday.date || holiday.holiday_date;
+            if (date) {
+                // Clean up HTML from description
+                let desc = holiday.description || 'Holiday';
+                // Remove HTML tags
+                desc = desc.replace(/<[^>]*>/g, '').trim();
+                holidayMap.set(date, {
+                    description: desc,
+                    type: holiday.type || 'holiday'
+                });
+            }
+        });
+        
+        console.log('Holiday map created with', holidayMap.size, 'holidays');
+        
+        // Add holidays to calendar
+        holidayMap.forEach((holidayInfo, date) => {
             if (!calendar.has(date)) {
                 calendar.set(date, {
                     attendance_date: date,
                     type: 'holiday',
                     status: 'Holiday',
-                    description: holiday.description,
+                    description: holidayInfo.description,
                     check_in: null,
                     check_out: null,
                     work_mode: 'Holiday'
@@ -347,14 +380,31 @@ class AttendanceService {
         });
         
         // Add missing weekdays as absent (inclusive of both start and end dates)
+        // But check holiday map first to avoid marking holidays as absent
         for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
             const dateStr = this.formatDateLocal(d);
             const dayOfWeek = d.getDay();
+            const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // Sunday = 0, Saturday = 6
+            const isHoliday = holidayMap.has(dateStr);
             
-            console.log(`Processing date: ${dateStr}, Day: ${dayOfWeek}, In calendar: ${calendar.has(dateStr)}`);
+            console.log(`Processing date: ${dateStr}, Day: ${dayOfWeek}, Weekend: ${isWeekend}, Holiday: ${isHoliday}, In calendar: ${calendar.has(dateStr)}`);
             
-            // Skip weekends (Saturday = 6, Sunday = 0)
-            if (dayOfWeek !== 0 && dayOfWeek !== 6 && !calendar.has(dateStr)) {
+            // If it's a holiday and not already in calendar, add it (even on weekends)
+            if (isHoliday && !calendar.has(dateStr)) {
+                const holidayInfo = holidayMap.get(dateStr);
+                calendar.set(dateStr, {
+                    attendance_date: dateStr,
+                    type: 'holiday',
+                    status: 'Holiday',
+                    description: holidayInfo.description,
+                    check_in: null,
+                    check_out: null,
+                    work_mode: 'Holiday'
+                });
+                console.log(`Added holiday: ${dateStr} - ${holidayInfo.description}`);
+            }
+            // Skip weekends if not a holiday
+            else if (!isWeekend && !calendar.has(dateStr)) {
                 calendar.set(dateStr, {
                     attendance_date: dateStr,
                     type: 'absent',
