@@ -32,6 +32,7 @@ const AdminDashboard = ({ navigation }) => {
         presentToday: 0,
         absentToday: 0,
         wfhToday: 0,
+        onsiteToday: 0,
         onLeave: 0,
         lateArrivals: 0,
         employeesOnHoliday: 0,
@@ -142,7 +143,20 @@ const AdminDashboard = ({ navigation }) => {
         try {
             const response = await ApiService.get('/api/method/hrms.api.get_employee_statistics');
             if (response.success && response.data?.message) {
-                setStats(response.data.message);
+                const data = response.data.message;
+                setStats(prev => ({
+                    ...prev,
+                    totalEmployees: data.totalEmployees || 0,
+                    presentToday: data.presentToday || 0,
+                    absentToday: data.absentToday || 0,
+                    wfhToday: data.wfhToday || 0,
+                    onsiteToday: data.onsiteToday || 0,
+                    onLeave: data.onLeave || 0,
+                    lateArrivals: data.lateArrivals || 0,
+                    employeesOnHoliday: data.employeesOnHoliday || 0,
+                    workingEmployees: data.workingEmployees || 0,
+                    attendanceRate: data.attendanceRate || 0,
+                }));
             }
         } catch (error) {
             console.error('Dashboard stats error:', error);
@@ -236,9 +250,10 @@ const AdminDashboard = ({ navigation }) => {
         { id: 2, icon: 'user-check', tint: custom.palette.success, value: String(stats.presentToday), label: 'Present Today' },
         { id: 3, icon: 'user-times', tint: custom.palette.danger, value: String(stats.absentToday), label: 'Absent' },
         { id: 4, icon: 'home', tint: custom.palette.warning, value: String(stats.wfhToday), label: 'WFH' },
-        { id: 5, icon: 'umbrella-beach', tint: '#8B5CF6', value: String(stats.onLeave), label: 'On Leave' },
-        { id: 6, icon: 'clock', tint: '#F59E0B', value: String(stats.lateArrivals), label: 'Late Arrivals' },
-        { id: 7, icon: 'chart-pie', tint: '#EC4899', value: `${stats.attendanceRate}%`, label: 'Attendance Rate' },
+        { id: 5, icon: 'map-marker-alt', tint: '#2196F3', value: String(stats.onsiteToday), label: 'On Site' },
+        { id: 6, icon: 'umbrella-beach', tint: '#8B5CF6', value: String(stats.onLeave), label: 'On Leave' },
+        { id: 7, icon: 'clock', tint: '#F59E0B', value: String(stats.lateArrivals), label: 'Late Arrivals' },
+        { id: 8, icon: 'chart-pie', tint: '#EC4899', value: `${stats.attendanceRate}%`, label: 'Attendance Rate' },
     ];
 
     return (
@@ -391,8 +406,6 @@ const AdminDashboard = ({ navigation }) => {
                 <Section title="Attendance Control" icon="clipboard-check" tint={custom.palette.primary}>
                     <ListItem title="Admin Check In/Out" subtitle="Kiosk/Supervisor mode" leftIcon="user-clock"
                         tint={custom.palette.primary} onPress={() => navigation.navigate('AdminCheckInOut')} />
-                    <ListItem title="All Attendance Analytics List" subtitle="View all employee records" leftIcon="list-alt"
-                        tint={custom.palette.primary} onPress={() => navigation.navigate('AllAttendanceAnalyticsScreen')} />
                     <ListItem title="Manual Check In/Out" subtitle="Attendance regularization" leftIcon="edit"
                         tint={custom.palette.primary} onPress={() => navigation.navigate('ManualCheckInOut')} />
                     <ListItem title="Today's Attendance" subtitle="Live attendance view" leftIcon="calendar-day"
@@ -411,15 +424,6 @@ const AdminDashboard = ({ navigation }) => {
                         tint="#2196F3" onPress={() => navigation.navigate('OnSiteSettings')} />
                     <ListItem title="On Site Approvals" subtitle="Approve/reject requests" leftIcon="check-circle" badge={pendingData.onsiteApprovals || null}
                         tint="#2196F3" onPress={() => navigation.navigate('OnSiteApprovals')} />
-                </Section>
-
-                <Section title="Analytics & Reports" icon="chart-line" tint={custom.palette.warning}>
-                    <ListItem title="Attendance Analytics" subtitle="Trends, late/early, absences" leftIcon="chart-bar"
-                        tint={custom.palette.warning} onPress={() => navigation.navigate('AttendanceAnalytics')} />
-                    <ListItem title="Today Employee Analytics" subtitle="Real-time counts & heatmap" leftIcon="chart-pie"
-                        tint={custom.palette.warning} onPress={() => navigation.navigate('TodayEmployeeAnalytics')} />
-                    <ListItem title="Reports & Analytics" subtitle="Comprehensive reports" leftIcon="file-alt"
-                        tint={custom.palette.warning} onPress={() => navigation.navigate('Reports')} />
                 </Section>
 
                 <Section title="Leave Management" icon="umbrella-beach" tint="#8B5CF6">

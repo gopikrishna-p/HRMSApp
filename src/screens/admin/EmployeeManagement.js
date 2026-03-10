@@ -19,27 +19,9 @@ import {
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import LinearGradient from 'react-native-linear-gradient';
 import ApiService from '../../services/api.service';
+import { colors as COLORS } from '../../theme/colors';
 
 const { width } = Dimensions.get('window');
-
-// Color palette
-const COLORS = {
-    primary: '#4F46E5',
-    primaryLight: '#818CF8',
-    primaryDark: '#3730A3',
-    success: '#10B981',
-    warning: '#F59E0B',
-    error: '#EF4444',
-    info: '#3B82F6',
-    background: '#F3F4F6',
-    surface: '#FFFFFF',
-    surfaceSecondary: '#F9FAFB',
-    textPrimary: '#111827',
-    textSecondary: '#6B7280',
-    textMuted: '#9CA3AF',
-    border: '#E5E7EB',
-    white: '#FFFFFF',
-};
 
 const EmployeeManagement = ({ navigation }) => {
     const [employees, setEmployees] = useState([]);

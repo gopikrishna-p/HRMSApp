@@ -13,6 +13,7 @@ import Icon from 'react-native-vector-icons/FontAwesome5';
 import { format as fmtDate, addDays, subDays } from 'date-fns';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import AttendanceService from '../../services/attendance.service';
+import { colors } from '../../theme/colors';
 
 const fmtTime = (val) => {
     if (!val) return null;
@@ -430,7 +431,7 @@ const TodayAttendanceScreen = () => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#F8FAFC',
+        backgroundColor: colors.background,
     },
 
     dateNavigation: {
@@ -439,9 +440,9 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         paddingHorizontal: 12,
         paddingVertical: 10,
-        backgroundColor: 'white',
+        backgroundColor: colors.surface,
         borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
+        borderBottomColor: colors.border,
         elevation: 1,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 1 },
@@ -452,11 +453,11 @@ const styles = StyleSheet.create({
         width: 36,
         height: 36,
         borderRadius: 18,
-        backgroundColor: '#F8FAFC',
+        backgroundColor: colors.background,
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: '#E5E7EB',
+        borderColor: colors.border,
     },
     dateInfo: {
         alignItems: 'center',
@@ -464,11 +465,11 @@ const styles = StyleSheet.create({
     dateLabel: {
         fontSize: 15,
         fontWeight: '700',
-        color: '#111827',
+        color: colors.textPrimary,
     },
     recordCount: {
         fontSize: 11,
-        color: '#6B7280',
+        color: colors.textSecondary,
         marginTop: 2,
         fontWeight: '500',
     },
@@ -477,14 +478,14 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         paddingHorizontal: 10,
         paddingVertical: 8,
-        backgroundColor: 'white',
+        backgroundColor: colors.surface,
         gap: 6,
     },
     statCard: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#F8FAFC',
+        backgroundColor: colors.background,
         padding: 8,
         borderRadius: 8,
         gap: 6,
@@ -495,11 +496,11 @@ const styles = StyleSheet.create({
     statNumber: {
         fontSize: 16,
         fontWeight: '700',
-        color: '#374151',
+        color: colors.textPrimary,
     },
     statLabel: {
         fontSize: 9,
-        color: '#6B7280',
+        color: colors.textSecondary,
         marginTop: 1,
         fontWeight: '500',
     },
@@ -520,16 +521,16 @@ const styles = StyleSheet.create({
     rateLabel: {
         fontSize: 12,
         fontWeight: '600',
-        color: '#374151',
+        color: colors.textPrimary,
     },
     ratePercentage: {
         fontSize: 16,
         fontWeight: '700',
-        color: '#6366F1',
+        color: colors.primary,
     },
     progressBarContainer: {
         height: 6,
-        backgroundColor: '#E5E7EB',
+        backgroundColor: colors.border,
         borderRadius: 3,
         overflow: 'hidden',
         marginBottom: 4,
@@ -540,7 +541,7 @@ const styles = StyleSheet.create({
     },
     rateSubtext: {
         fontSize: 10,
-        color: '#6B7280',
+        color: colors.textSecondary,
         textAlign: 'center',
     },
 
@@ -548,9 +549,9 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         paddingHorizontal: 12,
         paddingVertical: 8,
-        backgroundColor: 'white',
+        backgroundColor: colors.surface,
         borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
+        borderBottomColor: colors.border,
         gap: 6,
     },
     tab: {
@@ -560,17 +561,17 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         paddingVertical: 8,
         paddingHorizontal: 8,
-        backgroundColor: '#F8FAFC',
+        backgroundColor: colors.background,
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: '#E5E7EB',
+        borderColor: colors.border,
         gap: 4,
     },
     tabActive: {
-        backgroundColor: '#6366F1',
-        borderColor: '#6366F1',
+        backgroundColor: colors.primary,
+        borderColor: colors.primary,
         elevation: 1,
-        shadowColor: '#6366F1',
+        shadowColor: colors.primary,
         shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.3,
         shadowRadius: 2,
@@ -578,10 +579,10 @@ const styles = StyleSheet.create({
     tabText: {
         fontSize: 11,
         fontWeight: '700',
-        color: '#374151',
+        color: colors.textPrimary,
     },
     tabTextActive: {
-        color: 'white',
+        color: colors.white,
     },
 
     scrollView: {

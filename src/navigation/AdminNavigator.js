@@ -7,17 +7,13 @@ import Icon from 'react-native-vector-icons/FontAwesome5';
 import AdminDashboard from '../screens/admin/AdminDashboard';
 import EmployeeManagement from '../screens/admin/EmployeeManagement';
 import AttendanceManagementScreen from '../screens/admin/AttendanceManagementScreen';
-import ReportsScreen from '../screens/admin/ReportsScreen';
 import AdminCheckInOutScreen from '../screens/admin/AdminCheckInOutScreen';
-import AllAttendanceAnalyticsScreen from '../screens/admin/AllAttendanceAnalyticsScreen';
 import ManualCheckInOutScreen from '../screens/admin/ManualCheckInOutScreen';
 import TodayAttendanceScreen from '../screens/admin/TodayAttendanceScreen';
 import WFHSettingsScreen from '../screens/admin/WFHSettingsScreen';
 import WFHApprovalsScreen from '../screens/admin/WFHApprovalsScreen';
 import OnSiteSettingsScreen from '../screens/admin/OnSiteSettingsScreen';
 import OnSiteApprovalsScreen from '../screens/admin/OnSiteApprovalsScreen';
-import AttendanceAnalyticsScreen from '../screens/admin/AttendanceAnalyticsScreen';
-import TodayEmployeeAnalyticsScreen from '../screens/admin/TodayEmployeeAnalyticsScreen';
 import LeaveApprovalsScreen from '../screens/admin/LeaveApprovalsScreen';
 import CompApprovalScreen from '../screens/admin/CompApprovalScreen';
 import ExpenseClaimApprovalScreen from '../screens/admin/ExpenseClaimApprovalScreen';
@@ -59,7 +55,6 @@ const AdminNavigator = () => {
             {/* Keep RN header for the rest (or migrate gradually) */}
             <Stack.Screen name="EmployeeManagement" component={EmployeeManagement} options={{ title: 'Employee Management' }} />
             <Stack.Screen name="AdminCheckInOut" component={AdminCheckInOutScreen} options={{ title: 'Admin Check In/Out' }} />
-            <Stack.Screen name="AllAttendanceAnalyticsScreen" component={AllAttendanceAnalyticsScreen} options={{ title: 'All Attendance' }} />
             <Stack.Screen name="ManualCheckInOut" component={ManualCheckInOutScreen} options={{ title: 'Manual Attendance' }} />
             <Stack.Screen name="TodayAttendance" component={TodayAttendanceScreen} options={{ title: "Today's Attendance" }} />
             <Stack.Screen name="AttendanceManagement" component={AttendanceManagementScreen} options={{ title: 'Attendance Management' }} />
@@ -67,9 +62,6 @@ const AdminNavigator = () => {
             <Stack.Screen name="WFHApprovals" component={WFHApprovalsScreen} options={{ title: 'WFH Approvals' }} />
             <Stack.Screen name="OnSiteSettings" component={OnSiteSettingsScreen} options={{ title: 'On Site Settings' }} />
             <Stack.Screen name="OnSiteApprovals" component={OnSiteApprovalsScreen} options={{ title: 'On Site Approvals' }} />
-            <Stack.Screen name="AttendanceAnalytics" component={AttendanceAnalyticsScreen} options={{ title: 'Attendance Analytics' }} />
-            <Stack.Screen name="TodayEmployeeAnalytics" component={TodayEmployeeAnalyticsScreen} options={{ title: 'Today Analytics' }} />
-            <Stack.Screen name="Reports" component={ReportsScreen} options={{ title: 'Reports & Analytics' }} />
             <Stack.Screen name="LeaveApprovals" component={LeaveApprovalsScreen} options={{ title: 'Leave Approvals' }} />
             <Stack.Screen name="MyLeaveApplication" component={LeaveApplicationScreen} options={{ title: 'My Leave Application' }} />
             <Stack.Screen name="CompApprovals" component={CompApprovalScreen} options={{ title: 'Compensatory Leave Approvals' }} />

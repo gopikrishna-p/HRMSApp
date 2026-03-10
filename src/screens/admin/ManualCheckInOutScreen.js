@@ -24,6 +24,7 @@ import {
 } from 'react-native-paper';
 
 import ApiService from '../../services/api.service';
+import { colors } from '../../theme/colors';
 
 const fmt = (d) =>
     typeof d === 'string'
@@ -942,11 +943,11 @@ const styles = StyleSheet.create({
     },
     modeSwitch: {
         flexDirection: 'row',
-        backgroundColor: '#F8FAFC',
+        backgroundColor: colors.background,
         borderRadius: 8,
         padding: 2,
         borderWidth: 1,
-        borderColor: '#E5E7EB',
+        borderColor: colors.border,
     },
     modeBtn: {
         paddingHorizontal: 14,
@@ -954,15 +955,15 @@ const styles = StyleSheet.create({
         borderRadius: 6,
     },
     modeBtnActive: {
-        backgroundColor: '#6366F1',
+        backgroundColor: colors.primary,
     },
     modeText: {
         fontSize: 12,
         fontWeight: '600',
-        color: '#6B7280',
+        color: colors.textSecondary,
     },
     modeTextActive: {
-        color: 'white',
+        color: colors.white,
     },
     actionBar: {
         flexDirection: 'row',
@@ -975,15 +976,15 @@ const styles = StyleSheet.create({
         gap: 5,
         paddingHorizontal: 8,
         paddingVertical: 5,
-        backgroundColor: '#F8FAFC',
+        backgroundColor: colors.background,
         borderRadius: 6,
         borderWidth: 1,
-        borderColor: '#E5E7EB',
+        borderColor: colors.border,
     },
     selectAllText: {
         fontSize: 11,
         fontWeight: '600',
-        color: '#6366F1',
+        color: colors.primary,
     },
     bulkBtn: {
         flexDirection: 'row',
@@ -991,11 +992,11 @@ const styles = StyleSheet.create({
         gap: 5,
         paddingHorizontal: 10,
         paddingVertical: 6,
-        backgroundColor: '#6366F1',
+        backgroundColor: colors.primary,
         borderRadius: 8,
     },
     bulkBtnActive: {
-        backgroundColor: '#8B5CF6',
+        backgroundColor: colors.leave,
     },
     bulkBtnText: {
         fontSize: 11,
@@ -1025,18 +1026,18 @@ const styles = StyleSheet.create({
         justifyContent: 'space-around',
         paddingHorizontal: 12,
         paddingVertical: 10,
-        backgroundColor: 'white',
+        backgroundColor: colors.surface,
         borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
+        borderBottomColor: colors.border,
     },
     statItem: { alignItems: 'center' },
-    statNumber: { fontSize: 16, fontWeight: '700', color: '#374151' },
-    statLabel: { fontSize: 9, color: '#6B7280', marginTop: 1, fontWeight: '500' },
+    statNumber: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
+    statLabel: { fontSize: 9, color: colors.textSecondary, marginTop: 1, fontWeight: '500' },
 
     attendanceItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: 'white',
+        backgroundColor: colors.surface,
         marginHorizontal: 12,
         marginVertical: 5,
         padding: 12,
@@ -1047,22 +1048,22 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.08,
         shadowRadius: 4,
         borderWidth: 1,
-        borderColor: '#F3F4F6',
+        borderColor: colors.borderLight,
     },
     checkbox: {
         width: 20,
         height: 20,
         borderRadius: 10,
         borderWidth: 2,
-        borderColor: '#6366F1',
+        borderColor: colors.primary,
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 10,
     },
-    checkboxSelected: { backgroundColor: '#6366F1' },
+    checkboxSelected: { backgroundColor: colors.primary },
     employeeInfo: { flex: 1 },
-    employeeName: { fontSize: 14, fontWeight: '600', color: '#111827' },
-    employeeId: { fontSize: 11, color: '#6B7280', marginTop: 1 },
+    employeeName: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+    employeeId: { fontSize: 11, color: colors.textSecondary, marginTop: 1 },
 
     timeContainer: { marginTop: 6, gap: 3 },
     timeInfo: { flexDirection: 'row', alignItems: 'center' },
