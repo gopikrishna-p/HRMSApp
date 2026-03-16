@@ -7,7 +7,11 @@ import Icon from 'react-native-vector-icons/FontAwesome5';
 import AdminDashboard from '../screens/admin/AdminDashboard';
 import EmployeeManagement from '../screens/admin/EmployeeManagement';
 import AttendanceManagementScreen from '../screens/admin/AttendanceManagementScreen';
+import ReportsScreen from '../screens/admin/ReportsScreen';
 import AdminCheckInOutScreen from '../screens/admin/AdminCheckInOutScreen';
+import AllAttendanceAnalyticsScreen from '../screens/admin/AllAttendanceAnalyticsScreen';
+import AttendanceAnalyticsScreen from '../screens/admin/AttendanceAnalyticsScreen';
+import TodayEmployeeAnalyticsScreen from '../screens/admin/TodayEmployeeAnalyticsScreen';
 import ManualCheckInOutScreen from '../screens/admin/ManualCheckInOutScreen';
 import TodayAttendanceScreen from '../screens/admin/TodayAttendanceScreen';
 import WFHSettingsScreen from '../screens/admin/WFHSettingsScreen';
@@ -19,6 +23,7 @@ import CompApprovalScreen from '../screens/admin/CompApprovalScreen';
 import ExpenseClaimApprovalScreen from '../screens/admin/ExpenseClaimApprovalScreen';
 import TravelRequestApproval from '../screens/admin/TravelRequestApproval';
 import CreateNotificationScreen from '../screens/admin/CreateNotificationScreen';
+import SalaryStructureAdminScreen from '../screens/admin/SalaryStructureAdminScreen';
 
 // Import Employee Screen for Admin Self Leave / Self Expense / Self Travel
 import LeaveApplicationScreen from '../screens/employee/LeaveApplicationScreen';
@@ -55,6 +60,10 @@ const AdminNavigator = () => {
             {/* Keep RN header for the rest (or migrate gradually) */}
             <Stack.Screen name="EmployeeManagement" component={EmployeeManagement} options={{ title: 'Employee Management' }} />
             <Stack.Screen name="AdminCheckInOut" component={AdminCheckInOutScreen} options={{ title: 'Admin Check In/Out' }} />
+            <Stack.Screen name="AllAttendanceAnalyticsScreen" component={AllAttendanceAnalyticsScreen} options={{ title: 'All Attendance' }} />
+            <Stack.Screen name="AttendanceAnalytics" component={AttendanceAnalyticsScreen} options={{ title: 'Attendance Analytics' }} />
+            <Stack.Screen name="TodayEmployeeAnalytics" component={TodayEmployeeAnalyticsScreen} options={{ title: 'Today Analytics' }} />
+            <Stack.Screen name="Reports" component={ReportsScreen} options={{ title: 'Reports & Analytics' }} />
             <Stack.Screen name="ManualCheckInOut" component={ManualCheckInOutScreen} options={{ title: 'Manual Attendance' }} />
             <Stack.Screen name="TodayAttendance" component={TodayAttendanceScreen} options={{ title: "Today's Attendance" }} />
             <Stack.Screen name="AttendanceManagement" component={AttendanceManagementScreen} options={{ title: 'Attendance Management' }} />
@@ -77,6 +86,7 @@ const AdminNavigator = () => {
             <Stack.Screen name="ProjectTasksScreen" component={ProjectTasksScreen} options={{ title: 'Project Tasks' }} />
 
             <Stack.Screen name="AdminNotifications" component={AdminNotifications} options={{ title: 'Notifications' }} />
+            <Stack.Screen name="SalaryStructureAdmin" component={SalaryStructureAdminScreen} options={{ title: 'Salary Structures' }} />
         </Stack.Navigator>
     );
 };

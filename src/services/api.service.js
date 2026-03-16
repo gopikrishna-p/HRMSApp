@@ -14,6 +14,107 @@ const API_TIMEOUT = parseInt(process.env.API_TIMEOUT || '30000', 10);
 // Helper to build /api/method/hrms.api.<name>
 const m = (name) => `/api/method/hrms.api.${name}`;
 
+/**
+ * Helper to extract data from Frappe API responses.
+ * Handles nested response structures consistently.
+ * 
+ * Frappe whitelist functions wrap returns in 'message' key.
+ * If backend also wraps in {success, data: {message: ...}}, we extract properly.
+ * 
+ * @param {object} response - The axios response object from ApiService
+ * @param {any} defaultValue - Default value if extraction fails
+ * @returns {any} Extracted data or default value
+ */
+export const extractFrappeData = (response, defaultValue = null) => {
+    if (!response || !response.success) {
+        return defaultValue;
+    }
+    
+    // Level 1: response.data.message (Frappe's standard wrapper)
+    let data = response.data?.message;
+    
+    if (data === undefined || data === null) {
+        // Some APIs return data directly without message wrapper
+        data = response.data;
+    }
+    
+    // Level 2: Check if backend wrapped with {success, data: {message: ...}}
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+        // Check if it's a custom backend response wrapper
+        if (data.success !== undefined && data.data?.message !== undefined) {
+            return data.data.message;
+        }
+        // Check if it has a 'data' key with actual content
+        if (data.data !== undefined && data.message === undefined) {
+            return data.data;
+        }
+        // Check for status-based responses from backend
+        if (data.status === 'success' && data.data !== undefined) {
+            return data.data;
+        }
+    }
+    
+    return data ?? defaultValue;
+};
+
+/**
+ * Helper to check if API response indicates success.
+ * Handles both interceptor success and backend success flags.
+ * 
+ * @param {object} response - The axios response object from ApiService
+ * @returns {boolean} True if both HTTP and backend indicate success
+ */
+export const isApiSuccess = (response) => {
+    if (!response || !response.success) {
+        return false;
+    }
+    
+    // Check backend success indicators in response.data.message
+    const message = response.data?.message;
+    if (message && typeof message === 'object') {
+        // If backend returns {success: false, ...}, return false
+        if (message.success === false) {
+            return false;
+        }
+        // If backend returns {status: 'error', ...}, return false
+        if (message.status === 'error') {
+            return false;
+        }
+    }
+    
+    return true;
+};
+
+/**
+ * Get error message from API response.
+ * 
+ * @param {object} response - The axios response object from ApiService
+ * @param {string} defaultMsg - Default message if none found
+ * @returns {string} Error message
+ */
+export const getApiErrorMessage = (response, defaultMsg = 'An error occurred') => {
+    if (!response) {
+        return defaultMsg;
+    }
+    
+    // Check various locations for error messages
+    const message = response.data?.message;
+    if (typeof message === 'string') {
+        return message;
+    }
+    if (message?.message) {
+        return message.message;
+    }
+    if (message?.error) {
+        return message.error;
+    }
+    if (response.message) {
+        return response.message;
+    }
+    
+    return defaultMsg;
+};
+
 // Optional: centralise GET with params.body for POST-like GETs, if needed
 class ApiService {
     constructor() {
@@ -1514,6 +1615,49 @@ class ApiService {
 
     // ============================================================================
     // END ADVANCED NOTIFICATION FEATURES APIs
+    // ============================================================================
+
+    // ============================================================================
+    // SALARY STRUCTURE APIs
+    // ============================================================================
+
+    /**
+     * Get employee's salary structure with earnings and deductions
+     * Uses: get_employee_salary_structure from backend
+     * @param {string} employee - Optional employee ID (defaults to current user's employee)
+     * @returns {Promise} Response with salary structure details
+     */
+    getEmployeeSalaryStructure(employee = null) {
+        return this.post(m('get_employee_salary_structure'), { employee });
+    }
+
+    /**
+     * Get all salary structure assignments for admin view
+     * Uses: get_all_salary_structure_assignments from backend
+     * @param {Object} filters - Optional filters (department, designation, company, salary_structure)
+     * @returns {Promise} Response with all salary structure assignments
+     */
+    getAllSalaryStructureAssignments(filters = {}) {
+        return this.post(m('get_all_salary_structure_assignments'), {
+            department: filters.department || null,
+            designation: filters.designation || null,
+            company: filters.company || null,
+            salary_structure: filters.salary_structure || null,
+            limit: filters.limit || 500
+        });
+    }
+
+    /**
+     * Get list of salary structures for dropdown
+     * Uses: get_salary_structure_list from backend
+     * @returns {Promise} Response with salary structures list
+     */
+    getSalaryStructureList() {
+        return this.get(m('get_salary_structure_list'));
+    }
+
+    // ============================================================================
+    // END SALARY STRUCTURE APIs
     // ============================================================================
 
 

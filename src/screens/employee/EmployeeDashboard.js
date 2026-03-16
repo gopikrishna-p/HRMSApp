@@ -8,10 +8,11 @@ import Section from '../../components/ui/Section';
 import ListItem from '../../components/ui/ListItem';
 import StatCard from '../../components/ui/StatCard';
 import Button from '../../components/common/Button';
-import ApiService from '../../services/api.service';
+import ApiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import AttendanceService from '../../services/attendance.service';
 import FCMService from '../../services/fcm.service';
 import showToast from '../../utils/Toast';
+import { colors } from '../../theme/colors';
 
 const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navigation }) => {
         const { logout, employee } = useAuth();
@@ -25,6 +26,8 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
             present_days: 0,
             wfh_days: 0,
             absent_days: 0,
+            on_leave: 0,
+            holiday_days: 0,
             late_arrivals: 0,
             total_working_hours: 0,
             avg_working_hours: 0,
@@ -41,7 +44,8 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
             present: 0,
             wfh: 0,
             absent: 0,
-            late: 0
+            leave: 0,
+            holiday: 0
         }
     });
 
@@ -69,44 +73,25 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
         return `${year}-${month}-${day}`;
     };
 
-    // Fetch actual attendance records and calculate working hours (same logic as AttendanceHistoryScreen)
-    const fetchActualWorkingHours = async () => {
+    // Fetch leave balance for the employee
+    const fetchLeaveBalance = async () => {
         try {
-            if (!employee?.name) return;
-
-            const startDate = formatDate(getFirstDayOfCurrentMonth());
-            const endDate = formatDate(new Date());
-
-            console.log('Fetching attendance history for working hours calculation:', {
-                employee: employee.name,
-                startDate,
-                endDate
-            });
-
-            const result = await AttendanceService.getEmployeeAttendanceHistory(
-                employee.name,
-                startDate,
-                endDate
-            );
-
-            console.log('Attendance history result for hours calculation:', result);
-
-            if (result && result.summary_stats) {
-                setCalculatedHours({
-                    total_working_hours: result.summary_stats.total_working_hours || 0,
-                    avg_working_hours: result.summary_stats.avg_working_hours || 0
-                });
-                console.log('Calculated hours updated:', {
-                    total: result.summary_stats.total_working_hours,
-                    avg: result.summary_stats.avg_working_hours
-                });
+            if (!employee?.name) return {};
+            
+            const response = await ApiService.getLeaveBalances(employee.name);
+            console.log('Leave balance response:', response);
+            
+            if (response && response.data?.message) {
+                return response.data.message || {};
             }
+            return {};
         } catch (error) {
-            console.error('Error fetching actual working hours:', error);
+            console.error('Error fetching leave balance:', error);
+            return {};
         }
     };
 
-    // Fetch employee analytics data
+    // Fetch employee analytics using same approach as AttendanceHistoryScreen
     const fetchAnalytics = async () => {
         try {
             if (!employee?.name) {
@@ -116,99 +101,91 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
 
             console.log('Fetching analytics for employee:', employee.name);
 
-            // Use the new comprehensive analytics API
-            const response = await ApiService.getEmployeeAnalytics({
+            const startDate = formatDate(getFirstDayOfCurrentMonth());
+            const endDate = formatDate(new Date());
+
+            console.log('Fetching attendance history for analytics:', {
                 employee: employee.name,
-                period: 'current_month'
+                startDate,
+                endDate
             });
 
-            // If we get a 403 or permission error, user is logged out - skip silently
-            if (response.status === 403 || response.message?.includes('not permitted')) {
-                console.log('⚠️ Permission denied - user likely logged out');
-                return;
-            }
+            // Fetch attendance history using same service as AttendanceHistoryScreen
+            const result = await AttendanceService.getEmployeeAttendanceHistory(
+                employee.name,
+                startDate,
+                endDate
+            );
 
-            console.log('Analytics API Response:', JSON.stringify(response, null, 2));
+            console.log('Attendance history result for dashboard:', result);
 
-            if (response.success && response.data) {
-                // Handle nested API response structure
-                let analyticsData = response.data.message;
+            if (result && result.summary_stats) {
+                const summaryStats = result.summary_stats;
                 
-                // Check if data is nested further (API returns extra layers)
-                if (analyticsData && analyticsData.data && analyticsData.data.message) {
-                    analyticsData = analyticsData.data.message;
-                }
+                // Also fetch leave balance separately
+                const leaveBalanceData = await fetchLeaveBalance();
                 
-                console.log('Extracted Analytics Data:', JSON.stringify(analyticsData, null, 2));
+                // Process leave balances
+                const processedLeaveBalances = {};
+                Object.keys(leaveBalanceData).forEach(leaveType => {
+                    const leave = leaveBalanceData[leaveType];
+                    processedLeaveBalances[leaveType] = {
+                        allocated: leave.allocated_leaves || leave.total_leaves || 0,
+                        balance: leave.balance_leaves || leave.remaining_leaves || 0,
+                        used: (leave.allocated_leaves || leave.total_leaves || 0) - (leave.balance_leaves || leave.remaining_leaves || 0)
+                    };
+                });
+                
+                const totalAllocated = Object.values(processedLeaveBalances).reduce((sum, l) => sum + l.allocated, 0);
+                const totalBalance = Object.values(processedLeaveBalances).reduce((sum, l) => sum + l.balance, 0);
+                const totalUsed = Object.values(processedLeaveBalances).reduce((sum, l) => sum + l.used, 0);
 
-                // Check if we have the attendance and leave data
-                if (analyticsData && analyticsData.attendance && analyticsData.leave) {
-                        console.log('=== ANALYTICS DATA BREAKDOWN ===');
-                        console.log('Attendance Data:', analyticsData.attendance);
-                        console.log('Leave Data:', analyticsData.leave);
-                        console.log('================================');
-                        
-                        // Process leave balances to ensure correct structure
-                        const processedLeaveBalances = {};
-                        const leaveBalances = analyticsData.leave.leave_balances || {};
-                        
-                        Object.keys(leaveBalances).forEach(leaveType => {
-                            const leave = leaveBalances[leaveType];
-                            processedLeaveBalances[leaveType] = {
-                                allocated: leave.allocated_leaves || 0,
-                                balance: leave.balance_leaves || 0,
-                                used: (leave.allocated_leaves || 0) - (leave.balance_leaves || 0)
-                            };
-                        });
-
-                        const newAnalytics = {
-                            attendance: {
-                                total_working_days: analyticsData.attendance.total_working_days || 0,
-                                present_days: analyticsData.attendance.present_days || 0,
-                                wfh_days: analyticsData.attendance.wfh_days || 0,
-                                absent_days: analyticsData.attendance.absent_days || 0,
-                                late_arrivals: analyticsData.attendance.late_arrivals || 0,
-                                total_working_hours: analyticsData.attendance.total_working_hours || 0,
-                                avg_working_hours: analyticsData.attendance.avg_working_hours || 0,
-                                attendance_percentage: Math.round(analyticsData.attendance.attendance_percentage || 0)
-                            },
-                            leave: {
-                                balances: processedLeaveBalances,
-                                total_allocated: analyticsData.leave.total_allocated || 0,
-                                total_used: analyticsData.leave.total_used || 0,
-                                total_balance: analyticsData.leave.total_balance || 0,
-                                pending_applications: analyticsData.leave.period_stats?.pending_leaves || 0
-                            },
-                            thisMonth: {
-                                present: analyticsData.attendance.present_days || 0,
-                                wfh: analyticsData.attendance.wfh_days || 0,
-                                absent: analyticsData.attendance.absent_days || 0,
-                                late: analyticsData.attendance.late_arrivals || 0
-                            }
-                        };
-                        
-                        console.log('Setting Analytics State:', newAnalytics);
-                        setAnalytics(newAnalytics);
-                        console.log('Analytics state updated successfully');
-                        
-                        // Fetch actual working hours using same logic as AttendanceHistoryScreen
-                        await fetchActualWorkingHours();
-                    } else {
-                        console.error('Analytics data structure unexpected:', analyticsData);
-                        showToast({
-                            type: 'error',
-                            text1: 'Analytics Error',
-                            text2: analyticsData.message || 'Analytics data format error'
-                        });
+                const newAnalytics = {
+                    attendance: {
+                        total_working_days: summaryStats.working_days || 0,
+                        present_days: summaryStats.present_days || 0,
+                        wfh_days: summaryStats.wfh_days || 0,
+                        absent_days: summaryStats.absent_days || 0,
+                        on_leave: summaryStats.leave_days || 0,
+                        holiday_days: summaryStats.holiday_days || 0,
+                        late_arrivals: summaryStats.late_arrivals || 0,
+                        total_working_hours: summaryStats.total_working_hours || 0,
+                        avg_working_hours: summaryStats.avg_working_hours || 0,
+                        attendance_percentage: Math.round(summaryStats.attendance_percentage || 0)
+                    },
+                    leave: {
+                        balances: processedLeaveBalances,
+                        total_allocated: totalAllocated,
+                        total_used: totalUsed,
+                        total_balance: totalBalance,
+                        pending_applications: 0
+                    },
+                    thisMonth: {
+                        present: summaryStats.present_days || 0,
+                        wfh: summaryStats.wfh_days || 0,
+                        absent: summaryStats.absent_days || 0,
+                        leave: summaryStats.leave_days || 0,
+                        holiday: summaryStats.holiday_days || 0
                     }
-                } else {
-                    console.error('Analytics API failed:', response.message);
-                    showToast({
-                        type: 'error',
-                        text1: 'Failed to Load',
-                        text2: response.message || 'Failed to load analytics'
-                    });
-                }
+                };
+                
+                // Set calculated hours from the same result
+                setCalculatedHours({
+                    total_working_hours: summaryStats.total_working_hours || 0,
+                    avg_working_hours: summaryStats.avg_working_hours || 0
+                });
+                
+                console.log('Setting Analytics State:', newAnalytics);
+                setAnalytics(newAnalytics);
+                console.log('Analytics state updated successfully');
+            } else {
+                console.error('No summary stats in attendance history result');
+                showToast({
+                    type: 'error',
+                    text1: 'Analytics Error',
+                    text2: 'Unable to load attendance data'
+                });
+            }
             } catch (error) {
                 console.error('Error fetching analytics:', error);
                 showToast({
@@ -248,7 +225,6 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
     const onRefresh = useCallback(() => {
         setRefreshing(true);
         fetchAnalytics();
-        fetchActualWorkingHours();
         fetchPendingNotifications();
     }, [employee?.name]);
 
@@ -302,23 +278,23 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
             { 
                 id: 2, 
                 icon: 'home', 
-                tint: '#10B981', 
+                tint: colors.success, 
                 value: analytics.thisMonth.wfh.toString(), 
                 label: 'WFH' 
             },
             { 
                 id: 3, 
-                icon: 'times-circle', 
-                tint: '#EF4444', 
-                value: analytics.thisMonth.absent.toString(), 
-                label: 'Absent' 
+                icon: 'umbrella-beach', 
+                tint: colors.leave || '#9C27B0', 
+                value: analytics.thisMonth.leave.toString(), 
+                label: 'Leave' 
             },
             { 
                 id: 4, 
-                icon: 'exclamation-triangle', 
-                tint: '#F59E0B', 
-                value: analytics.thisMonth.late.toString(), 
-                label: 'Late' 
+                icon: 'times-circle', 
+                tint: colors.error, 
+                value: analytics.thisMonth.absent.toString(), 
+                label: 'Absent' 
             },
         ];
 
@@ -428,13 +404,13 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                         {/* Single Row Stats */}
                         <View style={{ flexDirection: 'row', marginHorizontal: -2 }}>
                             {[
-                                { label: 'Total Working Days', value: analytics.attendance.total_working_days, icon: 'calendar', color: '#6B7280' },
-                                { label: 'Hours', value: calculatedHours.total_working_hours || 0, icon: 'clock', color: '#8B5CF6' },
-                                { label: 'Avg/Day', value: calculatedHours.avg_working_hours > 0 ? calculatedHours.avg_working_hours + 'h' : '0h', icon: 'hourglass-half', color: '#10B981' },
+                                { label: 'Total Working Days', value: analytics.attendance.total_working_days, icon: 'calendar', color: colors.textSecondary },
+                                { label: 'Hours', value: calculatedHours.total_working_hours || 0, icon: 'clock', color: colors.leave },
+                                { label: 'Avg/Day', value: calculatedHours.avg_working_hours > 0 ? calculatedHours.avg_working_hours + 'h' : '0h', icon: 'hourglass-half', color: colors.success },
                             ].map((stat, index) => (
                                 <View key={index} style={{ flex: 1, paddingHorizontal: 2 }}>
                                     <View style={{ 
-                                        backgroundColor: '#F9FAFB', 
+                                        backgroundColor: colors.surfaceSecondary, 
                                         padding: 6, 
                                         borderRadius: 6,
                                         alignItems: 'center'
@@ -493,7 +469,7 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                                     return (
                                         <View key={index} style={{ flex: 1, paddingHorizontal: 2 }}>
                                             <View style={{ 
-                                                backgroundColor: '#F9FAFB',
+                                                backgroundColor: colors.surfaceSecondary,
                                                 padding: 6,
                                                 borderRadius: 6,
                                                 alignItems: 'center'
@@ -524,7 +500,7 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                         <ListItem title="WFH Request" subtitle="Apply for work from home" leftIcon="home"
                             tint={custom.palette.primary} onPress={() => navigation.navigate('WFHRequest')} />
                         <ListItem title="On Site Request" subtitle="Request to work on client site" leftIcon="map-marker-alt"
-                            tint="#2196F3" onPress={() => navigation.navigate('OnSiteRequest')} />
+                            tint={custom.palette.primary} onPress={() => navigation.navigate('OnSiteRequest')} />
                     </Section>
 
                     <Section title="Leaves" icon="umbrella-beach" tint={custom.palette.success}>
@@ -543,9 +519,9 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                             tint={custom.palette.warning} onPress={() => navigation.navigate('TravelRequest')} />
                     </Section>
 
-                    <Section title="Projects & Tasks" icon="tasks" tint="#8B5CF6">
+                    <Section title="Projects & Tasks" icon="tasks" tint={colors.leave}>
                         <ListItem title="My Projects" subtitle="View assigned projects" leftIcon="folder-open"
-                            tint="#8B5CF6" onPress={() => navigation.navigate('MyProjectsScreen')} />
+                            tint={colors.leave} onPress={() => navigation.navigate('MyProjectsScreen')} />
                     </Section>
 
                     <Section title="Payroll" icon="wallet" tint={custom.palette.danger}>
@@ -555,11 +531,11 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                             tint={custom.palette.danger} onPress={() => navigation.navigate('Payslip')} />
                     </Section>
 
-                    <Section title="Other" icon="ellipsis-h" tint="#6B7280">
+                    <Section title="Other" icon="ellipsis-h" tint={colors.textSecondary}>
                         <ListItem title="Notifications" subtitle="View notifications" leftIcon="bell" badge={pendingNotifications > 0 ? pendingNotifications : null}
-                            tint="#6B7280" onPress={() => navigation.navigate('Notifications')} />
+                            tint={colors.textSecondary} onPress={() => navigation.navigate('Notifications')} />
                         <ListItem title="Profile" subtitle="Update your profile" leftIcon="user-circle"
-                            tint="#6B7280" onPress={() => navigation.navigate('Profile')} />
+                            tint={colors.textSecondary} onPress={() => navigation.navigate('Profile')} />
                     </Section>
 
                     <Button onPress={handleLogout} style={{ marginTop: 8 }}>Logout</Button>

@@ -15,7 +15,7 @@ import { colors } from '../../theme/colors';
 import Input from '../../components/common/Input';
 import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
-import apiService from '../../services/api.service';
+import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 
 const CompensatoryLeaveScreen = ({ navigation }) => {
     // State management
@@ -60,11 +60,12 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
             setLoading(true);
             // Get employee ID
             const empResponse = await apiService.getCurrentEmployee();
-            if (empResponse.success && empResponse.data?.message) {
-                const empId = empResponse.data.message.name;
+            if (isApiSuccess(empResponse)) {
+                const empData = extractFrappeData(empResponse, {});
+                const empId = empData.name;
                 setEmployeeId(empId);
             } else {
-                Alert.alert('Error', 'Failed to get employee information');
+                Alert.alert('Error', getApiErrorMessage(empResponse, 'Failed to get employee information'));
             }
         } catch (error) {
             console.error('Error loading employee data:', error);
@@ -87,8 +88,8 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
                 limit: 100
             });
 
-            if (response.success && response.data?.message) {
-                const data = response.data.message;
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, { requests: [], total_compensatory_days: 0, status_summary: { pending: 0, approved: 0, cancelled: 0 } });
                 setMyRequests(Array.isArray(data.requests) ? data.requests : []);
                 setTotalDays(data.total_compensatory_days || 0);
                 setStatusSummary(data.status_summary || { pending: 0, approved: 0, cancelled: 0 });

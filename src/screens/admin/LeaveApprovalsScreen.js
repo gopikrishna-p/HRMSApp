@@ -17,7 +17,7 @@ import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
 import Input from '../../components/common/Input';
-import apiService from '../../services/api.service';
+import apiService, { extractFrappeData, isApiSuccess } from '../../services/api.service';
 
 const LeaveApprovalsScreen = ({ navigation }) => {
     // State
@@ -126,11 +126,10 @@ const LeaveApprovalsScreen = ({ navigation }) => {
             const response = await apiService.getAllLeaves(filters);
             console.log('📋 Response from getAllLeaves:', response);
             
-            if (response.success && response.data?.message) {
-                const result = response.data.message;
+            if (isApiSuccess(response)) {
+                const result = extractFrappeData(response, { applications: [] });
                 console.log('✅ Pending leaves loaded:', result.applications?.length || 0, 'applications');
                 setPendingLeaves(Array.isArray(result.applications) ? result.applications : []);
-                setStatistics(result.statistics || null);
             } else {
                 console.error('❌ Failed to fetch leaves:', response);
                 setPendingLeaves([]);
@@ -152,8 +151,8 @@ const LeaveApprovalsScreen = ({ navigation }) => {
             const response = await apiService.getAllLeaves(filters);
             console.log('📋 History response:', response);
             
-            if (response.success && response.data?.message) {
-                const result = response.data.message;
+            if (isApiSuccess(response)) {
+                const result = extractFrappeData(response, { applications: [] });
                 // Filter history to exclude pending
                 const applications = Array.isArray(result.applications) ? result.applications : [];
                 const history = applications.filter(
@@ -161,7 +160,6 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                 );
                 console.log('📋 History leaves loaded:', history.length, 'from', applications.length, 'total');
                 setHistoryLeaves(history);
-                setStatistics(result.statistics || null);
             } else {
                 console.error('❌ Failed to fetch history:', response);
                 setHistoryLeaves([]);

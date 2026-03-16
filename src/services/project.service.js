@@ -1,7 +1,7 @@
 // src/services/project.service.js
-import ApiService from './api.service';
+import ApiService, { extractFrappeData } from './api.service';
 
-const unwrap = (res) => res?.data?.message ?? res?.data ?? res;
+const unwrap = (res) => extractFrappeData(res, null);
 
 // Base API path - change if your backend module name is different
 const BASE = '/api/method/hrms.api';

@@ -17,7 +17,7 @@ import MaterialIcon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Text, useTheme, Avatar, Divider } from 'react-native-paper';
 import { useAuth } from '../../context/AuthContext';
 import AppHeader from '../../components/ui/AppHeader';
-import ApiService from '../../services/api.service';
+import ApiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import showToast from '../../utils/Toast';
 
 const ProfileScreen = ({ navigation }) => {
@@ -78,31 +78,38 @@ const ProfileScreen = ({ navigation }) => {
             const response = await ApiService.get(`/api/method/hrms.api.get_employee_profile?employee=${employee.name}`);
             console.log('📊 API Response:', response);
             
-            if (response.success) {
-                // Extract the actual profile data from response.data.message
-                const profileInfo = response.data?.message || response.message || {};
-                
-                // Check if response contains the new format with can_edit
-                if (profileInfo.status === 'success' && profileInfo.data) {
-                    const data = profileInfo.data;
-                    setProfileData(data);
-                    setCanEdit(data.can_edit || false);
-                    setPendingRequest(data.pending_edit_request ? true : false);
-                    setEditForm(data);
-                } else {
-                    setProfileData(profileInfo);
-                    // Also check edit permission separately
-                    checkEditPermission();
-                }
-                console.log('✅ Profile data extracted:', profileInfo);
-            } else {
-                console.error('❌ Failed response:', response);
+            if (!isApiSuccess(response)) {
+                const errorMsg = getApiErrorMessage(response, 'Failed to load profile data');
+                console.error('❌ Failed response:', errorMsg);
                 showToast({
                     type: 'error',
                     text1: 'Error',
-                    text2: 'Failed to load profile data',
+                    text2: errorMsg,
                 });
+                return;
             }
+            
+            // Extract the actual profile data using helper
+            const profileInfo = extractFrappeData(response, {});
+            console.log('Extracted profile info:', profileInfo);
+            
+            // Check if response contains the new format with can_edit
+            if (profileInfo.status === 'success' && profileInfo.data) {
+                const data = profileInfo.data;
+                setProfileData(data);
+                setCanEdit(data.can_edit || false);
+                setPendingRequest(data.pending_edit_request ? true : false);
+                setEditForm(data);
+            } else if (profileInfo && Object.keys(profileInfo).length > 0) {
+                // Direct profile data format
+                setProfileData(profileInfo);
+                setEditForm(profileInfo);
+                // Also check edit permission separately
+                checkEditPermission();
+            } else {
+                console.warn('Empty or invalid profile data');
+            }
+            console.log('✅ Profile data set');
         } catch (error) {
             console.error('❌ Profile fetch error:', error);
             console.error('Error details:', error.message);

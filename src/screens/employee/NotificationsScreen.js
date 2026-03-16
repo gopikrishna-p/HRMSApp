@@ -18,7 +18,7 @@ import {
     Dimensions,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import ApiService from '../../services/api.service';
+import ApiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import { colors } from '../../theme/colors';
 
 const { width } = Dimensions.get('window');
@@ -73,17 +73,25 @@ const NotificationsScreen = ({ navigation }) => {
             const response = await ApiService.getMyNotifications(params);
             console.log('Employee Notifications response:', JSON.stringify(response, null, 2));
             
-            if (response.success && response.data?.message?.status === 'success') {
-                const message = response.data.message;
-                let notificationsList = message.notifications || [];
-                
-                // Filter for urgent if needed
-                if (selectedTab === 'Urgent') {
-                    notificationsList = notificationsList.filter(n => n.priority === 'High');
-                }
-                
-                setNotifications(notificationsList);
+            // Use helper to extract data
+            const extractedData = extractFrappeData(response, {});
+            
+            // Handle different response structures
+            let notificationsList = [];
+            if (extractedData.status === 'success' && extractedData.notifications) {
+                notificationsList = extractedData.notifications;
+            } else if (Array.isArray(extractedData)) {
+                notificationsList = extractedData;
+            } else if (extractedData.notifications) {
+                notificationsList = extractedData.notifications;
             }
+            
+            // Filter for urgent if needed
+            if (selectedTab === 'Urgent') {
+                notificationsList = notificationsList.filter(n => n.priority === 'High');
+            }
+            
+            setNotifications(notificationsList);
         } catch (error) {
             console.error('Error fetching notifications:', error);
         } finally {
@@ -95,9 +103,10 @@ const NotificationsScreen = ({ navigation }) => {
     const fetchStats = async () => {
         try {
             const response = await ApiService.getNotificationStats();
-            if (response.success && response.data?.message?.status === 'success') {
-                setStats(response.data.message.stats || { total: 0, unread: 0, urgent: 0 });
-            }
+            const extractedData = extractFrappeData(response, {});
+            // Handle nested structure
+            const statsData = extractedData.stats || (extractedData.status === 'success' ? extractedData.stats : {});
+            setStats(statsData || { total: 0, unread: 0, urgent: 0 });
         } catch (error) {
             console.error('Error fetching notification stats:', error);
         }
@@ -106,9 +115,10 @@ const NotificationsScreen = ({ navigation }) => {
     const fetchSettings = async () => {
         try {
             const response = await ApiService.getNotificationSettings();
-            if (response.success && response.data?.message?.status === 'success') {
-                setSettings(response.data.message.settings || {});
-            }
+            const extractedData = extractFrappeData(response, {});
+            // Handle nested structure
+            const settingsData = extractedData.settings || (extractedData.status === 'success' ? extractedData.settings : {});
+            setSettings(settingsData || {});
         } catch (error) {
             console.error('Error fetching notification settings:', error);
         }

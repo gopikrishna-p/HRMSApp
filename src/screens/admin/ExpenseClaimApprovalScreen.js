@@ -17,7 +17,7 @@ import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
 import Loading from '../../components/common/Loading';
-import apiService from '../../services/api.service';
+import apiService, { extractFrappeData, isApiSuccess } from '../../services/api.service';
 
 const ExpenseClaimApprovalScreen = ({ navigation }) => {
     const [activeTab, setActiveTab] = useState('pending'); // pending, apply, history, statistics
@@ -137,8 +137,8 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
             const response = await apiService.getAdminExpenseClaims(filters);
             console.log('📋 Response from getAdminExpenseClaims:', response);
             
-            if (response.success && response.data?.message) {
-                const data = response.data.message;
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, { claims: [], statistics: {} });
                 console.log('📋 Claims loaded:', data.claims?.length || 0, 'claims, stats:', data.statistics);
                 setClaims(data.claims || []);
                 setStatistics(data.statistics || {});

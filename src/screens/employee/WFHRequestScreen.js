@@ -15,7 +15,7 @@ import {
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { colors } from '../../theme/colors';
-import ApiService from '../../services/api.service';
+import ApiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import showToast from '../../utils/Toast';
 
 const WFHRequestScreen = ({ navigation }) => {
@@ -52,28 +52,14 @@ const WFHRequestScreen = ({ navigation }) => {
             const response = await ApiService.getWFHRequests();
             console.log('📋 Requests response:', response);
             
-            // Handle different response formats:
-            // 1. Frappe wraps arrays: { success: true, data: { message: [...] } }
-            // 2. Direct array: { success: true, data: [...] }
-            // 3. Error: { success: false, message: '...' }
-            let requestsData = [];
+            // Use helper function to extract data
+            const requestsData = extractFrappeData(response, []);
             
-            if (response.success) {
-                if (response.data?.message && Array.isArray(response.data.message)) {
-                    // Frappe wrapped: { data: { message: [...] } }
-                    requestsData = response.data.message;
-                } else if (Array.isArray(response.data)) {
-                    // Direct array: { data: [...] }
-                    requestsData = response.data;
-                } else {
-                    console.warn('⚠️ Unexpected response format:', response);
-                }
-            } else {
-                console.error('❌ Failed to load requests:', response.message);
-            }
+            // Ensure we have an array
+            const requests = Array.isArray(requestsData) ? requestsData : [];
             
-            console.log('✅ Loaded requests:', requestsData.length);
-            setMyRequests(requestsData);
+            console.log('✅ Loaded requests:', requests.length);
+            setMyRequests(requests);
         } catch (error) {
             console.error('❌ Error loading WFH requests:', error);
             showToast({
@@ -355,12 +341,12 @@ const WFHRequestScreen = ({ navigation }) => {
     const getStatusColor = (status) => {
         switch (status?.toLowerCase()) {
             case 'approved':
-                return '#10B981';
+                return colors.success;
             case 'rejected':
-                return '#EF4444';
+                return colors.error;
             case 'pending':
             default:
-                return '#F59E0B';
+                return colors.warning;
         }
     };
 
@@ -431,9 +417,9 @@ const WFHRequestScreen = ({ navigation }) => {
                                 disabled={isDeleting}
                             >
                                 {isDeleting ? (
-                                    <ActivityIndicator size="small" color="#EF4444" />
+                                    <ActivityIndicator size="small" color={colors.error} />
                                 ) : (
-                                    <Icon name="trash" size={16} color="#EF4444" />
+                                    <Icon name="trash" size={16} color={colors.error} />
                                 )}
                             </TouchableOpacity>
                         )}
@@ -580,7 +566,7 @@ const WFHRequestScreen = ({ navigation }) => {
 
             {/* Info Box */}
             <View style={styles.infoBox}>
-                <Icon name="info-circle" size={16} color="#3B82F6" />
+                <Icon name="info-circle" size={16} color={colors.info} />
                 <Text style={styles.infoText}>
                     Your request will be sent to admin for approval. You'll receive a notification once it's reviewed.
                 </Text>
@@ -810,7 +796,7 @@ const styles = StyleSheet.create({
         marginBottom: 8,
     },
     required: {
-        color: '#EF4444',
+        color: colors.error,
     },
     dateButton: {
         flexDirection: 'row',
@@ -864,17 +850,17 @@ const styles = StyleSheet.create({
     },
     infoBox: {
         flexDirection: 'row',
-        backgroundColor: '#EFF6FF',
+        backgroundColor: colors.infoLight,
         padding: 16,
         borderRadius: 8,
         borderLeftWidth: 4,
-        borderLeftColor: '#3B82F6',
+        borderLeftColor: colors.info,
         gap: 12,
     },
     infoText: {
         flex: 1,
         fontSize: 13,
-        color: '#1E40AF',
+        color: colors.info,
         lineHeight: 18,
     },
     historyContainer: {
@@ -939,7 +925,7 @@ const styles = StyleSheet.create({
     deleteButton: {
         padding: 8,
         borderRadius: 8,
-        backgroundColor: '#FEE2E2',
+        backgroundColor: colors.errorLight,
         justifyContent: 'center',
         alignItems: 'center',
         minWidth: 32,

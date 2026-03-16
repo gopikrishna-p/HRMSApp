@@ -5,7 +5,7 @@ import Icon from 'react-native-vector-icons/FontAwesome5';
 import { useAuth } from '../../context/AuthContext';
 import AppHeader from '../../components/ui/AppHeader';
 import EmptyState from '../../components/ui/EmptyState';
-import ApiService from '../../services/api.service';
+import ApiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import showToast from '../../utils/Toast';
 
 const HolidayListScreen = ({ navigation }) => {
@@ -55,114 +55,111 @@ const HolidayListScreen = ({ navigation }) => {
             console.log('Fetching holidays for employee:', employee.name);
             
             // Use new comprehensive API
-            const currentYear = new Date().getFullYear().toString();
-            const response = await ApiService.getEmployeeHolidays(employee.name, currentYear);
+            const yearValue = new Date().getFullYear().toString();
+            const response = await ApiService.getEmployeeHolidays(employee.name, yearValue);
             
             console.log('Holidays API Response:', JSON.stringify(response, null, 2));
 
-            if (response.success && response.data) {
-                const apiData = response.data.message || response.data;
+            // Check if API call was successful
+            if (!isApiSuccess(response)) {
+                const errorMsg = getApiErrorMessage(response, 'Failed to load holidays');
+                console.error('Holidays API Error:', errorMsg);
+                showToast({
+                    type: 'error',
+                    text1: 'Error',
+                    text2: errorMsg
+                });
+                setHolidays([]);
+                return;
+            }
+
+            // Extract data using helper
+            const extractedData = extractFrappeData(response, {});
+            console.log('Extracted holidays data:', extractedData);
+            
+            // Handle nested structure - data might be in 'data' key or direct
+            const holidayData = extractedData.data || extractedData;
+            const holidaysList = holidayData.holidays || extractedData.holidays || [];
+            const statistics = holidayData.statistics || extractedData.statistics || {};
+
+            console.log('Processed holidays list:', holidaysList.length, 'items');
+            console.log('API Statistics:', statistics);
+
+            // Process holidays
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            
+            const currentMonth = today.getMonth();
+            const currentYearNum = today.getFullYear();
+
+            const processedHolidays = holidaysList.map(holiday => {
+                const holidayDate = new Date(holiday.holiday_date);
                 
-                if (apiData.status === 'error') {
-                    console.error('API Error:', apiData.message);
-                    showToast({
-                        type: 'error',
-                        text1: 'Error',
-                        text2: apiData.message || 'Failed to load holidays'
-                    });
-                    setHolidays([]);
-                    return;
-                }
-
-                const holidayData = apiData.data;
-                const holidaysList = holidayData.holidays || [];
-                const statistics = holidayData.statistics || {};
-
-                console.log('Processed holidays list:', holidaysList.length, 'items');
-                console.log('API Statistics:', statistics);
-
-                // Process holidays
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
+                // Detect weekly offs (weekends) based on day of week or description
+                const dayOfWeek = holidayDate.getDay(); // 0 = Sunday, 6 = Saturday
+                const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // Sunday or Saturday
+                const cleanDescription = stripHtml(holiday.description);
+                const isDescriptionWeekend = cleanDescription && 
+                    (cleanDescription.toLowerCase().includes('saturday') || 
+                     cleanDescription.toLowerCase().includes('sunday'));
                 
-                const currentMonth = today.getMonth();
-                const currentYear = today.getFullYear();
+                const isWeeklyOff = holiday.weekly_off === 1 || 
+                                   holiday.weekly_off === true || 
+                                   isWeekend || 
+                                   isDescriptionWeekend;
+                
+                return {
+                    ...holiday,
+                    dateObj: holidayDate,
+                    isPast: holidayDate < today,
+                    isFuture: holidayDate >= today,
+                    isThisMonth: holidayDate.getMonth() === currentMonth && 
+                                holidayDate.getFullYear() === currentYearNum,
+                    isWeeklyOff: isWeeklyOff,
+                    formattedDate: formatDate(holidayDate),
+                    dayName: getDayName(holidayDate),
+                    monthName: getMonthName(holidayDate),
+                    dayOfMonth: holidayDate.getDate(),
+                };
+            });
 
-                const processedHolidays = holidaysList.map(holiday => {
-                    const holidayDate = new Date(holiday.holiday_date);
-                    
-                    // Detect weekly offs (weekends) based on day of week or description
-                    const dayOfWeek = holidayDate.getDay(); // 0 = Sunday, 6 = Saturday
-                    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // Sunday or Saturday
-                    const cleanDescription = stripHtml(holiday.description);
-                    const isDescriptionWeekend = cleanDescription && 
-                        (cleanDescription.toLowerCase().includes('saturday') || 
-                         cleanDescription.toLowerCase().includes('sunday'));
-                    
-                    const isWeeklyOff = holiday.weekly_off === 1 || 
-                                       holiday.weekly_off === true || 
-                                       isWeekend || 
-                                       isDescriptionWeekend;
-                    
-                    return {
-                        ...holiday,
-                        dateObj: holidayDate,
-                        isPast: holidayDate < today,
-                        isFuture: holidayDate >= today,
-                        isThisMonth: holidayDate.getMonth() === currentMonth && 
-                                    holidayDate.getFullYear() === currentYear,
-                        isWeeklyOff: isWeeklyOff,
-                        formattedDate: formatDate(holidayDate),
-                        dayName: getDayName(holidayDate),
-                        monthName: getMonthName(holidayDate),
-                        dayOfMonth: holidayDate.getDate(),
-                    };
+            console.log('First few processed holidays:', processedHolidays.slice(0, 5).map(h => ({
+                date: h.holiday_date,
+                description: h.description,
+                isWeeklyOff: h.isWeeklyOff,
+                dayName: h.dayName
+            })));
+
+            // Sort by date (ascending)
+            processedHolidays.sort((a, b) => a.dateObj - b.dateObj);
+
+            // Use statistics from API or calculate as fallback
+            setHolidays(processedHolidays);
+            setStats({
+                total: statistics.total || processedHolidays.length,
+                upcoming: statistics.upcoming || processedHolidays.filter(h => h.isFuture).length,
+                past: statistics.past || processedHolidays.filter(h => h.isPast).length,
+                thisMonth: statistics.this_month || processedHolidays.filter(h => h.isThisMonth).length,
+                weeklyOffs: statistics.weekly_offs || processedHolidays.filter(h => h.isWeeklyOff).length,
+                regularHolidays: statistics.public_holidays || processedHolidays.filter(h => !h.isWeeklyOff).length
                 });
 
-                console.log('First few processed holidays:', processedHolidays.slice(0, 5).map(h => ({
-                    date: h.holiday_date,
-                    description: h.description,
-                    isWeeklyOff: h.isWeeklyOff,
-                    dayName: h.dayName
-                })));
+            console.log('Final Stats:', { 
+                total: statistics.total,
+                upcoming: statistics.upcoming,
+                past: statistics.past,
+                thisMonth: statistics.this_month,
+                weeklyOffs: statistics.weekly_offs,
+                regularHolidays: statistics.public_holidays
+            });
 
-                // Sort by date (ascending)
-                processedHolidays.sort((a, b) => a.dateObj - b.dateObj);
-
-                // Use statistics from API or calculate as fallback
-                setHolidays(processedHolidays);
-                setStats({
-                    total: statistics.total || processedHolidays.length,
-                    upcoming: statistics.upcoming || processedHolidays.filter(h => h.isFuture).length,
-                    past: statistics.past || processedHolidays.filter(h => h.isPast).length,
-                    thisMonth: statistics.this_month || processedHolidays.filter(h => h.isThisMonth).length,
-                    weeklyOffs: statistics.weekly_offs || processedHolidays.filter(h => h.isWeeklyOff).length,
-                    regularHolidays: statistics.public_holidays || processedHolidays.filter(h => !h.isWeeklyOff).length
-                });
-
-                console.log('Final Stats:', { 
-                    total: statistics.total,
-                    upcoming: statistics.upcoming,
-                    past: statistics.past,
-                    thisMonth: statistics.this_month,
-                    weeklyOffs: statistics.weekly_offs,
-                    regularHolidays: statistics.public_holidays
-                });
-
-                // Show success message
+            // Show success message if we have holidays
+            if (processedHolidays.length > 0) {
                 showToast({
                     type: 'success',
                     text1: 'Holidays Loaded',
-                    text2: `${statistics.total || processedHolidays.length} holidays for ${currentYear}`
+                    text2: `${processedHolidays.length} holidays for ${yearValue}`
                 });
-            } else {
-                console.error('Invalid holidays response:', response);
-                showToast({
-                    type: 'error',
-                    text1: 'Failed to Load',
-                    text2: response.message || 'Failed to load holidays'
-                });
-                setHolidays([]);
             }
         } catch (error) {
             console.error('Error fetching holidays:', error);

@@ -16,7 +16,7 @@ import { colors } from '../../theme/colors';
 import Input from '../../components/common/Input';
 import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
-import apiService from '../../services/api.service';
+import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 
 const LeaveApplicationScreen = ({ navigation }) => {
     // State for form
@@ -59,8 +59,9 @@ const LeaveApplicationScreen = ({ navigation }) => {
         try {
             // Get employee ID
             const empResponse = await apiService.getCurrentEmployee();
-            if (empResponse.success && empResponse.data?.message) {
-                const empId = empResponse.data.message.name;
+            const empData = extractFrappeData(empResponse, null);
+            if (empData && empData.name) {
+                const empId = empData.name;
                 setEmployeeId(empId);
                 
                 // Load leave types, balances, and approvers in parallel
@@ -70,6 +71,9 @@ const LeaveApplicationScreen = ({ navigation }) => {
                     loadApprovers(empId),
                     loadMyLeaves(empId)
                 ]);
+            } else {
+                console.error('Failed to get employee info:', empResponse);
+                Alert.alert('Error', 'Failed to load employee information');
             }
         } catch (error) {
             console.error('Error loading initial data:', error);
@@ -82,14 +86,11 @@ const LeaveApplicationScreen = ({ navigation }) => {
     const loadLeaveTypes = async (empId) => {
         try {
             const response = await apiService.getLeaveTypes(empId);
-            if (response.success && response.data?.message) {
-                const types = Array.isArray(response.data.message) ? response.data.message : [];
-                setLeaveTypes(types);
-                if (types.length > 0) {
-                    setSelectedLeaveType(types[0]);
-                }
-            } else {
-                setLeaveTypes([]);
+            const types = extractFrappeData(response, []);
+            const typesArray = Array.isArray(types) ? types : [];
+            setLeaveTypes(typesArray);
+            if (typesArray.length > 0) {
+                setSelectedLeaveType(typesArray[0]);
             }
         } catch (error) {
             console.error('Error loading leave types:', error);
@@ -100,11 +101,8 @@ const LeaveApplicationScreen = ({ navigation }) => {
     const loadLeaveBalances = async (empId) => {
         try {
             const response = await apiService.getLeaveBalances(empId);
-            if (response.success && response.data?.message) {
-                setBalances(response.data.message || {});
-            } else {
-                setBalances({});
-            }
+            const balancesData = extractFrappeData(response, {});
+            setBalances(typeof balancesData === 'object' && !Array.isArray(balancesData) ? balancesData : {});
         } catch (error) {
             console.error('Error loading balances:', error);
             setBalances({});
@@ -114,17 +112,13 @@ const LeaveApplicationScreen = ({ navigation }) => {
     const loadApprovers = async (empId) => {
         try {
             const response = await apiService.getLeaveApprovalDetails(empId);
-            if (response.success && response.data?.message) {
-                const approverData = response.data.message;
-                const approversList = Array.isArray(approverData.department_approvers) 
-                    ? approverData.department_approvers 
-                    : [];
-                setApprovers(approversList);
-                if (approverData.leave_approver) {
-                    setSelectedApprover(approverData.leave_approver);
-                }
-            } else {
-                setApprovers([]);
+            const approverData = extractFrappeData(response, {});
+            const approversList = Array.isArray(approverData.department_approvers) 
+                ? approverData.department_approvers 
+                : [];
+            setApprovers(approversList);
+            if (approverData.leave_approver) {
+                setSelectedApprover(approverData.leave_approver);
             }
         } catch (error) {
             console.error('Error loading approvers:', error);
@@ -135,12 +129,10 @@ const LeaveApplicationScreen = ({ navigation }) => {
     const loadMyLeaves = async (empId) => {
         try {
             const response = await apiService.getMyLeaves({ employee: empId, limit: 50 });
-            if (response.success && response.data?.message) {
-                const applications = response.data.message.applications;
-                setMyLeaves(Array.isArray(applications) ? applications : []);
-            } else {
-                setMyLeaves([]);
-            }
+            const leavesData = extractFrappeData(response, {});
+            // Handle different response structures - applications might be direct or nested
+            const applications = leavesData.applications || (Array.isArray(leavesData) ? leavesData : []);
+            setMyLeaves(Array.isArray(applications) ? applications : []);
         } catch (error) {
             console.error('Error loading my leaves:', error);
             setMyLeaves([]);
@@ -787,16 +779,16 @@ const styles = StyleSheet.create({
         borderRadius: 12,
     },
     statusOpen: {
-        backgroundColor: '#FFF3CD',
+        backgroundColor: colors.warningLight,
     },
     statusApproved: {
-        backgroundColor: '#D4EDDA',
+        backgroundColor: colors.successLight,
     },
     statusRejected: {
-        backgroundColor: '#F8D7DA',
+        backgroundColor: colors.errorLight,
     },
     statusCancelled: {
-        backgroundColor: '#E2E3E5',
+        backgroundColor: colors.lightGray,
     },
     statusText: {
         fontSize: 12,

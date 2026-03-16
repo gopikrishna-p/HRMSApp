@@ -1,5 +1,5 @@
 // src/services/attendance.service.js
-import ApiService from './api.service';
+import ApiService, { extractFrappeData, isApiSuccess } from './api.service';
 
 const ENDPOINTS = {
     GEO_ATTENDANCE: '/api/method/hrms.api.geo_attendance',
@@ -59,8 +59,9 @@ class AttendanceService {
             
             // Extract attendance data from response
             let attendanceRecords = [];
-            if (response?.success || response?.data?.message?.status === 'success') {
-                attendanceRecords = response.data?.message?.data || response.data?.data || [];
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, []);
+                attendanceRecords = Array.isArray(data) ? data : (data.data || []);
             }
             
             // Get the first (today's) record if exists
@@ -213,8 +214,9 @@ class AttendanceService {
 
     // Extract attendance data from API response
     extractAttendanceData(response) {
-        if (response?.success || response?.data?.message?.status === 'success') {
-            return response.data?.message?.data || response.data?.data || response.data?.message || [];
+        if (isApiSuccess(response)) {
+            const data = extractFrappeData(response, []);
+            return Array.isArray(data) ? data : (data.data || []);
         }
         return [];
     }
@@ -224,24 +226,12 @@ class AttendanceService {
         console.log('Extracting holidays data from:', response);
         
         try {
-            // Handle nested Frappe response structure: response.data.message.data.message
-            let holidays = null;
-            
-            // Try different paths where holidays might be
-            if (response?.data?.message?.data?.message && Array.isArray(response.data.message.data.message)) {
-                holidays = response.data.message.data.message;
-            } else if (response?.data?.message?.data && Array.isArray(response.data.message.data)) {
-                holidays = response.data.message.data;
-            } else if (response?.data?.data?.message && Array.isArray(response.data.data.message)) {
-                holidays = response.data.data.message;
-            } else if (response?.data?.data && Array.isArray(response.data.data)) {
-                holidays = response.data.data;
-            } else if (response?.data?.message && Array.isArray(response.data.message)) {
-                holidays = response.data.message;
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, []);
+                console.log('Extracted holidays array:', data);
+                return Array.isArray(data) ? data : [];
             }
-            
-            console.log('Extracted holidays array:', holidays);
-            return holidays || [];
+            return [];
         } catch (error) {
             console.error('Error extracting holidays:', error);
             return [];
@@ -253,8 +243,8 @@ class AttendanceService {
         console.log('Extracting leaves data from:', response);
         
         let leaves = [];
-        if (response?.success || response?.data?.message?.status === 'success') {
-            leaves = response.data?.message || response.data?.data || [];
+        if (isApiSuccess(response)) {
+            leaves = extractFrappeData(response, []);
         }
         
         console.log('Raw leaves data:', leaves);

@@ -4,11 +4,11 @@ import { View, StyleSheet } from 'react-native';
 import { Text } from 'react-native-paper';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 
-export default function StatCard({ icon, tint, value, label }) {
+export default function StatCard({ icon, tint, value, label, iconSize = 18 }) {
     return (
         <View style={[styles.card, { backgroundColor: `${tint}1A` }]}>
             <View style={[styles.iconWrap, { backgroundColor: `${tint}26` }]}>
-                <Icon name={icon} size={18} color={tint} />
+                <Icon name={icon} size={iconSize} color={tint} />
             </View>
             <Text style={styles.value}>{value}</Text>
             <Text style={styles.label}>{label}</Text>

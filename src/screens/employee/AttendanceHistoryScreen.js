@@ -147,20 +147,20 @@ const AttendanceHistoryScreen = ({ navigation }) => {
     const getStatusColor = (status) => {
         switch (status?.toLowerCase()) {
             case 'present':
-                return '#10B981';
+                return colors.success;
             case 'absent':
-                return '#EF4444';
+                return colors.error;
             case 'work from home':
             case 'wfh':
-                return '#6366F1';
+                return colors.primary;
             case 'on leave':
-                return '#F59E0B';
+                return colors.warning;
             case 'holiday':
-                return '#8B5CF6';
+                return colors.leave;
             case 'half day':
-                return '#EC4899';
+                return colors.secondary;
             default:
-                return '#6B7280';
+                return colors.textSecondary;
         }
     };
 
@@ -204,6 +204,17 @@ const AttendanceHistoryScreen = ({ navigation }) => {
         const statusColor = getStatusColor(item.status);
         const statusIcon = getStatusIcon(item.status);
         
+        // Determine if we should show the work_mode badge
+        // Don't show if status already indicates the work mode (e.g., status = "Work From Home")
+        // Don't show if work_mode is Office (default) or same as status
+        const showWorkModeBadge = item.work_mode && 
+            item.work_mode !== 'Office' && 
+            item.work_mode !== item.status &&
+            item.work_mode !== 'Absent' &&
+            item.work_mode !== 'On Leave' &&
+            item.work_mode !== 'Holiday' &&
+            !(item.status === 'Work From Home' && item.work_mode === 'Work From Home');
+        
         return (
             <Card style={styles.attendanceCard}>
                 <Card.Content>
@@ -219,17 +230,17 @@ const AttendanceHistoryScreen = ({ navigation }) => {
                                         {item.status}
                                     </Text>
                                 </View>
-                                {item.work_mode && item.work_mode !== 'Office' && (
+                                {showWorkModeBadge && (
                                     <View style={[styles.workModeChip, { 
-                                        backgroundColor: item.work_mode === 'Work From Home' ? '#EEF2FF' : '#F3F4F6' 
+                                        backgroundColor: item.work_mode === 'Work From Home' ? colors.primaryLight : colors.lightGray 
                                     }]}>
                                         <Icon 
                                             name={item.work_mode === 'Work From Home' ? 'home' : 'info-circle'} 
                                             size={10} 
-                                            color={item.work_mode === 'Work From Home' ? '#4F46E5' : '#6B7280'} 
+                                            color={item.work_mode === 'Work From Home' ? colors.primary : colors.textSecondary} 
                                         />
                                         <Text style={[styles.workModeText, { 
-                                            color: item.work_mode === 'Work From Home' ? '#4F46E5' : '#6B7280' 
+                                            color: item.work_mode === 'Work From Home' ? colors.primary : colors.textSecondary 
                                         }]}>
                                             {item.work_mode}
                                         </Text>
@@ -464,7 +475,7 @@ const styles = StyleSheet.create({
     dateButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#F3F4F6',
+        backgroundColor: colors.lightGray,
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderRadius: 8,
@@ -473,7 +484,7 @@ const styles = StyleSheet.create({
     dateButtonText: {
         marginLeft: 8,
         fontSize: 14,
-        color: '#374151',
+        color: colors.textPrimary,
         fontWeight: '500',
     },
     quickDateRow: {
@@ -482,7 +493,7 @@ const styles = StyleSheet.create({
         marginBottom: 16,
     },
     quickDateButton: {
-        backgroundColor: '#EEF2FF',
+        backgroundColor: colors.primaryLight,
         paddingHorizontal: 8,
         paddingVertical: 6,
         borderRadius: 6,
@@ -491,7 +502,7 @@ const styles = StyleSheet.create({
     },
     quickDateText: {
         fontSize: 12,
-        color: '#4F46E5',
+        color: colors.primary,
         fontWeight: '600',
     },
     loadButton: {
@@ -501,7 +512,7 @@ const styles = StyleSheet.create({
         margin: 12,
         marginTop: 6,
         marginBottom: 6,
-        backgroundColor: '#FFF',
+        backgroundColor: colors.white,
         borderRadius: 8,
         elevation: 1,
     },
@@ -516,27 +527,27 @@ const styles = StyleSheet.create({
     statNumber: {
         fontSize: 24,
         fontWeight: 'bold',
-        color: '#1F2937',
+        color: colors.textPrimary,
     },
     statLabel: {
         fontSize: 12,
-        color: '#6B7280',
+        color: colors.textSecondary,
         marginTop: 4,
     },
     hoursSection: {
         marginTop: 16,
         padding: 12,
-        backgroundColor: '#F9FAFB',
+        backgroundColor: colors.surfaceSecondary,
         borderRadius: 8,
     },
     hoursText: {
         fontSize: 14,
-        color: '#374151',
+        color: colors.textPrimary,
         fontWeight: '600',
     },
     avgHoursText: {
         fontSize: 12,
-        color: '#6B7280',
+        color: colors.textSecondary,
         marginTop: 4,
     },
     listContainer: {
@@ -547,7 +558,7 @@ const styles = StyleSheet.create({
     listTitle: {
         fontSize: 16,
         fontWeight: 'bold',
-        color: '#1F2937',
+        color: colors.textPrimary,
         marginBottom: 8,
     },
     listContent: {
@@ -555,7 +566,7 @@ const styles = StyleSheet.create({
     },
     attendanceCard: {
         marginBottom: 12,
-        backgroundColor: '#FFF',
+        backgroundColor: colors.white,
         borderRadius: 12,
         elevation: 1,
     },
@@ -570,7 +581,7 @@ const styles = StyleSheet.create({
     dateText: {
         fontSize: 16,
         fontWeight: '600',
-        color: '#1F2937',
+        color: colors.textPrimary,
         flex: 1,
     },
     statusRow: {
@@ -605,17 +616,17 @@ const styles = StyleSheet.create({
     descriptionSection: {
         marginBottom: 12,
         padding: 8,
-        backgroundColor: '#F9FAFB',
+        backgroundColor: colors.surfaceSecondary,
         borderRadius: 8,
     },
     descriptionText: {
         fontSize: 13,
-        color: '#374151',
+        color: colors.textPrimary,
         marginBottom: 4,
     },
     leaveTypeText: {
         fontSize: 12,
-        color: '#6B7280',
+        color: colors.textSecondary,
         fontStyle: 'italic',
     },
     timeSection: {
@@ -623,7 +634,7 @@ const styles = StyleSheet.create({
         justifyContent: 'space-around',
         marginBottom: 12,
         paddingVertical: 12,
-        backgroundColor: '#F9FAFB',
+        backgroundColor: colors.surfaceSecondary,
         borderRadius: 8,
     },
     timeItem: {
@@ -632,14 +643,14 @@ const styles = StyleSheet.create({
     },
     timeLabel: {
         fontSize: 12,
-        color: '#6B7280',
+        color: colors.textSecondary,
         marginTop: 4,
         marginBottom: 2,
     },
     timeValue: {
         fontSize: 14,
         fontWeight: '600',
-        color: '#1F2937',
+        color: colors.textPrimary,
     },
     workingHoursSection: {
         flexDirection: 'row',
@@ -647,21 +658,21 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         paddingTop: 8,
         borderTopWidth: 1,
-        borderTopColor: '#E5E7EB',
+        borderTopColor: colors.border,
     },
     workingHoursText: {
         fontSize: 13,
-        color: '#374151',
+        color: colors.textPrimary,
         marginLeft: 8,
         flex: 1,
     },
     lateChip: {
-        backgroundColor: '#FEF3C7',
-        borderColor: '#F59E0B',
+        backgroundColor: colors.warningLight,
+        borderColor: colors.warning,
     },
     lateChipText: {
         fontSize: 10,
-        color: '#92400E',
+        color: colors.warning,
     },
     emptyContainer: {
         alignItems: 'center',
@@ -671,13 +682,13 @@ const styles = StyleSheet.create({
     emptyTitle: {
         fontSize: 18,
         fontWeight: '600',
-        color: '#374151',
+        color: colors.textPrimary,
         marginTop: 16,
         marginBottom: 8,
     },
     emptySubtitle: {
         fontSize: 14,
-        color: '#6B7280',
+        color: colors.textSecondary,
         textAlign: 'center',
         lineHeight: 20,
     },
@@ -686,7 +697,7 @@ const styles = StyleSheet.create({
     compactDateCard: {
         margin: 12,
         marginBottom: 6,
-        backgroundColor: '#FFF',
+        backgroundColor: colors.white,
         borderRadius: 8,
         elevation: 1,
     },
@@ -697,7 +708,7 @@ const styles = StyleSheet.create({
     compactDateButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#F3F4F6',
+        backgroundColor: colors.lightGray,
         paddingHorizontal: 8,
         paddingVertical: 6,
         borderRadius: 6,
@@ -706,7 +717,7 @@ const styles = StyleSheet.create({
     compactDateButtonText: {
         marginLeft: 6,
         fontSize: 12,
-        color: '#374151',
+        color: colors.textPrimary,
         fontWeight: '500',
     },
     compactLoadButton: {
@@ -721,13 +732,13 @@ const styles = StyleSheet.create({
     summaryTitle: {
         fontSize: 14,
         fontWeight: '600',
-        color: '#1F2937',
+        color: colors.textPrimary,
         marginLeft: 6,
         flex: 1,
     },
     summaryDateRange: {
         fontSize: 10,
-        color: '#6B7280',
+        color: colors.textSecondary,
     },
     compactStatsGrid: {
         flexDirection: 'row',
@@ -740,11 +751,11 @@ const styles = StyleSheet.create({
     compactStatNumber: {
         fontSize: 16,
         fontWeight: 'bold',
-        color: '#1F2937',
+        color: colors.textPrimary,
     },
     compactStatLabel: {
         fontSize: 10,
-        color: '#6B7280',
+        color: colors.textSecondary,
         marginTop: 2,
     },
     workingHoursRow: {

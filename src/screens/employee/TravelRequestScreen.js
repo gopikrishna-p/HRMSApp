@@ -19,7 +19,7 @@ import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
 import Loading from '../../components/common/Loading';
-import apiService from '../../services/api.service';
+import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 
 const TravelRequestScreen = ({ navigation }) => {
     const [loading, setLoading] = useState(false);
@@ -57,12 +57,16 @@ const TravelRequestScreen = ({ navigation }) => {
         arrival_date: new Date(),
         lodging_required: false,
         preferred_area_for_lodging: '',
+        check_in_date: new Date(),
+        check_out_date: new Date(),
         meal_preference: '',
         travel_advance_required: false,
         advance_amount: '',
     }]);
     const [showDeparturePicker, setShowDeparturePicker] = useState({ show: false, index: -1 });
     const [showArrivalPicker, setShowArrivalPicker] = useState({ show: false, index: -1 });
+    const [showCheckInPicker, setShowCheckInPicker] = useState({ show: false, index: -1 });
+    const [showCheckOutPicker, setShowCheckOutPicker] = useState({ show: false, index: -1 });
     
     // Costings states
     const [costings, setCostings] = useState([{
@@ -93,8 +97,8 @@ const TravelRequestScreen = ({ navigation }) => {
         try {
             // Get current employee
             const empResponse = await apiService.getCurrentEmployee();
-            if (empResponse.success && empResponse.data?.message) {
-                setCurrentEmployee(empResponse.data.message);
+            if (isApiSuccess(empResponse)) {
+                setCurrentEmployee(extractFrappeData(empResponse, {}));
             }
 
             // Load purposes, expense types and requests in parallel
@@ -114,8 +118,9 @@ const TravelRequestScreen = ({ navigation }) => {
     const loadPurposes = async () => {
         try {
             const response = await apiService.getPurposeOfTravelList();
-            if (response.success && response.data?.message?.data?.purposes) {
-                setPurposes(response.data.message.data.purposes);
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, { purposes: [] });
+                setPurposes(data.purposes || []);
             }
         } catch (error) {
             console.error('Load purposes error:', error);
@@ -125,8 +130,9 @@ const TravelRequestScreen = ({ navigation }) => {
     const loadExpenseTypes = async () => {
         try {
             const response = await apiService.getExpenseClaimTypes();
-            if (response.success && response.data?.message) {
-                setExpenseTypes(response.data.message);
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, []);
+                setExpenseTypes(Array.isArray(data) ? data : []);
             }
         } catch (error) {
             console.error('Load expense types error:', error);
@@ -144,22 +150,9 @@ const TravelRequestScreen = ({ navigation }) => {
             const response = await apiService.getTravelRequests(filters);
             console.log('[Employee] Travel Requests Response:', response);
 
-            // Try multiple possible response structures
-            let requestsData = null;
-
-            if (response.success && response.data?.message?.data?.requests) {
-                requestsData = response.data.message.data.requests;
-            } else if (response.success && response.data?.message?.requests) {
-                requestsData = response.data.message.requests;
-            } else if (response.success && response.data?.requests) {
-                requestsData = response.data.requests;
-            } else if (response.data?.message?.data) {
-                requestsData = response.data.message.data;
-            } else if (response.data?.message && Array.isArray(response.data.message)) {
-                requestsData = response.data.message;
-            }
-
-            if (requestsData && Array.isArray(requestsData)) {
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, { requests: [] });
+                const requestsData = data.requests || (Array.isArray(data) ? data : []);
                 setRequests(requestsData);
             } else {
                 setRequests([]);
@@ -186,6 +179,8 @@ const TravelRequestScreen = ({ navigation }) => {
             arrival_date: new Date(),
             lodging_required: false,
             preferred_area_for_lodging: '',
+            check_in_date: new Date(),
+            check_out_date: new Date(),
             meal_preference: '',
             travel_advance_required: false,
             advance_amount: '',
@@ -266,6 +261,8 @@ const TravelRequestScreen = ({ navigation }) => {
                 arrival_date: item.arrival_date.toISOString(),
                 lodging_required: item.lodging_required ? 1 : 0,
                 preferred_area_for_lodging: item.preferred_area_for_lodging,
+                check_in_date: item.lodging_required ? item.check_in_date.toISOString().split('T')[0] : null,
+                check_out_date: item.lodging_required ? item.check_out_date.toISOString().split('T')[0] : null,
                 meal_preference: item.meal_preference,
                 travel_advance_required: item.travel_advance_required ? 1 : 0,
                 advance_amount: parseFloat(item.advance_amount) || 0,
@@ -339,6 +336,8 @@ const TravelRequestScreen = ({ navigation }) => {
             arrival_date: new Date(),
             lodging_required: false,
             preferred_area_for_lodging: '',
+            check_in_date: new Date(),
+            check_out_date: new Date(),
             meal_preference: '',
             travel_advance_required: false,
             advance_amount: '',
@@ -503,6 +502,22 @@ const TravelRequestScreen = ({ navigation }) => {
                         </View>
                     </View>
 
+                    {/* Details of Sponsor - shown when sponsored */}
+                    {(formData.travel_funding === 'Fully Sponsored' || formData.travel_funding === 'Partially Sponsored, Require Partial Funding') && (
+                        <View style={styles.inputGroup}>
+                            <Text style={styles.label}>Sponsor Details</Text>
+                            <TextInput
+                                style={styles.textArea}
+                                value={formData.details_of_sponsor}
+                                onChangeText={(text) => setFormData({ ...formData, details_of_sponsor: text })}
+                                placeholder="Enter sponsor name and location"
+                                multiline
+                                numberOfLines={2}
+                                textAlignVertical="top"
+                            />
+                        </View>
+                    )}
+
                     {/* ========== ITINERARY SECTION ========== */}
                     <Text style={styles.sectionTitle}>Travel Itinerary</Text>
                     {itinerary.map((item, index) => (
@@ -642,6 +657,52 @@ const TravelRequestScreen = ({ navigation }) => {
                                         onChangeText={(text) => updateItineraryItem(index, 'preferred_area_for_lodging', text)}
                                         placeholder="Enter preferred area"
                                     />
+                                    
+                                    {/* Check-in and Check-out Dates */}
+                                    <View style={styles.rowInputs}>
+                                        <View style={{ flex: 1, marginRight: 8 }}>
+                                            <Text style={styles.smallLabel}>Check-in Date</Text>
+                                            <TouchableOpacity
+                                                style={styles.dateButton}
+                                                onPress={() => setShowCheckInPicker({ show: true, index })}
+                                            >
+                                                <Icon name="calendar-check" size={18} color={colors.primary} />
+                                                <Text style={styles.dateButtonText}>{item.check_in_date.toLocaleDateString()}</Text>
+                                            </TouchableOpacity>
+                                            {showCheckInPicker.show && showCheckInPicker.index === index && (
+                                                <DateTimePicker
+                                                    value={item.check_in_date}
+                                                    mode="date"
+                                                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                                    onChange={(event, date) => {
+                                                        setShowCheckInPicker({ show: false, index: -1 });
+                                                        if (date) updateItineraryItem(index, 'check_in_date', date);
+                                                    }}
+                                                />
+                                            )}
+                                        </View>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={styles.smallLabel}>Check-out Date</Text>
+                                            <TouchableOpacity
+                                                style={styles.dateButton}
+                                                onPress={() => setShowCheckOutPicker({ show: true, index })}
+                                            >
+                                                <Icon name="calendar-remove" size={18} color={colors.primary} />
+                                                <Text style={styles.dateButtonText}>{item.check_out_date.toLocaleDateString()}</Text>
+                                            </TouchableOpacity>
+                                            {showCheckOutPicker.show && showCheckOutPicker.index === index && (
+                                                <DateTimePicker
+                                                    value={item.check_out_date}
+                                                    mode="date"
+                                                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                                    onChange={(event, date) => {
+                                                        setShowCheckOutPicker({ show: false, index: -1 });
+                                                        if (date) updateItineraryItem(index, 'check_out_date', date);
+                                                    }}
+                                                />
+                                            )}
+                                        </View>
+                                    </View>
                                 </>
                             )}
 

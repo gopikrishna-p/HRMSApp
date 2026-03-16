@@ -15,7 +15,7 @@ import {
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { colors } from '../../theme/colors';
-import ApiService from '../../services/api.service';
+import ApiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import showToast from '../../utils/Toast';
 
 const OnSiteRequestScreen = ({ navigation }) => {
@@ -53,22 +53,14 @@ const OnSiteRequestScreen = ({ navigation }) => {
             const response = await ApiService.getOnSiteRequests();
             console.log('📋 Requests response:', response);
             
-            let requestsData = [];
+            // Use helper function to extract data
+            const requestsData = extractFrappeData(response, []);
             
-            if (response.success) {
-                if (response.data?.message && Array.isArray(response.data.message)) {
-                    requestsData = response.data.message;
-                } else if (Array.isArray(response.data)) {
-                    requestsData = response.data;
-                } else {
-                    console.warn('⚠️ Unexpected response format:', response);
-                }
-            } else {
-                console.error('❌ Failed to load requests:', response.message);
-            }
+            // Ensure we have an array
+            const requests = Array.isArray(requestsData) ? requestsData : [];
             
-            console.log('✅ Loaded requests:', requestsData.length);
-            setMyRequests(requestsData);
+            console.log('✅ Loaded requests:', requests.length);
+            setMyRequests(requests);
         } catch (error) {
             console.error('❌ Error loading On Site requests:', error);
             showToast({
@@ -344,12 +336,12 @@ const OnSiteRequestScreen = ({ navigation }) => {
     const getStatusColor = (status) => {
         switch (status?.toLowerCase()) {
             case 'approved':
-                return '#10B981';
+                return colors.success;
             case 'rejected':
-                return '#EF4444';
+                return colors.error;
             case 'pending':
             default:
-                return '#F59E0B';
+                return colors.warning;
         }
     };
 
@@ -419,9 +411,9 @@ const OnSiteRequestScreen = ({ navigation }) => {
                                 disabled={isDeleting}
                             >
                                 {isDeleting ? (
-                                    <ActivityIndicator size="small" color="#EF4444" />
+                                    <ActivityIndicator size="small" color={colors.error} />
                                 ) : (
-                                    <Icon name="trash" size={16} color="#EF4444" />
+                                    <Icon name="trash" size={16} color={colors.error} />
                                 )}
                             </TouchableOpacity>
                         )}
@@ -430,7 +422,7 @@ const OnSiteRequestScreen = ({ navigation }) => {
 
                 {item.client_location && (
                     <View style={styles.historyLocation}>
-                        <Icon name="map-marker-alt" size={12} color="#2196F3" />
+                        <Icon name="map-marker-alt" size={12} color={colors.onsite} />
                         <Text style={styles.historyLocationText} numberOfLines={1}>
                             {item.client_location}
                         </Text>
@@ -468,13 +460,13 @@ const OnSiteRequestScreen = ({ navigation }) => {
         >
             <View style={styles.card}>
                 <View style={styles.cardHeader}>
-                    <Icon name="map-marker-alt" size={20} color="#2196F3" />
+                    <Icon name="map-marker-alt" size={20} color={colors.onsite} />
                     <Text style={styles.cardTitle}>New On Site Request</Text>
                 </View>
 
                 {/* Duration Summary */}
                 <View style={styles.durationSummary}>
-                    <Icon name="clock" size={16} color="#2196F3" />
+                    <Icon name="clock" size={16} color={colors.onsite} />
                     <Text style={styles.durationText}>
                         {calculateDuration()} day{calculateDuration() > 1 ? 's' : ''}
                     </Text>
@@ -595,7 +587,7 @@ const OnSiteRequestScreen = ({ navigation }) => {
 
             {/* Info Box */}
             <View style={styles.infoBox}>
-                <Icon name="info-circle" size={16} color="#2196F3" />
+                <Icon name="info-circle" size={16} color={colors.info} />
                 <Text style={styles.infoText}>
                     Your On Site request will be sent to admin for approval. Once approved, you'll be able to mark attendance as On Site.
                 </Text>
@@ -630,7 +622,7 @@ const OnSiteRequestScreen = ({ navigation }) => {
 
                 {loading ? (
                     <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color="#2196F3" />
+                        <ActivityIndicator size="large" color={colors.onsite} />
                         <Text style={styles.loadingText}>Loading requests...</Text>
                     </View>
                 ) : filteredRequests.length === 0 ? (
@@ -656,7 +648,7 @@ const OnSiteRequestScreen = ({ navigation }) => {
                             <RefreshControl
                                 refreshing={refreshing}
                                 onRefresh={() => loadMyRequests(true)}
-                                colors={['#2196F3']}
+                                colors={[colors.onsite]}
                             />
                         }
                         showsVerticalScrollIndicator={false}
@@ -669,7 +661,7 @@ const OnSiteRequestScreen = ({ navigation }) => {
     if (loading && myRequests.length === 0) {
         return (
             <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color="#2196F3" />
+                <ActivityIndicator size="large" color={colors.onsite} />
                 <Text style={styles.loadingText}>Loading...</Text>
             </View>
         );
@@ -686,7 +678,7 @@ const OnSiteRequestScreen = ({ navigation }) => {
                     <Icon 
                         name="plus-circle" 
                         size={16} 
-                        color={!showHistory ? '#2196F3' : colors.textSecondary} 
+                        color={!showHistory ? colors.onsite : colors.textSecondary} 
                     />
                     <Text style={[styles.tabText, !showHistory && styles.tabTextActive]}>
                         New Request
@@ -699,7 +691,7 @@ const OnSiteRequestScreen = ({ navigation }) => {
                     <Icon 
                         name="history" 
                         size={16} 
-                        color={showHistory ? '#2196F3' : colors.textSecondary} 
+                        color={showHistory ? colors.onsite : colors.textSecondary} 
                     />
                     <Text style={[styles.tabText, showHistory && styles.tabTextActive]}>
                         My Requests
@@ -758,7 +750,7 @@ const styles = StyleSheet.create({
         gap: 8,
     },
     tabActive: {
-        borderBottomColor: '#2196F3',
+        borderBottomColor: colors.onsite,
     },
     tabText: {
         fontSize: 14,
@@ -766,11 +758,11 @@ const styles = StyleSheet.create({
         color: colors.textSecondary,
     },
     tabTextActive: {
-        color: '#2196F3',
+        color: colors.onsite,
         fontWeight: '600',
     },
     badge: {
-        backgroundColor: '#F59E0B',
+        backgroundColor: colors.warning,
         borderRadius: 10,
         paddingHorizontal: 6,
         paddingVertical: 2,
@@ -810,7 +802,7 @@ const styles = StyleSheet.create({
     durationSummary: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: '#2196F3' + '15',
+        backgroundColor: colors.onsiteLight,
         padding: 10,
         borderRadius: 8,
         marginBottom: 16,
@@ -819,7 +811,7 @@ const styles = StyleSheet.create({
     durationText: {
         fontSize: 14,
         fontWeight: '600',
-        color: '#2196F3',
+        color: colors.onsite,
     },
     inputGroup: {
         marginBottom: 16,
@@ -831,7 +823,7 @@ const styles = StyleSheet.create({
         marginBottom: 8,
     },
     required: {
-        color: '#EF4444',
+        color: colors.error,
     },
     optional: {
         color: colors.textSecondary,
@@ -882,7 +874,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#2196F3',
+        backgroundColor: colors.onsite,
         paddingVertical: 14,
         borderRadius: 8,
         marginTop: 8,
@@ -899,7 +891,7 @@ const styles = StyleSheet.create({
     infoBox: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        backgroundColor: '#2196F3' + '10',
+        backgroundColor: colors.infoLight,
         padding: 14,
         borderRadius: 8,
         marginTop: 16,

@@ -16,7 +16,7 @@ import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
 import Loading from '../../components/common/Loading';
-import apiService from '../../services/api.service';
+import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 
 const ExpenseClaimScreen = ({ navigation }) => {
     // State management
@@ -57,16 +57,15 @@ const ExpenseClaimScreen = ({ navigation }) => {
         try {
             // Get employee info
             const empResponse = await apiService.getCurrentEmployee();
-            if (empResponse.success && empResponse.data?.message) {
-                const empId = empResponse.data.message.name;
-                setEmployeeId(empId);
+            const empData = extractFrappeData(empResponse, null);
+            if (empData && empData.name) {
+                setEmployeeId(empData.name);
             }
 
             // Get expense types
             const typesResponse = await apiService.getExpenseClaimTypes();
-            if (typesResponse.success && typesResponse.data?.message) {
-                setExpenseTypes(typesResponse.data.message);
-            }
+            const types = extractFrappeData(typesResponse, []);
+            setExpenseTypes(Array.isArray(types) ? types : []);
         } catch (error) {
             console.error('Error loading initial data:', error);
             Alert.alert('Error', 'Failed to load expense types');
@@ -87,12 +86,10 @@ const ExpenseClaimScreen = ({ navigation }) => {
             };
 
             const response = await apiService.getEmployeeExpenseClaims(filters);
-            if (response.success && response.data?.message) {
-                const data = response.data.message;
-                setClaims(data.claims || []);
-                setStatusSummary(data.status_summary || {});
-                setTotalClaimed(data.total_claimed_amount || 0);
-            }
+            const data = extractFrappeData(response, {});
+            setClaims(data.claims || []);
+            setStatusSummary(data.status_summary || {});
+            setTotalClaimed(data.total_claimed_amount || 0);
         } catch (error) {
             console.error('Error loading claims:', error);
             Alert.alert('Error', 'Failed to load expense claims');

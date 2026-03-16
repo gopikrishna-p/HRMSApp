@@ -5,8 +5,10 @@ import { Text, Switch, Card, useTheme, ProgressBar, IconButton } from 'react-nat
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { useAuth } from '../../context/AuthContext';
 import AttendanceService from '../../services/attendance.service';
+import { extractFrappeData, isApiSuccess } from '../../services/api.service';
 import { ensureLocationPermission, getCurrentPosition } from '../../utils/location';
 import Button from '../../components/common/Button';
+import { colors } from '../../theme/colors';
 
 // Haversine (meters)
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
@@ -48,10 +50,11 @@ const CheckInOutScreen = () => {
 
     const fetchWFHInfo = useCallback(async () => {
         const res = await AttendanceService.getUserWFHInfo();
-        if (res.success && res.data?.message) {
-            setWfhEligible(!!res.data.message.wfh_eligible);
+        if (isApiSuccess(res)) {
+            const data = extractFrappeData(res, {});
+            setWfhEligible(!!data.wfh_eligible);
             // Also set onsite eligibility - default to true if not specified
-            setOnsiteEligible(res.data.message.on_site_eligible !== false);
+            setOnsiteEligible(data.on_site_eligible !== false);
         }
     }, []);
 
@@ -69,8 +72,8 @@ const CheckInOutScreen = () => {
     const fetchOfficeLocation = useCallback(async () => {
         if (!employeeId) return;
         const res = await AttendanceService.getOfficeLocation(employeeId);
-        if (res.success && res.data?.message) {
-            setOfficeLocation(res.data.message); // {latitude, longitude, radius}
+        if (isApiSuccess(res)) {
+            setOfficeLocation(extractFrappeData(res, {})); // {latitude, longitude, radius}
         }
     }, [employeeId]);
 
@@ -230,7 +233,7 @@ const CheckInOutScreen = () => {
             case 'outside': return custom.palette.danger;
             case 'checking': return custom.palette.warning;
             case 'wfh': return custom.palette.primary;
-            case 'onsite': return custom.palette.info || '#2196F3';
+            case 'onsite': return colors.onsite;
             default: return custom.palette.textSecondary;
         }
     })();
@@ -298,13 +301,13 @@ const CheckInOutScreen = () => {
                                 style={[
                                     styles.workModeOption, 
                                     workMode === 'Onsite' && styles.workModeSelected,
-                                    { borderColor: workMode === 'Onsite' ? (custom.palette.info || '#2196F3') : custom.palette.border },
+                                    { borderColor: workMode === 'Onsite' ? colors.onsite : custom.palette.border },
                                     !canDoOnsite && styles.workModeDisabled
                                 ]}
                                 onTouchEnd={() => canDoOnsite && setWorkMode('Onsite')}
                             >
-                                <Icon name="map-marker-alt" size={20} color={workMode === 'Onsite' ? (custom.palette.info || '#2196F3') : custom.palette.textSecondary} />
-                                <Text style={[styles.workModeText, workMode === 'Onsite' && { color: custom.palette.info || '#2196F3' }]}>Onsite</Text>
+                                <Icon name="map-marker-alt" size={20} color={workMode === 'Onsite' ? colors.onsite : custom.palette.textSecondary} />
+                                <Text style={[styles.workModeText, workMode === 'Onsite' && { color: colors.onsite }]}>Onsite</Text>
                             </View>
                         </View>
                         {!canDoWFH && workMode === 'WFH' && (
@@ -385,13 +388,13 @@ const CheckInOutScreen = () => {
                                 )}
                                 
                                 {todayAttendance.workType && (
-                                    <View style={[styles.workTypeBadge, { backgroundColor: `${(todayAttendance.workType === 'Onsite' || todayAttendance.workType === 'On Site') ? (custom.palette.info || '#2196F3') : custom.palette.primary}20` }]}>
+                                    <View style={[styles.workTypeBadge, { backgroundColor: `${(todayAttendance.workType === 'Onsite' || todayAttendance.workType === 'On Site') ? colors.onsite : custom.palette.primary}20` }]}>
                                         <Icon 
                                             name={todayAttendance.workType === 'WFH' ? 'home' : (todayAttendance.workType === 'Onsite' || todayAttendance.workType === 'On Site') ? 'map-marker-alt' : 'building'} 
                                             size={14} 
-                                            color={(todayAttendance.workType === 'Onsite' || todayAttendance.workType === 'On Site') ? (custom.palette.info || '#2196F3') : custom.palette.primary} 
+                                            color={(todayAttendance.workType === 'Onsite' || todayAttendance.workType === 'On Site') ? colors.onsite : custom.palette.primary} 
                                         />
-                                        <Text style={[styles.workTypeText, { color: (todayAttendance.workType === 'Onsite' || todayAttendance.workType === 'On Site') ? (custom.palette.info || '#2196F3') : custom.palette.primary }]}>
+                                        <Text style={[styles.workTypeText, { color: (todayAttendance.workType === 'Onsite' || todayAttendance.workType === 'On Site') ? colors.onsite : custom.palette.primary }]}>
                                             {todayAttendance.workType === 'WFH' ? 'Work From Home' : (todayAttendance.workType === 'Onsite' || todayAttendance.workType === 'On Site') ? 'Onsite' : 'Office'}
                                         </Text>
                                     </View>
@@ -511,18 +514,18 @@ const styles = StyleSheet.create({
     actionButton: {
         marginBottom: 12,
     },
-    statusContainer: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E0E0E0' },
+    statusContainer: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: colors.border },
     statusTitle: { fontWeight: '800', fontSize: 16 },
-    secondaryText: { marginTop: 4, color: '#6B7280', fontSize: 13 },
+    secondaryText: { marginTop: 4, color: colors.textSecondary, fontSize: 13 },
     errorText: { marginTop: 4, fontSize: 12 },
-    infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#E0E0E0' },
-    infoLabel: { fontSize: 13, color: '#757575', fontWeight: '500' },
-    infoValue: { fontSize: 13, color: '#111827', fontWeight: '700' },
-    bannerInfo: { marginTop: 12, padding: 10, backgroundColor: '#E3F2FD', borderRadius: 10 },
-    bannerInfoText: { color: '#1565C0', fontSize: 12 },
-    bannerWarn: { marginTop: 12, padding: 10, backgroundColor: '#FFF3CD', borderRadius: 10 },
-    bannerWarnText: { color: '#856404', fontSize: 13 },
-    bannerError: { marginTop: 12, padding: 12, backgroundColor: '#FFEBEE', borderRadius: 10, borderLeftWidth: 4 },
+    infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: colors.border },
+    infoLabel: { fontSize: 13, color: colors.textSecondary, fontWeight: '500' },
+    infoValue: { fontSize: 13, color: colors.textPrimary, fontWeight: '700' },
+    bannerInfo: { marginTop: 12, padding: 10, backgroundColor: colors.infoLight, borderRadius: 10 },
+    bannerInfoText: { color: colors.info, fontSize: 12 },
+    bannerWarn: { marginTop: 12, padding: 10, backgroundColor: colors.warningLight, borderRadius: 10 },
+    bannerWarnText: { color: colors.warning, fontSize: 13 },
+    bannerError: { marginTop: 12, padding: 12, backgroundColor: colors.errorLight, borderRadius: 10, borderLeftWidth: 4 },
     errorTitle: { fontWeight: '700', fontSize: 13 },
     attendanceInfoContainer: { 
         gap: 12 
@@ -533,7 +536,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingVertical: 8,
         borderBottomWidth: 0.5,
-        borderBottomColor: '#E0E0E0'
+        borderBottomColor: colors.border
     },
     timeIconContainer: { 
         flexDirection: 'row', 
@@ -543,12 +546,12 @@ const styles = StyleSheet.create({
     timeLabel: { 
         fontSize: 14, 
         fontWeight: '600', 
-        color: '#4B5563' 
+        color: colors.textSecondary 
     },
     timeValue: { 
         fontSize: 15, 
         fontWeight: '700', 
-        color: '#111827' 
+        color: colors.textPrimary 
     },
     workTypeBadge: { 
         flexDirection: 'row', 
@@ -575,10 +578,10 @@ const styles = StyleSheet.create({
         paddingHorizontal: 8,
         borderRadius: 12,
         borderWidth: 2,
-        backgroundColor: '#FAFAFA',
+        backgroundColor: colors.background,
     },
     workModeSelected: {
-        backgroundColor: '#E3F2FD',
+        backgroundColor: colors.infoLight,
     },
     workModeDisabled: {
         opacity: 0.5,
@@ -587,7 +590,7 @@ const styles = StyleSheet.create({
         marginTop: 6,
         fontSize: 13,
         fontWeight: '600',
-        color: '#6B7280',
+        color: colors.textSecondary,
     },
 });
 

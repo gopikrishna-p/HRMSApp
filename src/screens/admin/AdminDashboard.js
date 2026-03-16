@@ -250,7 +250,7 @@ const AdminDashboard = ({ navigation }) => {
         { id: 2, icon: 'user-check', tint: custom.palette.success, value: String(stats.presentToday), label: 'Present Today' },
         { id: 3, icon: 'user-times', tint: custom.palette.danger, value: String(stats.absentToday), label: 'Absent' },
         { id: 4, icon: 'home', tint: custom.palette.warning, value: String(stats.wfhToday), label: 'WFH' },
-        { id: 5, icon: 'map-marker-alt', tint: '#2196F3', value: String(stats.onsiteToday), label: 'On Site' },
+        { id: 5, icon: 'map-marker-alt', tint: '#2196F3', value: String(stats.onsiteToday), label: 'On Site', iconSize: 20 },
         { id: 6, icon: 'umbrella-beach', tint: '#8B5CF6', value: String(stats.onLeave), label: 'On Leave' },
         { id: 7, icon: 'clock', tint: '#F59E0B', value: String(stats.lateArrivals), label: 'Late Arrivals' },
         { id: 8, icon: 'chart-pie', tint: '#EC4899', value: `${stats.attendanceRate}%`, label: 'Attendance Rate' },
@@ -323,7 +323,7 @@ const AdminDashboard = ({ navigation }) => {
                                     padding: 8,
                                     marginBottom: 6
                                 }}>
-                                    <Icon name={s.icon} size={16} color="#FFF" />
+                                    <Icon name={s.icon} size={s.iconSize || 16} color="#FFF" />
                                 </View>
                                 <Text style={{
                                     fontSize: 18,
@@ -410,6 +410,17 @@ const AdminDashboard = ({ navigation }) => {
                         tint={custom.palette.primary} onPress={() => navigation.navigate('ManualCheckInOut')} />
                     <ListItem title="Today's Attendance" subtitle="Live attendance view" leftIcon="calendar-day"
                         tint={custom.palette.primary} onPress={() => navigation.navigate('TodayAttendance')} />
+                    <ListItem title="All Attendance Analytics List" subtitle="View all employee records" leftIcon="list-alt"
+                        tint={custom.palette.primary} onPress={() => navigation.navigate('AllAttendanceAnalyticsScreen')} />
+                </Section>
+
+                <Section title="Analytics & Reports" icon="chart-line" tint={custom.palette.warning}>
+                    <ListItem title="Attendance Analytics" subtitle="Trends, late/early, absences" leftIcon="chart-bar"
+                        tint={custom.palette.warning} onPress={() => navigation.navigate('AttendanceAnalytics')} />
+                    <ListItem title="Today Employee Analytics" subtitle="Real-time counts & heatmap" leftIcon="chart-pie"
+                        tint={custom.palette.warning} onPress={() => navigation.navigate('TodayEmployeeAnalytics')} />
+                    <ListItem title="Reports & Analytics" subtitle="Comprehensive reports" leftIcon="file-alt"
+                        tint={custom.palette.warning} onPress={() => navigation.navigate('Reports')} />
                 </Section>
 
                 <Section title="WFH Policy & Settings" icon="home" tint={custom.palette.success}>
@@ -443,6 +454,11 @@ const AdminDashboard = ({ navigation }) => {
                 <Section title="Employee Management" icon="users-cog" tint="#EC4899">
                     <ListItem title="Employee Management" subtitle="Manage employee records" leftIcon="users"
                         tint="#EC4899" onPress={() => navigation.navigate('EmployeeManagement')} />
+                </Section>
+
+                <Section title="Payroll & Salary" icon="money-check-alt" tint="#8E44AD">
+                    <ListItem title="Salary Structures" subtitle="View all employee salary structures" leftIcon="file-invoice-dollar"
+                        tint="#8E44AD" onPress={() => navigation.navigate('SalaryStructureAdmin')} />
                 </Section>
 
                 <Section title="Projects Oversight" icon="project-diagram" tint="#14B8A6">
