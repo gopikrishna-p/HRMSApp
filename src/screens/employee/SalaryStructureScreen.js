@@ -147,15 +147,12 @@ const SalaryStructureScreen = ({ navigation }) => {
                     salaryData.earnings.map((earning, index) => (
                         <View key={index} style={styles.componentRow}>
                             <View style={styles.componentLeft}>
-                                <Text style={styles.componentName}>{earning.salary_component}</Text>
-                                {earning.abbr && (
-                                    <Text style={styles.componentAbbr}>({earning.abbr})</Text>
-                                )}
-                                {earning.formula && earning.amount_based_on_formula ? (
-                                    <Text style={styles.formulaText}>
-                                        Formula: {earning.formula}
-                                    </Text>
-                                ) : null}
+                                <View style={styles.componentNameRow}>
+                                    <Text style={styles.componentName}>{earning.salary_component}</Text>
+                                    {earning.abbr && (
+                                        <Text style={styles.componentAbbr}>({earning.abbr})</Text>
+                                    )}
+                                </View>
                             </View>
                             <Text style={[styles.componentAmount, styles.earningAmount]}>
                                 {formatCurrency(earning.calculated_amount || earning.amount, salaryData?.currency)}
@@ -183,15 +180,12 @@ const SalaryStructureScreen = ({ navigation }) => {
                     salaryData.deductions.map((deduction, index) => (
                         <View key={index} style={styles.componentRow}>
                             <View style={styles.componentLeft}>
-                                <Text style={styles.componentName}>{deduction.salary_component}</Text>
-                                {deduction.abbr && (
-                                    <Text style={styles.componentAbbr}>({deduction.abbr})</Text>
-                                )}
-                                {deduction.formula && deduction.amount_based_on_formula ? (
-                                    <Text style={styles.formulaText}>
-                                        Formula: {deduction.formula}
-                                    </Text>
-                                ) : null}
+                                <View style={styles.componentNameRow}>
+                                    <Text style={styles.componentName}>{deduction.salary_component}</Text>
+                                    {deduction.abbr && (
+                                        <Text style={styles.componentAbbr}>({deduction.abbr})</Text>
+                                    )}
+                                </View>
                                 {deduction.calculation_note ? (
                                     <Text style={styles.calculationNote}>
                                         {deduction.calculation_note}
@@ -414,9 +408,13 @@ const styles = StyleSheet.create({
         borderBottomColor: colors.border + '30',
     },
     componentLeft: {
+        flex: 1,
+        marginRight: 12,
+    },
+    componentNameRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        flex: 1,
+        flexWrap: 'wrap',
     },
     componentName: {
         fontSize: 14,

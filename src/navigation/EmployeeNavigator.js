@@ -19,6 +19,8 @@ import MyLogsScreen from '../screens/employee/MyLogsScreen';
 
 import SalaryStructureScreen from '../screens/employee/SalaryStructureScreen';
 import PayslipScreen from '../screens/employee/PayslipScreen';
+import MySalaryTrackerScreen from '../screens/employee/MySalaryTrackerScreen';
+import SalaryTrackerDetailScreen from '../screens/employee/SalaryTrackerDetailScreen';
 import NotificationsScreen from '../screens/employee/NotificationsScreen';
 import ProfileScreen from '../screens/employee/ProfileScreen';
 import EmployeeDashboard from '../screens/employee/EmployeeDashboard';
@@ -63,6 +65,8 @@ const EmployeeNavigator = () => {
 
             <Stack.Screen name="SalaryStructure" component={SalaryStructureScreen} options={{ title: 'Salary Structure' }} />
             <Stack.Screen name="Payslip" component={PayslipScreen} options={{ title: 'Payslips' }} />
+            <Stack.Screen name="MySalaryTracker" component={MySalaryTrackerScreen} options={{ title: 'My Salary Tracker' }} />
+            <Stack.Screen name="SalaryTrackerDetail" component={SalaryTrackerDetailScreen} options={{ title: 'Salary Detail' }} />
 
             <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: 'Notifications' }} />
             <Stack.Screen name="Profile" component={ProfileScreen} options={{ title: 'My Profile' }} />

@@ -553,8 +553,14 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
 
         const secondaryStats = [
             {
+                label: 'On Leave',
+                value: summaryStats.on_leave || 0,
+                icon: 'calendar-times',
+                color: '#F59E0B'
+            },
+            {
                 label: 'Holiday',
-                value: summaryStats.holiday_days || 0,
+                value: summaryStats.holiday_days || summaryStats.holidays || 0,
                 icon: 'umbrella-beach',
                 color: '#8B5CF6'
             },

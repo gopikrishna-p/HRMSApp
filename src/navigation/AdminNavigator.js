@@ -24,6 +24,8 @@ import ExpenseClaimApprovalScreen from '../screens/admin/ExpenseClaimApprovalScr
 import TravelRequestApproval from '../screens/admin/TravelRequestApproval';
 import CreateNotificationScreen from '../screens/admin/CreateNotificationScreen';
 import SalaryStructureAdminScreen from '../screens/admin/SalaryStructureAdminScreen';
+import AdminSalaryTrackerScreen from '../screens/admin/AdminSalaryTrackerScreen';
+import AdminSalaryTrackerDetailScreen from '../screens/admin/AdminSalaryTrackerDetailScreen';
 
 // Import Employee Screen for Admin Self Leave / Self Expense / Self Travel
 import LeaveApplicationScreen from '../screens/employee/LeaveApplicationScreen';
@@ -87,6 +89,8 @@ const AdminNavigator = () => {
 
             <Stack.Screen name="AdminNotifications" component={AdminNotifications} options={{ title: 'Notifications' }} />
             <Stack.Screen name="SalaryStructureAdmin" component={SalaryStructureAdminScreen} options={{ title: 'Salary Structures' }} />
+            <Stack.Screen name="AdminSalaryTracker" component={AdminSalaryTrackerScreen} options={{ title: 'Salary Tracker' }} />
+            <Stack.Screen name="AdminSalaryTrackerDetail" component={AdminSalaryTrackerDetailScreen} options={{ title: 'Salary Detail' }} />
         </Stack.Navigator>
     );
 };

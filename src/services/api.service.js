@@ -1660,6 +1660,71 @@ class ApiService {
     // END SALARY STRUCTURE APIs
     // ============================================================================
 
+    // ============================================================================
+    // SALARY TRACKER APIs
+    // ============================================================================
+
+    /** Admin: Create salary trackers for all employees for a month */
+    addMonthlySalaries({ month, year, department }) {
+        return this.post(m('add_monthly_salaries'), { month, year, department });
+    }
+
+    /** Employee: Request a pending salary record for admin review */
+    requestPendingSalary({ employee_id, month, year, remarks, manual_amount }) {
+        return this.post(m('request_pending_salary'), { employee_id, month, year, remarks, manual_amount });
+    }
+
+    /** Admin: Approve/reject employee-submitted salary tracker */
+    approveSalaryTracker({ tracker_id, action, remarks }) {
+        return this.post(m('approve_salary_tracker'), { tracker_id, action, remarks });
+    }
+
+    /** Admin: Record a payment chunk */
+    recordSalaryPayment({ tracker_id, amount, payment_date, payment_mode, reference, remarks }) {
+        return this.post(m('record_salary_payment'), {
+            tracker_id, amount, payment_date, payment_mode, reference, remarks,
+        });
+    }
+
+    /** Admin: Delete a payment entry */
+    deleteSalaryPayment({ tracker_id, row_idx }) {
+        return this.post(m('delete_salary_payment'), { tracker_id, row_idx });
+    }
+
+    /** Get salary tracker list (employee or admin) */
+    getSalaryTrackerList(filters = {}) {
+        return this.post(m('get_salary_tracker_list'), filters);
+    }
+
+    /** Get single tracker with payment history */
+    getSalaryTrackerDetail({ tracker_id }) {
+        return this.post(m('get_salary_tracker_detail'), { tracker_id });
+    }
+
+    /** Get employee salary overview (totals) */
+    getEmployeeSalaryOverview({ employee_id }) {
+        return this.post(m('get_employee_salary_overview'), { employee_id });
+    }
+
+    /** Admin: Get pending summary across all employees */
+    getPendingSalarySummary() {
+        return this.get(m('get_pending_salary_summary'));
+    }
+
+    /** Admin: Get trackers pending review */
+    getPendingReviewTrackers() {
+        return this.get(m('get_pending_review_trackers'));
+    }
+
+    /** Admin: Recalculate salary for a tracker */
+    recalculateSalaryTracker({ tracker_id }) {
+        return this.post(m('recalculate_salary_tracker'), { tracker_id });
+    }
+
+    // ============================================================================
+    // END SALARY TRACKER APIs
+    // ============================================================================
+
 
 }
 

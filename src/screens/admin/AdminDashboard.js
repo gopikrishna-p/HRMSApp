@@ -459,6 +459,8 @@ const AdminDashboard = ({ navigation }) => {
                 <Section title="Payroll & Salary" icon="money-check-alt" tint="#8E44AD">
                     <ListItem title="Salary Structures" subtitle="View all employee salary structures" leftIcon="file-invoice-dollar"
                         tint="#8E44AD" onPress={() => navigation.navigate('SalaryStructureAdmin')} />
+                    <ListItem title="Salary Tracker" subtitle="Track pending salaries & payments" leftIcon="search-dollar"
+                        tint="#8E44AD" onPress={() => navigation.navigate('AdminSalaryTracker')} />
                 </Section>
 
                 <Section title="Projects Oversight" icon="project-diagram" tint="#14B8A6">

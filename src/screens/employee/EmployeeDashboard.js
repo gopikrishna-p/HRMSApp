@@ -529,6 +529,8 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                             tint={custom.palette.danger} onPress={() => navigation.navigate('SalaryStructure')} />
                         <ListItem title="Payslips" subtitle="Download payslips" leftIcon="file-invoice-dollar"
                             tint={custom.palette.danger} onPress={() => navigation.navigate('Payslip')} />
+                        <ListItem title="Salary Tracker" subtitle="Track your pending salaries" leftIcon="search-dollar"
+                            tint={custom.palette.danger} onPress={() => navigation.navigate('MySalaryTracker')} />
                     </Section>
 
                     <Section title="Other" icon="ellipsis-h" tint={colors.textSecondary}>
