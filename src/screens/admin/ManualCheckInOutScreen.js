@@ -24,6 +24,7 @@ import {
 } from 'react-native-paper';
 
 import ApiService from '../../services/api.service';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { colors } from '../../theme/colors';
 
 const fmt = (d) =>

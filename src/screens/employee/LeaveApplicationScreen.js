@@ -201,10 +201,13 @@ const LeaveApplicationScreen = ({ navigation }) => {
             const response = await apiService.submitLeave(leaveData);
 
             if (response.success && response.data?.message) {
-                const result = response.data.message;
+                const rawResult = response.data.message;
+                const result = rawResult?.data?.message || rawResult;
+                const days = result.total_leave_days ?? 'N/A';
+                const balance = result.leave_balance ?? 'N/A';
                 Alert.alert(
                     'Success',
-                    `Leave submitted successfully!\n${result.total_leave_days} day(s) requested.\nRemaining balance: ${result.leave_balance}`,
+                    `Leave submitted successfully!\n${days} day(s) requested.\nRemaining balance: ${balance}`,
                     [
                         {
                             text: 'OK',

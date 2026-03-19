@@ -937,7 +937,8 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
                     attendance.map((item, index) => (
                         <AttendanceList 
                             key={item.name || item.employee || index.toString()} 
-                            attendance={[item]} 
+                            attendance={[item]}
+                            renderMode="plain"
                         />
                     ))
                 )}

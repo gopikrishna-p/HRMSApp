@@ -177,6 +177,8 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                 await fetchPendingLeaves();
             } else if (activeTab === 'history') {
                 await fetchHistoryLeaves();
+            } else if (activeTab === 'statistics') {
+                await fetchStatistics();
             }
         } catch (error) {
             console.error('Error refreshing:', error);
@@ -185,11 +187,28 @@ const LeaveApprovalsScreen = ({ navigation }) => {
         }
     }, [activeTab, selectedDepartment, selectedEmployee, historyStatusFilter]);
 
+    const fetchStatistics = async () => {
+        try {
+            const response = await apiService.getLeaveStatistics(selectedDepartment || null);
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, null);
+                setStatistics(data);
+            } else {
+                setStatistics(null);
+            }
+        } catch (error) {
+            console.error('Error fetching statistics:', error);
+            setStatistics(null);
+        }
+    };
+
     useEffect(() => {
         if (activeTab === 'pending') {
             fetchPendingLeaves();
         } else if (activeTab === 'history') {
             fetchHistoryLeaves();
+        } else if (activeTab === 'statistics') {
+            fetchStatistics();
         }
     }, [activeTab, selectedDepartment, selectedEmployee, historyStatusFilter]);
 

@@ -7,7 +7,8 @@ const AttendanceList = ({
     ListHeaderComponent, 
     ListFooterComponent, 
     ListEmptyComponent,
-    refreshControl 
+    refreshControl,
+    renderMode 
 }) => {
 
     const formatTime = (timeValue) => {
@@ -163,6 +164,7 @@ const AttendanceList = ({
         const isCurrentDay = isToday(item.attendance_date);
         const formattedHours = formatWorkingHours(workingHours);
         const hoursColor = getWorkingHoursColor(workingHours);
+        const isSyntheticStatus = ['absent', 'on leave', 'holiday'].includes(item.status?.toLowerCase());
 
         return (
             <View style={styles.item}>
@@ -199,43 +201,47 @@ const AttendanceList = ({
                         )}
                     </View>
 
-                    <View style={styles.timeRow}>
-                        <View style={styles.timeItem}>
-                            <Icon name="sign-in-alt" size={14} color="#10B981" />
-                            <Text style={styles.timeLabel}>Check In:</Text>
-                            <Text style={[styles.time, { color: formattedCheckIn ? '#10B981' : '#EF4444' }]}>
-                                {formattedCheckIn || 'Not recorded'}
-                            </Text>
-                        </View>
+                    {!isSyntheticStatus && (
+                        <>
+                            <View style={styles.timeRow}>
+                                <View style={styles.timeItem}>
+                                    <Icon name="sign-in-alt" size={14} color="#10B981" />
+                                    <Text style={styles.timeLabel}>Check In:</Text>
+                                    <Text style={[styles.time, { color: formattedCheckIn ? '#10B981' : '#EF4444' }]}>
+                                        {formattedCheckIn || 'Not recorded'}
+                                    </Text>
+                                </View>
 
-                        <View style={styles.timeItem}>
-                            <Icon name="sign-out-alt" size={14} color="#F59E0B" />
-                            <Text style={styles.timeLabel}>Check Out:</Text>
-                            <Text style={[styles.time, { color: formattedCheckOut ? '#F59E0B' : '#EF4444' }]}>
-                                {formattedCheckOut || (isCurrentDay ? 'Pending' : 'Not recorded')}
-                            </Text>
-                        </View>
-                    </View>
-
-                    {/* Working hours display */}
-                    <View style={styles.workingHoursRow}>
-                        <View style={styles.workingHoursLeft}>
-                            <Icon name="clock" size={12} color={hoursColor} />
-                            <Text style={[styles.workingHoursText, { color: hoursColor }]}>
-                                Working Hours: {formattedHours || 'N/A'}
-                            </Text>
-                        </View>
-
-                        {/* Show shift timings if available */}
-                        {(item.shift_start || item.shift_end) && (
-                            <View style={styles.shiftInfo}>
-                                <Icon name="clock" size={10} color="#8B5CF6" />
-                                <Text style={styles.shiftText}>
-                                    Shift: {formatTime(item.shift_start) || 'N/A'} - {formatTime(item.shift_end) || 'N/A'}
-                                </Text>
+                                <View style={styles.timeItem}>
+                                    <Icon name="sign-out-alt" size={14} color="#F59E0B" />
+                                    <Text style={styles.timeLabel}>Check Out:</Text>
+                                    <Text style={[styles.time, { color: formattedCheckOut ? '#F59E0B' : '#EF4444' }]}>
+                                        {formattedCheckOut || (isCurrentDay ? 'Pending' : 'Not recorded')}
+                                    </Text>
+                                </View>
                             </View>
-                        )}
-                    </View>
+
+                            {/* Working hours display */}
+                            <View style={styles.workingHoursRow}>
+                                <View style={styles.workingHoursLeft}>
+                                    <Icon name="clock" size={12} color={hoursColor} />
+                                    <Text style={[styles.workingHoursText, { color: hoursColor }]}>
+                                        Working Hours: {formattedHours || 'N/A'}
+                                    </Text>
+                                </View>
+
+                                {/* Show shift timings if available */}
+                                {(item.shift_start || item.shift_end) && (
+                                    <View style={styles.shiftInfo}>
+                                        <Icon name="clock" size={10} color="#8B5CF6" />
+                                        <Text style={styles.shiftText}>
+                                            Shift: {formatTime(item.shift_start) || 'N/A'} - {formatTime(item.shift_end) || 'N/A'}
+                                        </Text>
+                                    </View>
+                                )}
+                            </View>
+                        </>
+                    )}
 
                     {/* Show late arrival indicator if applicable */}
                     {item.late_arrival === 'Yes' && (
@@ -262,7 +268,7 @@ const AttendanceList = ({
                     )}
 
                     {/* Show productivity indicator based on working hours */}
-                    {workingHours && workingHours > 0 && (
+                    {workingHours > 0 && (
                         <View style={styles.productivityRow}>
                             <View style={[styles.productivityBar, { backgroundColor: '#E5E7EB' }]}>
                                 <View
@@ -284,6 +290,18 @@ const AttendanceList = ({
             </View>
         );
     };
+
+    if (renderMode === 'plain') {
+        return (
+            <View>
+                {attendance.map((item, index) => (
+                    <View key={item.name || item.employee || index.toString()}>
+                        {renderItem({ item })}
+                    </View>
+                ))}
+            </View>
+        );
+    }
 
     return (
         <FlatList

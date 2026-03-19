@@ -714,6 +714,10 @@ class ApiService {
         });
     }
 
+    getLeaveStatistics(department = null) {
+        return this.get(m('get_leave_statistics'), { department });
+    }
+
     /**
      * Admin submits leave application for any employee
      * Uses: admin_submit_leave_application from backend
