@@ -522,6 +522,8 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                     <Section title="Projects & Tasks" icon="tasks" tint={colors.leave}>
                         <ListItem title="My Projects" subtitle="View assigned projects" leftIcon="folder-open"
                             tint={colors.leave} onPress={() => navigation.navigate('MyProjectsScreen')} />
+                        <ListItem title="Daily Tasks" subtitle="Manage your daily tasks" leftIcon="clipboard-list"
+                            tint={colors.leave} onPress={() => navigation.navigate('DailyTasksScreen')} />
                     </Section>
 
                     <Section title="Payroll" icon="wallet" tint={custom.palette.danger}>

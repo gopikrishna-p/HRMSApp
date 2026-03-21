@@ -466,6 +466,8 @@ const AdminDashboard = ({ navigation }) => {
                 <Section title="Projects Oversight" icon="project-diagram" tint="#14B8A6">
                     <ListItem title="View Projects" subtitle="Portfolio & status" leftIcon="folder-open"
                         tint="#14B8A6" onPress={() => navigation.navigate('ProjectsOverview')} />
+                    <ListItem title="Daily Tasks" subtitle="View & assign employee tasks" leftIcon="clipboard-list"
+                        tint="#14B8A6" onPress={() => navigation.navigate('AdminDailyTasksScreen')} />
                 </Section>
 
                 <Section title="Notifications & Announcements" icon="bullhorn" tint="#F43F5E">

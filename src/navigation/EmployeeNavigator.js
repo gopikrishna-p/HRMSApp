@@ -25,6 +25,7 @@ import NotificationsScreen from '../screens/employee/NotificationsScreen';
 import ProfileScreen from '../screens/employee/ProfileScreen';
 import EmployeeDashboard from '../screens/employee/EmployeeDashboard';
 import MyTasksScreen from '../screens/employee/MyTasksScreen';
+import DailyTasksScreen from '../screens/employee/DailyTasksScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -62,6 +63,7 @@ const EmployeeNavigator = () => {
             <Stack.Screen name="MyProjectsScreen" component={MyProjectsScreen} options={{ headerShown: false }} />
             <Stack.Screen name="MyTasksScreen" component={MyTasksScreen} options={{ headerShown: false }} />
             <Stack.Screen name="MyLogsScreen" component={MyLogsScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="DailyTasksScreen" component={DailyTasksScreen} options={{ headerShown: false }} />
 
             <Stack.Screen name="SalaryStructure" component={SalaryStructureScreen} options={{ title: 'Salary Structure' }} />
             <Stack.Screen name="Payslip" component={PayslipScreen} options={{ title: 'Payslips' }} />

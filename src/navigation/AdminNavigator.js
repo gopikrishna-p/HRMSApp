@@ -38,6 +38,7 @@ import ProjectLogsScreen from '../screens/admin/ProjectLogsScreen';
 import ProjectTasksScreen from '../screens/admin/ProjectTasksScreen';
 
 import AdminNotifications from '../screens/admin/AdminNotifications';
+import AdminDailyTasksScreen from '../screens/admin/AdminDailyTasksScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -91,6 +92,7 @@ const AdminNavigator = () => {
             <Stack.Screen name="SalaryStructureAdmin" component={SalaryStructureAdminScreen} options={{ title: 'Salary Structures' }} />
             <Stack.Screen name="AdminSalaryTracker" component={AdminSalaryTrackerScreen} options={{ title: 'Salary Tracker' }} />
             <Stack.Screen name="AdminSalaryTrackerDetail" component={AdminSalaryTrackerDetailScreen} options={{ title: 'Salary Detail' }} />
+            <Stack.Screen name="AdminDailyTasksScreen" component={AdminDailyTasksScreen} options={{ headerShown: false }} />
         </Stack.Navigator>
     );
 };

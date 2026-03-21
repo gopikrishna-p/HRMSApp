@@ -661,38 +661,73 @@ class NotificationService {
         try {
             // Cancel existing reminders
             await this.cancelScheduledNotifications('attendance_reminder');
-            
-            // Morning check-in reminder (9:30 AM)
+
+            // Fetch shift times from backend
+            let shiftStart = { hour: 10, minute: 0 };
+            let shiftEnd = { hour: 19, minute: 0 };
+            try {
+                const response = await ApiService.getEmployeeShiftInfo();
+                if (response && response.success && response.data?.message) {
+                    const info = response.data.message;
+                    const [sH, sM] = (info.shift_start || '10:00').split(':').map(Number);
+                    const [eH, eM] = (info.shift_end || '19:00').split(':').map(Number);
+                    shiftStart = { hour: sH, minute: sM };
+                    shiftEnd = { hour: eH, minute: eM };
+                }
+            } catch (e) {
+                console.log('Using default shift times for reminders');
+            }
+
+            // Calculate 5 min before shift start
+            let checkinHour = shiftStart.hour;
+            let checkinMin = shiftStart.minute - 5;
+            if (checkinMin < 0) {
+                checkinMin += 60;
+                checkinHour -= 1;
+            }
+
+            // Calculate 5 min before shift end
+            let checkoutHour = shiftEnd.hour;
+            let checkoutMin = shiftEnd.minute - 5;
+            if (checkoutMin < 0) {
+                checkoutMin += 60;
+                checkoutHour -= 1;
+            }
+
+            const startTimeStr = `${String(shiftStart.hour).padStart(2, '0')}:${String(shiftStart.minute).padStart(2, '0')}`;
+            const endTimeStr = `${String(shiftEnd.hour).padStart(2, '0')}:${String(shiftEnd.minute).padStart(2, '0')}`;
+
+            // Check-in reminder (5 min before shift start)
             await this.scheduleRepeatingNotification({
                 id: 'checkin_reminder',
                 title: 'Check-in Reminder',
-                body: 'Good morning! Don\'t forget to check in when you arrive at the office.',
+                body: `Good morning! Your shift starts at ${startTimeStr}. Don't forget to check in.`,
                 data: { type: 'attendance_reminder', action: 'checkin' },
                 channelId: 'attendance_reminders',
                 schedule: {
-                    hour: 9,
-                    minute: 30,
+                    hour: checkinHour,
+                    minute: checkinMin,
                     repeatFrequency: 'daily',
-                    weekdays: [1, 2, 3, 4, 5], // Monday to Friday
+                    weekdays: [1, 2, 3, 4, 5],
                 },
             });
             
-            // Evening check-out reminder (6:30 PM)
+            // Check-out reminder (5 min before shift end)
             await this.scheduleRepeatingNotification({
                 id: 'checkout_reminder',
                 title: 'Check-out Reminder',
-                body: 'Don\'t forget to check out before leaving the office!',
+                body: `Your shift ends at ${endTimeStr}. Don't forget to check out!`,
                 data: { type: 'attendance_reminder', action: 'checkout' },
                 channelId: 'attendance_reminders',
                 schedule: {
-                    hour: 18,
-                    minute: 30,
+                    hour: checkoutHour,
+                    minute: checkoutMin,
                     repeatFrequency: 'daily',
-                    weekdays: [1, 2, 3, 4, 5], // Monday to Friday
+                    weekdays: [1, 2, 3, 4, 5],
                 },
             });
             
-            console.log('Attendance reminders scheduled');
+            console.log(`Attendance reminders scheduled: check-in at ${checkinHour}:${String(checkinMin).padStart(2, '0')}, check-out at ${checkoutHour}:${String(checkoutMin).padStart(2, '0')}`);
         } catch (error) {
             console.error('Error scheduling attendance reminders:', error);
         }

@@ -718,6 +718,10 @@ class ApiService {
         return this.get(m('get_leave_statistics'), { department });
     }
 
+    getEmployeeShiftInfo(employee_id = null) {
+        return this.get(m('get_employee_shift_info'), { employee_id });
+    }
+
     /**
      * Admin submits leave application for any employee
      * Uses: admin_submit_leave_application from backend
@@ -1727,6 +1731,67 @@ class ApiService {
 
     // ============================================================================
     // END SALARY TRACKER APIs
+    // ============================================================================
+
+    // ============================================================================
+    // DAILY TASKS APIs
+    // ============================================================================
+
+    createDailyTask({ task_title, task_description, priority, tasks }) {
+        if (tasks) {
+            return this.post(m('create_daily_task'), { tasks: JSON.stringify(tasks) });
+        }
+        return this.post(m('create_daily_task'), { task_title, task_description, priority });
+    }
+
+    getMyDailyTasks(date = null, status_filter = null) {
+        return this.get(m('get_my_daily_tasks'), { date, status_filter });
+    }
+
+    updateTaskStatus({ task_name, new_status }) {
+        return this.post(m('update_task_status'), { task_name, new_status });
+    }
+
+    updateDailyTask({ task_name, task_title, task_description, priority, remarks }) {
+        return this.post(m('update_daily_task'), { task_name, task_title, task_description, priority, remarks });
+    }
+
+    getDailyTaskSummary() {
+        return this.get(m('get_daily_task_summary'));
+    }
+
+    deleteDailyTask(task_name) {
+        return this.post(m('delete_daily_task'), { task_name });
+    }
+
+    // Admin Daily Tasks
+    adminGetAllTasks(date = null, department = null, employee = null, status_filter = null) {
+        return this.get(m('admin_get_all_tasks'), { date, department, employee, status_filter });
+    }
+
+    adminGetTaskAnalytics(period = 'week') {
+        return this.get(m('admin_get_task_analytics'), { period });
+    }
+
+    adminUpdateTask({ task_name, task_title, task_description, priority, status, remarks }) {
+        return this.post(m('admin_update_task'), { task_name, task_title, task_description, priority, status, remarks });
+    }
+
+    adminAssignTask({ employee, employees, task_title, task_description, priority, tasks }) {
+        const params = { task_title, task_description, priority };
+        if (employees && employees.length > 0) {
+            params.employees = JSON.stringify(employees);
+        } else if (employee) {
+            params.employee = employee;
+        }
+        if (tasks) {
+            params.tasks = JSON.stringify(tasks);
+        }
+        return this.post(m('admin_assign_task'), params);
+    }
+
+    // ============================================================================
+    // END DAILY TASKS APIs
     // ============================================================================
 
 
