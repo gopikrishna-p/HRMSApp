@@ -12,8 +12,7 @@ import {
     ScrollView,
     Platform,
     Switch,
-    Linking,
-    PermissionsAndroid,
+
     BackHandler,
     RefreshControl,
 } from 'react-native';
@@ -116,37 +115,20 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
             await Promise.all([
                 loadEmployees(),
                 loadDepartments(),
-                requestStoragePermission()
             ]);
         } catch (error) {
             console.error('Initialization error:', error);
         }
     };
 
-    const requestStoragePermission = async () => {
-        if (Platform.OS === 'android') {
-            try {
-                if (Platform.Version >= 33) {
-                    // Android 13+, no need for WRITE_EXTERNAL_STORAGE
-                    return true;
-                }
-                const granted = await PermissionsAndroid.request(
-                    PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
-                    {
-                        title: 'Storage Permission',
-                        message: 'App needs access to storage to save exported files',
-                        buttonNeutral: 'Ask Me Later',
-                        buttonNegative: 'Cancel',
-                        buttonPositive: 'OK',
-                    }
-                );
-                return granted === PermissionsAndroid.RESULTS.GRANTED;
-            } catch (err) {
-                console.warn(err);
-                return false;
-            }
-        }
-        return true;
+    const formatLocalDate = (date) => {
+        if (!date) return null;
+
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+
+        return `${year}-${month}-${day}`;
     };
 
     // ===========================================
@@ -211,8 +193,8 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
         try {
             const params = {
                 employee_id: selectedEmployee,
-                start_date: dateRange.startDate?.toISOString().split('T')[0],
-                end_date: dateRange.endDate?.toISOString().split('T')[0]
+                start_date: formatLocalDate(dateRange.startDate),
+                end_date: formatLocalDate(dateRange.endDate)
             };
 
             const response = await ApiService.getEmployeeAttendanceHistory(params);
@@ -245,7 +227,6 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
         setRefreshing(false);
     };
 
-    // ===========================================
     // SEARCH AND FILTER FUNCTIONS
     // ===========================================
     const filterEmployees = () => {
@@ -325,35 +306,30 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
             // Remove data URI prefix if present
             const base64Content = base64Data.replace(/^data:.*?;base64,/, '');
 
-            // Determine file path based on platform
-            const downloadPath = Platform.OS === 'ios'
-                ? `${RNFS.DocumentDirectoryPath}/${fileName}`
-                : `${RNFS.DownloadDirectoryPath}/${fileName}`;
+            // Write to app's external files directory (always writable, no permissions needed)
+            const baseDir = Platform.OS === 'ios'
+                ? RNFS.DocumentDirectoryPath
+                : (RNFS.ExternalDirectoryPath || RNFS.DocumentDirectoryPath);
+            const exportDir = `${baseDir}/exports`;
+            if (!(await RNFS.exists(exportDir))) {
+                await RNFS.mkdir(exportDir);
+            }
+            const filePath = `${exportDir}/${fileName}`;
+            await RNFS.writeFile(filePath, base64Content, 'base64');
 
-            // Write file
-            await RNFS.writeFile(downloadPath, base64Content, 'base64');
+            Alert.alert(
+                'Export Successful',
+                `File saved: ${fileName}\n\nLocation: Android/data/com.hrmsapp/files/exports/\n\nYou can find it using any file manager app.`,
+                [{ text: 'OK' }]
+            );
 
-            // Show success message
             showToast({
                 type: 'success',
-                text1: 'Download Complete',
-                text2: `File saved: ${fileName}`,
+                text1: 'Export Complete',
+                text2: `${fileName} saved successfully`,
             });
 
-            // Open file on Android
-            if (Platform.OS === 'android') {
-                const fileUri = `file://${downloadPath}`;
-                Linking.openURL(fileUri).catch(err => {
-                    console.log('Error opening file:', err);
-                    showToast({
-                        type: 'info',
-                        text1: 'File Saved',
-                        text2: `Check Downloads folder for ${fileName}`,
-                    });
-                });
-            }
-
-            return downloadPath;
+            return filePath;
         } catch (error) {
             console.error('Download error:', error);
             throw error;
@@ -386,8 +362,8 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
         try {
             const params = {
                 employee_id: selectedEmployee,
-                start_date: dateRange.startDate.toISOString().split('T')[0],
-                end_date: dateRange.endDate.toISOString().split('T')[0],
+                start_date: formatLocalDate(dateRange.startDate),
+                end_date: formatLocalDate(dateRange.endDate),
                 export_format: format
             };
 
@@ -442,8 +418,8 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
                         setExportLoading(true);
                         try {
                             const params = {
-                                start_date: dateRange.startDate.toISOString().split('T')[0],
-                                end_date: dateRange.endDate.toISOString().split('T')[0],
+                                start_date: formatLocalDate(dateRange.startDate),
+                                end_date: formatLocalDate(dateRange.endDate),
                                 export_format: format,
                                 department: selectedDepartment || null
                             };
@@ -455,14 +431,18 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
 
                                 if (result.status === 'success' && result.content) {
                                     await downloadFile(result.content, result.file_name, result.content_type);
+                                } else {
+                                    throw new Error(result.message || 'Export returned no data');
                                 }
+                            } else {
+                                throw new Error('Export request failed');
                             }
                         } catch (error) {
                             console.error('Export error:', error);
                             showToast({
                                 type: 'error',
                                 text1: 'Export Failed',
-                                text2: 'Failed to export all employees report',
+                                text2: error.message || 'Failed to export all employees report',
                             });
                         } finally {
                             setExportLoading(false);
@@ -762,7 +742,7 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
                             <View style={styles.warningsSection}>
                                 <Text style={styles.warningTitle}>⚠️ Note</Text>
                                 <Text style={styles.warningText}>
-                                    Files will be saved to your Downloads folder. Large exports may take some time to generate.
+                                    Files will be saved to app storage. Large exports may take some time to generate.
                                 </Text>
                             </View>
                         </ScrollView>
@@ -896,7 +876,7 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
                         )}
 
                         <Text style={styles.exportNote}>
-                            Files will be saved to Downloads folder
+                            Files will be saved to app storage
                         </Text>
                     </View>
                 )}

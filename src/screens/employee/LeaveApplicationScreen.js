@@ -155,6 +155,16 @@ const LeaveApplicationScreen = ({ navigation }) => {
         }
     }, [employeeId]);
 
+    const formatLocalDate = (date) => {
+        if (!date) return null;
+
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+
+        return `${year}-${month}-${day}`;
+    };
+
     const handleSubmitLeave = async () => {
         // Validation
         if (!selectedLeaveType) {
@@ -190,10 +200,10 @@ const LeaveApplicationScreen = ({ navigation }) => {
             const leaveData = {
                 employee: employeeId,
                 leave_type: selectedLeaveType,
-                from_date: fromDate.toISOString().split('T')[0],
-                to_date: toDate.toISOString().split('T')[0],
+                from_date: formatLocalDate(fromDate),
+                to_date: formatLocalDate(toDate),
                 half_day: isHalfDay ? 1 : 0,
-                half_day_date: isHalfDay ? halfDayDate.toISOString().split('T')[0] : null,
+                half_day_date: isHalfDay ? formatLocalDate(halfDayDate) : null,
                 description: reason.trim(),
                 leave_approver: selectedApprover || null
             };

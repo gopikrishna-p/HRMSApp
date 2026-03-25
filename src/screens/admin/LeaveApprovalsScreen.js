@@ -380,16 +380,26 @@ const LeaveApprovalsScreen = ({ navigation }) => {
         submitAdminLeave();
     };
 
+    const formatLocalDate = (date) => {
+        if (!date) return null;
+
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+
+        return `${year}-${month}-${day}`;
+    };
+
     const submitAdminLeave = async () => {
         setLoading(true);
         try {
             const leaveData = {
                 employee: applyForEmployee,
                 leave_type: applyLeaveType,
-                from_date: applyFromDate.toISOString().split('T')[0],
-                to_date: applyToDate.toISOString().split('T')[0],
+                from_date: formatLocalDate(applyFromDate),
+                to_date: formatLocalDate(applyToDate),
                 half_day: applyIsHalfDay ? 1 : 0,
-                half_day_date: applyIsHalfDay ? applyHalfDayDate.toISOString().split('T')[0] : null,
+                half_day_date: applyIsHalfDay ? formatLocalDate(applyHalfDayDate) : null,
                 description: applyReason.trim(),
                 auto_approve: applyAutoApprove ? 1 : 0
             };
@@ -397,12 +407,15 @@ const LeaveApprovalsScreen = ({ navigation }) => {
             const response = await apiService.adminSubmitLeave(leaveData);
 
             if (response.success && response.data?.message) {
-                const result = response.data.message;
+                const rawResult = response.data.message;
+                const result = rawResult?.data?.message || rawResult;
                 const selectedEmployeeName = employees.find(e => e.name === applyForEmployee)?.employee_name || applyForEmployee;
+                const days = result.total_leave_days ?? 'N/A';
+                const remainingBalance = result.leave_balance ?? '';
                 
                 Alert.alert(
                     'Success',
-                    `Leave submitted successfully for ${selectedEmployeeName}!\n${result.total_leave_days} day(s) requested.${applyAutoApprove ? ' (Auto-approved)' : ''}`,
+                    `Leave submitted successfully for ${selectedEmployeeName}!\n${days} day(s) requested.${applyAutoApprove ? ' (Auto-approved)' : ''}${remainingBalance !== '' ? `\nRemaining balance: ${remainingBalance}` : ''}`,
                     [
                         {
                             text: 'OK',

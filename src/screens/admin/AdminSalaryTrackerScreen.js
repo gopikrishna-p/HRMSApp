@@ -432,7 +432,7 @@ function AdminSalaryTrackerScreen({ navigation }) {
                         <Text style={styles.inputLabel}>Year</Text>
                         <View style={styles.pickerBox}>
                             <Picker selectedValue={addYear} onValueChange={setAddYear} style={styles.pickerInner}>
-                                {[2024, 2025, 2026, 2027].map(y => <Picker.Item key={y} label={String(y)} value={y} />)}
+                                {Array.from({ length: new Date().getFullYear() - 2023 }, (_, i) => 2024 + i).map(y => <Picker.Item key={y} label={String(y)} value={y} />)}
                             </Picker>
                         </View>
 

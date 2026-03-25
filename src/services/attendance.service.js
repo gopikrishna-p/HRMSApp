@@ -491,28 +491,25 @@ class AttendanceService {
             r.type === 'holiday' || r.status === 'Holiday'
         ).length;
         
-        // Calculate total working days (excluding weekends) - inclusive of both boundary dates
+        // Calculate total working days (excluding weekends AND holidays) - inclusive of both boundary dates
         const start = new Date(start_date);
         const end = new Date(end_date);
-        let workingDays = 0;
-        
-        console.log(`Calculating working days from ${start_date} to ${end_date} (inclusive)`);
+        let weekdays = 0;
         
         for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
             const dayOfWeek = d.getDay();
-            const dateStr = this.formatDateLocal(d);
             if (dayOfWeek !== 0 && dayOfWeek !== 6) { // Not weekend
-                workingDays++;
-                console.log(`Working day counted: ${dateStr}`);
+                weekdays++;
             }
         }
         
-        console.log(`Total working days in range: ${workingDays}`);
+        // Subtract holidays that fall on weekdays (weekend holidays are already excluded)
+        const workingDays = weekdays - holiday_days;
         
         const totalAttendedDays = present_days + wfh_days;
         
-        // Calculate available working days (excluding holidays and leaves from total working days)
-        const availableWorkingDays = workingDays - holiday_days - leave_days;
+        // Calculate available working days (workingDays already excludes holidays, just subtract leaves)
+        const availableWorkingDays = workingDays - leave_days;
         
         // Calculate attendance percentage based on available working days
         const attendance_percentage = availableWorkingDays > 0 ? 

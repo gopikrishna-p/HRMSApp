@@ -110,6 +110,16 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
         loadMyRequests();
     }, []);
 
+    const formatLocalDate = (date) => {
+        if (!date) return null;
+
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+
+        return `${year}-${month}-${day}`;
+    };
+
     const handleSubmit = async () => {
         // Check if employee ID is loaded
         if (!employeeId) {
@@ -137,12 +147,12 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
         try {
             const response = await apiService.submitCompLeave({
                 employee: employeeId,
-                work_from_date: workFromDate.toISOString().split('T')[0],
-                work_end_date: workEndDate.toISOString().split('T')[0],
+                work_from_date: formatLocalDate(workFromDate),
+                work_end_date: formatLocalDate(workEndDate),
                 reason: reason.trim(),
                 leave_type: leaveType,
                 half_day: halfDay ? 1 : 0,
-                half_day_date: halfDay ? halfDayDate.toISOString().split('T')[0] : null
+                half_day_date: halfDay ? formatLocalDate(halfDayDate) : null
             });
 
             if (response.success && response.data?.message) {
