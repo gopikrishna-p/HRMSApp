@@ -147,13 +147,18 @@ class ApiService {
                 status: response.status,
             }),
             (error) => {
+                const rawMessage =
+                    error.response?.data?._error_message ||
+                    error.response?.data?.message ||
+                    error.message;
+                // Strip HTML tags from error messages for clean display
+                const cleanMessage = typeof rawMessage === 'string'
+                    ? rawMessage.replace(/<[^>]+>/g, '')
+                    : rawMessage;
                 const payload = {
                     success: false,
                     status: error.response?.status,
-                    message:
-                        error.response?.data?._error_message ||
-                        error.response?.data?.message ||
-                        error.message,
+                    message: cleanMessage,
                     data: error.response?.data,
                 };
                 return payload; // NOTE: not rejecting — callers check success flag
