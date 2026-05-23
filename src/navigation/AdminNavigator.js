@@ -6,7 +6,6 @@ import Icon from 'react-native-vector-icons/FontAwesome5';
 // Import Admin Screens
 import AdminDashboard from '../screens/admin/AdminDashboard';
 import EmployeeManagement from '../screens/admin/EmployeeManagement';
-import AttendanceManagementScreen from '../screens/admin/AttendanceManagementScreen';
 import ReportsScreen from '../screens/admin/ReportsScreen';
 import AdminCheckInOutScreen from '../screens/admin/AdminCheckInOutScreen';
 import AllAttendanceAnalyticsScreen from '../screens/admin/AllAttendanceAnalyticsScreen';
@@ -80,7 +79,6 @@ const AdminNavigator = () => {
             <Stack.Screen name="Reports" component={ReportsScreen} options={{ title: 'Reports & Analytics' }} />
             <Stack.Screen name="ManualCheckInOut" component={ManualCheckInOutScreen} options={{ title: 'Manual Attendance' }} />
             <Stack.Screen name="TodayAttendance" component={TodayAttendanceScreen} options={{ title: "Today's Attendance" }} />
-            <Stack.Screen name="AttendanceManagement" component={AttendanceManagementScreen} options={{ title: 'Attendance Management' }} />
             <Stack.Screen name="WFHSettings" component={WFHSettingsScreen} options={{ title: 'WFH Settings' }} />
             <Stack.Screen name="WFHApprovals" component={WFHApprovalsScreen} options={{ title: 'WFH Approvals' }} />
             <Stack.Screen name="OnSiteSettings" component={OnSiteSettingsScreen} options={{ title: 'On Site Settings' }} />

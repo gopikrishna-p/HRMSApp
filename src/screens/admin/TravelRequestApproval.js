@@ -19,7 +19,9 @@ import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
 import Loading from '../../components/common/Loading';
-import apiService from '../../services/api.service';
+import PreselectChip from '../../components/ui/PreselectChip';
+import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
+import { loadAllEmployees } from '../../utils/employeeData';
 
 const TravelRequestApproval = ({ navigation, route }) => {
     // Main states
@@ -112,23 +114,8 @@ const TravelRequestApproval = ({ navigation, route }) => {
     };
 
     const loadEmployees = async () => {
-        try {
-            const response = await apiService.getAllEmployees();
-            // Backend returns the list nested under .employees, not as the top-level
-            // message body. Accept both shapes for safety.
-            if (isApiSuccess(response)) {
-                const data = extractFrappeData(response, {});
-                const list = Array.isArray(data) ? data
-                    : Array.isArray(data?.employees) ? data.employees
-                    : [];
-                setEmployees(list);
-            } else {
-                setEmployees([]);
-            }
-        } catch (error) {
-            console.error('Load employees error:', error);
-            setEmployees([]);
-        }
+        // Shared helper — see src/utils/employeeData.js.
+        setEmployees(await loadAllEmployees());
     };
 
     const loadPurposes = async () => {
@@ -489,18 +476,9 @@ const TravelRequestApproval = ({ navigation, route }) => {
         </TouchableOpacity>
     );
 
-    const renderPreselectChip = () =>
-        preselectFilter ? (
-            <TouchableOpacity
-                style={styles.preselectChip}
-                onPress={() => setPreselectFilter('')}
-                activeOpacity={0.7}
-            >
-                <Icon name="account" size={14} color={colors.primary} />
-                <Text style={styles.preselectChipText}>Filtered to {preselectFilter}</Text>
-                <Icon name="close" size={14} color={colors.primary} />
-            </TouchableOpacity>
-        ) : null;
+    const renderPreselectChip = () => (
+        <PreselectChip value={preselectFilter} onClear={() => setPreselectFilter('')} />
+    );
 
     const renderPendingTab = () => (
         <ScrollView
@@ -1475,24 +1453,7 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: colors.border,
     },
-    preselectChip: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        alignSelf: 'flex-start',
-        backgroundColor: colors.primaryLight,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 14,
-        marginHorizontal: 12,
-        marginTop: 8,
-        marginBottom: 4,
-    },
-    preselectChipText: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: colors.primary,
-    },
+    // preselect chip styles moved to src/components/ui/PreselectChip.js
     filterPill: {
         paddingHorizontal: 14,
         paddingVertical: 6,

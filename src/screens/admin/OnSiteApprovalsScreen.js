@@ -15,6 +15,7 @@ import Icon from 'react-native-vector-icons/FontAwesome5';
 import { colors } from '../../theme/colors';
 import ApiService from '../../services/api.service';
 import showToast from '../../utils/Toast';
+import PreselectChip from '../../components/ui/PreselectChip';
 
 // Safely import notification service
 let NotificationService = null;
@@ -476,18 +477,7 @@ const OnSiteApprovalsScreen = ({ navigation, route }) => {
                 </TouchableOpacity>
             </View>
 
-            {/* Employee preselect chip (deep-linked from EmployeeManagement) */}
-            {preselectFilter ? (
-                <TouchableOpacity
-                    style={styles.preselectChip}
-                    onPress={() => setPreselectFilter('')}
-                    activeOpacity={0.7}
-                >
-                    <Icon name="user" size={11} color={colors.primary} />
-                    <Text style={styles.preselectChipText}>Filtered to {preselectFilter}</Text>
-                    <Icon name="times" size={11} color={colors.primary} />
-                </TouchableOpacity>
-            ) : null}
+            <PreselectChip value={preselectFilter} onClear={() => setPreselectFilter('')} />
 
             {/* Date Filter for History Tab */}
             {activeTab === 'history' && (
@@ -810,23 +800,7 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         marginLeft: 5,
     },
-    preselectChip: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        alignSelf: 'flex-start',
-        backgroundColor: colors.primaryLight,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 14,
-        marginHorizontal: 12,
-        marginTop: 8,
-    },
-    preselectChipText: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: colors.primary,
-    },
+    // preselect chip styles moved to src/components/ui/PreselectChip.js
     filterContainer: {
         flexDirection: 'row',
         justifyContent: 'space-between',

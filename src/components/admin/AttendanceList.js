@@ -177,14 +177,29 @@ const AttendanceList = ({
                             ID: {item.employee || item.name || 'N/A'}
                         </Text>
                     </View>
-                    <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) }]}>
-                        <Icon
-                            name={getStatusIcon(item.status)}
-                            size={12}
-                            color="white"
-                            style={styles.statusIcon}
-                        />
-                        <Text style={styles.statusText}>{item.status || 'Unknown'}</Text>
+                    {/* Right column: status badge stacked over working hours so both
+                        sit aligned to the right edge. The Working-Hours pill is
+                        only rendered when we have a real (non-synthetic) record
+                        with hours — synthetic statuses like Absent/Holiday/Leave
+                        don't have working hours and the pill would be misleading. */}
+                    <View style={styles.headerRight}>
+                        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) }]}>
+                            <Icon
+                                name={getStatusIcon(item.status)}
+                                size={12}
+                                color="white"
+                                style={styles.statusIcon}
+                            />
+                            <Text style={styles.statusText}>{item.status || 'Unknown'}</Text>
+                        </View>
+                        {!isSyntheticStatus && formattedHours ? (
+                            <View style={styles.workingHoursPill}>
+                                <Icon name="clock" size={10} color={hoursColor} />
+                                <Text style={[styles.workingHoursPillText, { color: hoursColor }]}>
+                                    {formattedHours}
+                                </Text>
+                            </View>
+                        ) : null}
                     </View>
                 </View>
 
@@ -221,25 +236,16 @@ const AttendanceList = ({
                                 </View>
                             </View>
 
-                            {/* Working hours display */}
-                            <View style={styles.workingHoursRow}>
-                                <View style={styles.workingHoursLeft}>
-                                    <Icon name="clock" size={12} color={hoursColor} />
-                                    <Text style={[styles.workingHoursText, { color: hoursColor }]}>
-                                        Working Hours: {formattedHours || 'N/A'}
+                            {/* Shift timings (kept on its own row since they're independent
+                                of working hours; only shown when the backend supplies them). */}
+                            {(item.shift_start || item.shift_end) && (
+                                <View style={styles.shiftInfo}>
+                                    <Icon name="clock" size={10} color="#8B5CF6" />
+                                    <Text style={styles.shiftText}>
+                                        Shift: {formatTime(item.shift_start) || 'N/A'} - {formatTime(item.shift_end) || 'N/A'}
                                     </Text>
                                 </View>
-
-                                {/* Show shift timings if available */}
-                                {(item.shift_start || item.shift_end) && (
-                                    <View style={styles.shiftInfo}>
-                                        <Icon name="clock" size={10} color="#8B5CF6" />
-                                        <Text style={styles.shiftText}>
-                                            Shift: {formatTime(item.shift_start) || 'N/A'} - {formatTime(item.shift_end) || 'N/A'}
-                                        </Text>
-                                    </View>
-                                )}
-                            </View>
+                            )}
                         </>
                     )}
 
@@ -251,13 +257,10 @@ const AttendanceList = ({
                         </View>
                     )}
 
-                    {/* Show status-specific information */}
-                    {item.status?.toLowerCase() === 'work from home' && (
-                        <View style={styles.wfhIndicator}>
-                            <Icon name="home" size={12} color="#F59E0B" />
-                            <Text style={styles.wfhText}>Work From Home</Text>
-                        </View>
-                    )}
+                    {/* Note: the redundant bottom "Work From Home" indicator was
+                        removed — the top-right status badge already conveys this
+                        status, and the duplicate label was the second mention of
+                        the same fact on one card. */}
 
                     {/* Show pending checkout warning for today's records */}
                     {isCurrentDay && formattedCheckIn && !formattedCheckOut && item.status === 'Present' && (
@@ -363,12 +366,31 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#6B7280',
     },
+    headerRight: {
+        alignItems: 'flex-end',
+        gap: 6,
+    },
     statusBadge: {
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 8,
         paddingVertical: 4,
         borderRadius: 12,
+    },
+    workingHoursPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        backgroundColor: '#ECFDF5',
+        borderColor: '#D1FAE5',
+        borderWidth: 1,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 10,
+    },
+    workingHoursPillText: {
+        fontSize: 11,
+        fontWeight: '600',
     },
     statusIcon: {
         marginRight: 4,
@@ -433,24 +455,8 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         marginLeft: 'auto',
     },
-    workingHoursRow: {
-        marginBottom: 8,
-    },
-    workingHoursLeft: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#F0F9FF',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 6,
-        marginBottom: 4,
-        alignSelf: 'flex-start',
-    },
-    workingHoursText: {
-        fontSize: 11,
-        marginLeft: 6,
-        fontWeight: '500',
-    },
+    // workingHoursRow/Left/Text removed — Working Hours moved into headerRight as
+    // a compact pill that sits beneath the status badge.
     shiftInfo: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -505,23 +511,8 @@ const styles = StyleSheet.create({
         marginLeft: 4,
         fontWeight: '500',
     },
-    wfhIndicator: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginTop: 4,
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        backgroundColor: '#FEF3C7',
-        borderRadius: 6,
-        alignSelf: 'flex-start',
-        marginRight: 8,
-    },
-    wfhText: {
-        fontSize: 11,
-        color: '#D97706',
-        marginLeft: 4,
-        fontWeight: '500',
-    },
+    // wfhIndicator / wfhText removed — the top-right status badge already shows
+    // "Work From Home", so the bottom-left duplicate label was redundant.
     pendingIndicator: {
         flexDirection: 'row',
         alignItems: 'center',

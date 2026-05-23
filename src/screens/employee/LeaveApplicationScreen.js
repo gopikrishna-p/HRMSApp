@@ -17,6 +17,7 @@ import Input from '../../components/common/Input';
 import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
+import { formatLocalDate } from '../../utils/dateFormat';
 
 const LeaveApplicationScreen = ({ navigation }) => {
     // State for form
@@ -173,15 +174,8 @@ const LeaveApplicationScreen = ({ navigation }) => {
         }
     }, [employeeId]);
 
-    const formatLocalDate = (date) => {
-        if (!date) return null;
-
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
-
-        return `${year}-${month}-${day}`;
-    };
+    // formatLocalDate now lives in src/utils/dateFormat.js (imported above) —
+    // was duplicated identically in 4 screens before consolidation.
 
     const handleSubmitLeave = async () => {
         // Validation

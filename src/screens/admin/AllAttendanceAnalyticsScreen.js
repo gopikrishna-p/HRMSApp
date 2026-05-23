@@ -15,6 +15,7 @@ import {
 
     BackHandler,
     RefreshControl,
+    PermissionsAndroid,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -22,6 +23,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import RNFS from 'react-native-fs';
 import ApiService from '../../services/api.service';
+import { formatLocalDate } from '../../utils/dateFormat';
 import showToast from '../../utils/Toast';
 import AttendanceList from '../../components/admin/AttendanceList';
 
@@ -131,15 +133,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
         }
     };
 
-    const formatLocalDate = (date) => {
-        if (!date) return null;
-
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
-
-        return `${year}-${month}-${day}`;
-    };
+    // formatLocalDate now lives in src/utils/dateFormat.js (imported above).
 
     // ===========================================
     // DATA LOADING FUNCTIONS
@@ -311,12 +305,25 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
     // ===========================================
     // FILE DOWNLOAD FUNCTIONS
     // ===========================================
+    //
+    // Save the exported PDF/Excel to the device's public Downloads folder so
+    // the user can open it directly from their file-manager / Files app.
+    //
+    // - Android < 10 (API < 29): WRITE_EXTERNAL_STORAGE permission is required
+    //   before writing to /storage/emulated/0/Download. We prompt for it.
+    // - Android 10–12 (API 29–32): scoped storage is in effect; writing to the
+    //   public Downloads folder still works (it's a "well-known" public dir).
+    //   We optionally request WRITE_EXTERNAL_STORAGE for backward compatibility.
+    // - Android 13+ (API 33+): WRITE_EXTERNAL_STORAGE is a no-op; the app can
+    //   write to the public Downloads folder for its own files without it.
+    //
+    // If the public Downloads write fails for any reason, we fall back to the
+    // app's private external dir (the old behavior) so the user still gets the
+    // file — and the alert tells them where it ended up.
     const downloadFile = async (base64Data, fileName, mimeType) => {
-        try {
-            // Remove data URI prefix if present
-            const base64Content = base64Data.replace(/^data:.*?;base64,/, '');
+        const base64Content = base64Data.replace(/^data:.*?;base64,/, '');
 
-            // Write to app's external files directory (always writable, no permissions needed)
+        const writeToFallback = async () => {
             const baseDir = Platform.OS === 'ios'
                 ? RNFS.DocumentDirectoryPath
                 : (RNFS.ExternalDirectoryPath || RNFS.DocumentDirectoryPath);
@@ -326,23 +333,74 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
             }
             const filePath = `${exportDir}/${fileName}`;
             await RNFS.writeFile(filePath, base64Content, 'base64');
+            return filePath;
+        };
+
+        try {
+            // iOS doesn't have a public Downloads folder — save in app docs.
+            if (Platform.OS === 'ios') {
+                const filePath = `${RNFS.DocumentDirectoryPath}/${fileName}`;
+                await RNFS.writeFile(filePath, base64Content, 'base64');
+                Alert.alert('Export Successful', `Saved: ${fileName}\nUse the Share sheet to send it elsewhere.`);
+                showToast({ type: 'success', text1: 'Export Complete', text2: fileName });
+                return filePath;
+            }
+
+            // Android: prompt for legacy storage permission only on API < 33.
+            if (Platform.Version < 33) {
+                try {
+                    const granted = await PermissionsAndroid.request(
+                        PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
+                        {
+                            title: 'Save to Downloads',
+                            message: 'HRMS needs permission to save your exported file to your Downloads folder.',
+                            buttonPositive: 'Allow',
+                            buttonNegative: 'Cancel',
+                        }
+                    );
+                    if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+                        // Fall back so the user still gets the file.
+                        const fp = await writeToFallback();
+                        Alert.alert(
+                            'Saved to App Storage',
+                            `Storage permission was denied, so we saved the file to the app's private folder instead:\n\n${fileName}`,
+                        );
+                        return fp;
+                    }
+                } catch (_) {
+                    // PermissionsAndroid throws on misconfigured environments —
+                    // continue and let the write attempt either succeed or fail
+                    // through to the catch block.
+                }
+            }
+
+            // Write directly into the public Downloads folder.
+            const downloadsDir = RNFS.DownloadDirectoryPath;
+            const filePath = `${downloadsDir}/${fileName}`;
+            await RNFS.writeFile(filePath, base64Content, 'base64');
 
             Alert.alert(
                 'Export Successful',
-                `File saved: ${fileName}\n\nLocation: Android/data/com.hrmsapp/files/exports/\n\nYou can find it using any file manager app.`,
+                `Saved to Downloads:\n${fileName}\n\nOpen any file manager (or the Files / Downloads app) to find it.`,
                 [{ text: 'OK' }]
             );
-
-            showToast({
-                type: 'success',
-                text1: 'Export Complete',
-                text2: `${fileName} saved successfully`,
-            });
-
+            showToast({ type: 'success', text1: 'Saved to Downloads', text2: fileName });
             return filePath;
         } catch (error) {
-            console.error('Download error:', error);
-            throw error;
+            console.error('Download error (Downloads folder):', error?.message || error);
+            // Last-ditch fallback: write to app's private dir so user still gets the file.
+            try {
+                const filePath = await writeToFallback();
+                Alert.alert(
+                    'Saved to App Storage',
+                    `Could not save to the public Downloads folder. Saved to the app's private folder instead:\n${fileName}`,
+                );
+                showToast({ type: 'warning', text1: 'Saved to app storage', text2: fileName });
+                return filePath;
+            } catch (fallbackErr) {
+                console.error('Download fallback also failed:', fallbackErr?.message || fallbackErr);
+                throw error;
+            }
         }
     };
 

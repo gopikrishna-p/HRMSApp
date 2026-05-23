@@ -16,8 +16,9 @@ import { Picker } from '@react-native-picker/picker';
 import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
-import Input from '../../components/common/Input';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
+import { loadAllEmployees } from '../../utils/employeeData';
+import { formatLocalDate } from '../../utils/dateFormat';
 
 const LeaveApprovalsScreen = ({ navigation, route }) => {
     // State
@@ -111,26 +112,9 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
     };
 
     const loadEmployees = async () => {
-        try {
-            const response = await apiService.getAllEmployees();
-            // Backend returns { status, employees:[...], statistics, filters } — the
-            // list is nested under .employees. The original code naively assumed the
-            // whole response.data.message was already the array, so Array.isArray
-            // always failed and the dropdown stayed empty (bug exposed by "Apply on
-            // Behalf"). Accept both shapes for safety.
-            if (isApiSuccess(response)) {
-                const data = extractFrappeData(response, {});
-                const list = Array.isArray(data) ? data
-                    : Array.isArray(data?.employees) ? data.employees
-                    : [];
-                setEmployees(list);
-            } else {
-                setEmployees([]);
-            }
-        } catch (error) {
-            console.error('Error loading employees:', error);
-            setEmployees([]);
-        }
+        // Shared helper in src/utils/employeeData.js — unwraps backend's
+        // `{status, employees:[...]}` shape and falls back to [] on failure.
+        setEmployees(await loadAllEmployees());
     };
 
     const fetchPendingLeaves = async () => {
@@ -403,15 +387,7 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
         submitAdminLeave();
     };
 
-    const formatLocalDate = (date) => {
-        if (!date) return null;
-
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
-
-        return `${year}-${month}-${day}`;
-    };
+    // formatLocalDate now lives in src/utils/dateFormat.js (imported above).
 
     const submitAdminLeave = async () => {
         setLoading(true);

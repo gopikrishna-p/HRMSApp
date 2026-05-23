@@ -19,6 +19,7 @@ import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
 import Input from '../../components/common/Input';
 import apiService, { isApiSuccess, extractFrappeData, getApiErrorMessage } from '../../services/api.service';
+import { loadAllEmployees } from '../../utils/employeeData';
 import { formatLocalDate } from '../../utils/dateFormat';
 
 const CompApprovalScreen = ({ navigation }) => {
@@ -96,23 +97,8 @@ const CompApprovalScreen = ({ navigation }) => {
     };
 
     const loadEmployees = async () => {
-        try {
-            const response = await apiService.getAllEmployees();
-            // Backend returns the list nested under .employees, not as the top-level
-            // message body. Accept both shapes for safety.
-            if (isApiSuccess(response)) {
-                const data = extractFrappeData(response, {});
-                const list = Array.isArray(data) ? data
-                    : Array.isArray(data?.employees) ? data.employees
-                    : [];
-                setEmployees(list);
-            } else {
-                setEmployees([]);
-            }
-        } catch (error) {
-            console.error('Load employees error:', error);
-            setEmployees([]);
-        }
+        // Shared helper — see src/utils/employeeData.js.
+        setEmployees(await loadAllEmployees());
     };
 
     const loadLeaveTypes = async () => {
