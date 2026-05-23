@@ -1,5 +1,6 @@
 // src/services/attendance.service.js
 import ApiService, { extractFrappeData, isApiSuccess } from './api.service';
+import { todayLocalYMD } from '../utils/dateFormat';
 
 const ENDPOINTS = {
     GEO_ATTENDANCE: '/api/method/hrms.api.geo_attendance',
@@ -48,7 +49,7 @@ class AttendanceService {
     // Get today's attendance status for current employee (check-in/out times)
     async getTodayAttendanceStatus(employee) {
         try {
-            const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+            const today = todayLocalYMD(); // YYYY-MM-DD in local timezone
             const response = await ApiService.get('/api/method/hrms.api.get_attendance_records', {
                 employee: employee,
                 start_date: today,

@@ -26,6 +26,7 @@ import {
 import ApiService from '../../services/api.service';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { colors } from '../../theme/colors';
+import { formatLocalDate } from '../../utils/dateFormat';
 
 const fmt = (d) =>
     typeof d === 'string'
@@ -46,7 +47,12 @@ const ManualCheckInOutScreen = ({ navigation }) => {
     const [date, setDate] = useState(new Date());
     const [showDate, setShowDate] = useState(false);
 
-    const ymd = useMemo(() => date.toISOString().slice(0, 10), [date]);
+    // ymd MUST use local-timezone components so the date string sent to the
+    // backend matches the displayDate the user sees. `toISOString().slice(0,10)`
+    // was the previous (UTC-based) implementation and produced an off-by-one
+    // day in any non-UTC timezone — the screen would say "24-05-2026" while
+    // querying records for "2026-05-23". See src/utils/dateFormat.js for why.
+    const ymd = useMemo(() => formatLocalDate(date), [date]);
     const displayDate = useMemo(() => fmtDate(date, 'dd-MM-yyyy'), [date]);
 
     const [list, setList] = useState([]);

@@ -8,6 +8,7 @@ import Icon from 'react-native-vector-icons/FontAwesome5';
 import { Picker } from '@react-native-picker/picker';
 import ApiService from '../../services/api.service';
 import showToast from '../../utils/Toast';
+import { todayLocalYMD } from '../../utils/dateFormat';
 
 function AdminSalaryTrackerDetailScreen({ route, navigation }) {
     const { trackerId } = route.params;
@@ -18,7 +19,7 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
     // Payment modal
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [payAmount, setPayAmount] = useState('');
-    const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
+    const [payDate, setPayDate] = useState(todayLocalYMD());
     const [payMode, setPayMode] = useState('Bank Transfer');
     const [payRef, setPayRef] = useState('');
     const [payRemarks, setPayRemarks] = useState('');

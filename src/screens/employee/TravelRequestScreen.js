@@ -20,6 +20,7 @@ import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
 import Loading from '../../components/common/Loading';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
+import { formatLocalDate } from '../../utils/dateFormat';
 
 const TravelRequestScreen = ({ navigation }) => {
     const [loading, setLoading] = useState(false);
@@ -261,8 +262,8 @@ const TravelRequestScreen = ({ navigation }) => {
                 arrival_date: item.arrival_date.toISOString(),
                 lodging_required: item.lodging_required ? 1 : 0,
                 preferred_area_for_lodging: item.preferred_area_for_lodging,
-                check_in_date: item.lodging_required ? item.check_in_date.toISOString().split('T')[0] : null,
-                check_out_date: item.lodging_required ? item.check_out_date.toISOString().split('T')[0] : null,
+                check_in_date: item.lodging_required ? formatLocalDate(item.check_in_date) : null,
+                check_out_date: item.lodging_required ? formatLocalDate(item.check_out_date) : null,
                 meal_preference: item.meal_preference,
                 travel_advance_required: item.travel_advance_required ? 1 : 0,
                 advance_amount: parseFloat(item.advance_amount) || 0,

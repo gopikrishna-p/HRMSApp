@@ -1,5 +1,6 @@
 // src/services/api.service.js
 import axios from 'axios';
+import { todayLocalYMD } from '../utils/dateFormat';
 
 /**
  * Frappe REST rules:
@@ -862,7 +863,9 @@ class ApiService {
      * @returns {Promise} Response with leave types array
      */
     getLeaveTypes(employee, date) {
-        const targetDate = date || new Date().toISOString().split('T')[0];
+        // Default to today in LOCAL timezone — `toISOString().split('T')[0]` would
+        // shift the date by one in non-UTC timezones (see src/utils/dateFormat.js).
+        const targetDate = date || todayLocalYMD();
         return this.get(m('get_leave_types'), { 
             employee: employee,
             date: targetDate

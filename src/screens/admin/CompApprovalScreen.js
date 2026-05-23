@@ -19,6 +19,7 @@ import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
 import Input from '../../components/common/Input';
 import apiService, { isApiSuccess, extractFrappeData, getApiErrorMessage } from '../../services/api.service';
+import { formatLocalDate } from '../../utils/dateFormat';
 
 const CompApprovalScreen = ({ navigation }) => {
     // State management
@@ -325,12 +326,12 @@ const CompApprovalScreen = ({ navigation }) => {
         try {
             const response = await apiService.submitCompLeave({
                 employee: applyEmployee,
-                work_from_date: applyWorkFromDate.toISOString().split('T')[0],
-                work_end_date: applyWorkEndDate.toISOString().split('T')[0],
+                work_from_date: formatLocalDate(applyWorkFromDate),
+                work_end_date: formatLocalDate(applyWorkEndDate),
                 reason: applyReason.trim(),
                 leave_type: applyLeaveType || 'Compensatory Off',
                 half_day: applyHalfDay ? 1 : 0,
-                half_day_date: applyHalfDay ? applyHalfDayDate.toISOString().split('T')[0] : null
+                half_day_date: applyHalfDay ? formatLocalDate(applyHalfDayDate) : null
             });
 
             if (response.success && response.data?.message) {

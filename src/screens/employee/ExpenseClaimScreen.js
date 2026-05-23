@@ -17,6 +17,7 @@ import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
 import Loading from '../../components/common/Loading';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
+import { formatLocalDate } from '../../utils/dateFormat';
 
 const ExpenseClaimScreen = ({ navigation }) => {
     // State management
@@ -188,7 +189,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
                 expense_type: exp.expense_type,
                 amount: parseFloat(exp.amount),
                 description: exp.description.trim(),
-                expense_date: exp.expense_date.toISOString().split('T')[0]
+                expense_date: formatLocalDate(exp.expense_date)
                 // sanctioned_amount is handled by backend - defaults to amount, then admin can modify
             }));
 

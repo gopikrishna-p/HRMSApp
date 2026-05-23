@@ -14,6 +14,7 @@ import { format as fmtDate, addDays, subDays } from 'date-fns';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import AttendanceService from '../../services/attendance.service';
 import { colors } from '../../theme/colors';
+import { formatLocalDate } from '../../utils/dateFormat';
 
 const fmtTime = (val) => {
     if (!val) return null;
@@ -26,7 +27,10 @@ const fmtTime = (val) => {
     }
 };
 
-const ymd = (d) => d.toISOString().slice(0, 10);
+// Local-timezone date string. Previously `d.toISOString().slice(0,10)` was used,
+// which silently shifted the date by one in any non-UTC timezone — see
+// src/utils/dateFormat.js.
+const ymd = (d) => formatLocalDate(d);
 
 const TodayAttendanceScreen = () => {
     const [loading, setLoading] = useState(true);

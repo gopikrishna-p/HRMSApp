@@ -18,6 +18,7 @@ import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
 import Loading from '../../components/common/Loading';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
+import { formatLocalDate } from '../../utils/dateFormat';
 
 const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
     const [activeTab, setActiveTab] = useState(route?.params?.tab || 'pending'); // pending, apply, history, statistics
@@ -287,7 +288,7 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
                 expense_type: exp.expense_type,
                 amount: parseFloat(exp.amount),
                 description: exp.description.trim(),
-                expense_date: exp.expense_date.toISOString().split('T')[0]
+                expense_date: formatLocalDate(exp.expense_date)
             }));
 
             console.log('Admin submitting expense claim for employee:', {
