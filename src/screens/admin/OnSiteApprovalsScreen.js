@@ -24,20 +24,27 @@ try {
     console.warn('NotificationService not available in OnSiteApprovalsScreen');
 }
 
-const OnSiteApprovalsScreen = ({ navigation }) => {
+const OnSiteApprovalsScreen = ({ navigation, route }) => {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [pendingRequests, setPendingRequests] = useState([]);
     const [historyRequests, setHistoryRequests] = useState([]);
     const [allHistoryRequests, setAllHistoryRequests] = useState([]);
     const [processingRequest, setProcessingRequest] = useState(null);
-    const [activeTab, setActiveTab] = useState('pending');
+    const [activeTab, setActiveTab] = useState(route?.params?.tab || 'pending');
     const [selectedDateFilter, setSelectedDateFilter] = useState('all');
     const [showDateFilterModal, setShowDateFilterModal] = useState(false);
+    // Phase 3.x deep-link from EmployeeManagement Quick Actions (B3).
+    const [preselectFilter, setPreselectFilter] = useState(route?.params?.preselectEmployee || '');
 
     useEffect(() => {
         loadRequests();
     }, []);
+
+    useEffect(() => {
+        if (route?.params?.preselectEmployee) setPreselectFilter(route.params.preselectEmployee);
+        if (route?.params?.tab) setActiveTab(route.params.tab);
+    }, [route?.params?.preselectEmployee, route?.params?.tab]);
 
     const loadRequests = async (isRefresh = false) => {
         try {
@@ -148,11 +155,11 @@ const OnSiteApprovalsScreen = ({ navigation }) => {
     };
 
     const getFilteredRequests = () => {
-        if (activeTab === 'pending') {
-            return pendingRequests;
-        } else {
-            return historyRequests;
+        const source = activeTab === 'pending' ? pendingRequests : historyRequests;
+        if (preselectFilter) {
+            return source.filter((r) => r.employee === preselectFilter);
         }
+        return source;
     };
 
     const getTabCounts = () => {
@@ -468,6 +475,19 @@ const OnSiteApprovalsScreen = ({ navigation }) => {
                     </Text>
                 </TouchableOpacity>
             </View>
+
+            {/* Employee preselect chip (deep-linked from EmployeeManagement) */}
+            {preselectFilter ? (
+                <TouchableOpacity
+                    style={styles.preselectChip}
+                    onPress={() => setPreselectFilter('')}
+                    activeOpacity={0.7}
+                >
+                    <Icon name="user" size={11} color={colors.primary} />
+                    <Text style={styles.preselectChipText}>Filtered to {preselectFilter}</Text>
+                    <Icon name="times" size={11} color={colors.primary} />
+                </TouchableOpacity>
+            ) : null}
 
             {/* Date Filter for History Tab */}
             {activeTab === 'history' && (
@@ -789,6 +809,23 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '600',
         marginLeft: 5,
+    },
+    preselectChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        alignSelf: 'flex-start',
+        backgroundColor: colors.primaryLight,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 14,
+        marginHorizontal: 12,
+        marginTop: 8,
+    },
+    preselectChipText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: colors.primary,
     },
     filterContainer: {
         flexDirection: 'row',

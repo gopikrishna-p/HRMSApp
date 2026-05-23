@@ -21,14 +21,19 @@ import Input from '../../components/common/Input';
 import Loading from '../../components/common/Loading';
 import apiService from '../../services/api.service';
 
-const TravelRequestApproval = ({ navigation }) => {
+const TravelRequestApproval = ({ navigation, route }) => {
     // Main states
-    const [activeTab, setActiveTab] = useState('pending'); // pending, apply, history, statistics
+    const [activeTab, setActiveTab] = useState(route?.params?.tab || 'pending'); // pending, apply, history, statistics
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
     const [requests, setRequests] = useState([]);
     const [statistics, setStatistics] = useState({});
     const [filterStatus, setFilterStatus] = useState('');
+    // Phase 3.x deep-link from EmployeeManagement Quick Actions (B5).
+    const [preselectFilter, setPreselectFilter] = useState(route?.params?.preselectEmployee || '');
+    const displayedRequests = preselectFilter
+        ? requests.filter((r) => r.employee === preselectFilter)
+        : requests;
 
     // Detail modal states
     const [selectedRequest, setSelectedRequest] = useState(null);
@@ -88,6 +93,11 @@ const TravelRequestApproval = ({ navigation }) => {
     }, []);
 
     useEffect(() => {
+        if (route?.params?.preselectEmployee) setPreselectFilter(route.params.preselectEmployee);
+        if (route?.params?.tab) setActiveTab(route.params.tab);
+    }, [route?.params?.preselectEmployee, route?.params?.tab]);
+
+    useEffect(() => {
         if (activeTab === 'pending' || activeTab === 'history' || activeTab === 'statistics') {
             loadRequests();
         }
@@ -104,11 +114,20 @@ const TravelRequestApproval = ({ navigation }) => {
     const loadEmployees = async () => {
         try {
             const response = await apiService.getAllEmployees();
-            if (response.success && response.data?.message) {
-                setEmployees(Array.isArray(response.data.message) ? response.data.message : []);
+            // Backend returns the list nested under .employees, not as the top-level
+            // message body. Accept both shapes for safety.
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, {});
+                const list = Array.isArray(data) ? data
+                    : Array.isArray(data?.employees) ? data.employees
+                    : [];
+                setEmployees(list);
+            } else {
+                setEmployees([]);
             }
         } catch (error) {
             console.error('Load employees error:', error);
+            setEmployees([]);
         }
     };
 
@@ -470,14 +489,28 @@ const TravelRequestApproval = ({ navigation }) => {
         </TouchableOpacity>
     );
 
+    const renderPreselectChip = () =>
+        preselectFilter ? (
+            <TouchableOpacity
+                style={styles.preselectChip}
+                onPress={() => setPreselectFilter('')}
+                activeOpacity={0.7}
+            >
+                <Icon name="account" size={14} color={colors.primary} />
+                <Text style={styles.preselectChipText}>Filtered to {preselectFilter}</Text>
+                <Icon name="close" size={14} color={colors.primary} />
+            </TouchableOpacity>
+        ) : null;
+
     const renderPendingTab = () => (
         <ScrollView
             style={styles.tabContent}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         >
+            {renderPreselectChip()}
             {loading ? (
                 <Loading />
-            ) : requests.length === 0 ? (
+            ) : displayedRequests.length === 0 ? (
                 <View style={styles.emptyState}>
                     <Icon name="clipboard-text-outline" size={80} color={colors.border} />
                     <Text style={styles.emptyText}>No pending travel requests</Text>
@@ -487,10 +520,10 @@ const TravelRequestApproval = ({ navigation }) => {
                 <>
                     <View style={styles.pendingHeader}>
                         <Text style={styles.pendingCount}>
-                            {requests.length} Pending Approval{requests.length !== 1 ? 's' : ''}
+                            {displayedRequests.length} Pending Approval{displayedRequests.length !== 1 ? 's' : ''}
                         </Text>
                     </View>
-                    {requests.map(renderRequestCard)}
+                    {displayedRequests.map(renderRequestCard)}
                     <View style={styles.bottomPadding} />
                 </>
             )}
@@ -809,15 +842,16 @@ const TravelRequestApproval = ({ navigation }) => {
                 style={styles.requestsList}
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             >
+                {renderPreselectChip()}
                 {loading ? (
                     <Loading />
-                ) : requests.length === 0 ? (
+                ) : displayedRequests.length === 0 ? (
                     <View style={styles.emptyState}>
                         <Text style={styles.emptyText}>No travel requests found</Text>
                     </View>
                 ) : (
                     <>
-                        {requests.map(renderRequestCard)}
+                        {displayedRequests.map(renderRequestCard)}
                         <View style={styles.bottomPadding} />
                     </>
                 )}
@@ -1121,7 +1155,7 @@ const TravelRequestApproval = ({ navigation }) => {
                     style={[styles.tab, activeTab === 'apply' && styles.activeTab]}
                     onPress={() => setActiveTab('apply')}
                 >
-                    <Text style={[styles.tabText, activeTab === 'apply' && styles.activeTabText]}>Apply</Text>
+                    <Text style={[styles.tabText, activeTab === 'apply' && styles.activeTabText]}>Apply on Behalf</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                     style={[styles.tab, activeTab === 'history' && styles.activeTab]}
@@ -1440,6 +1474,24 @@ const styles = StyleSheet.create({
         backgroundColor: colors.white,
         borderBottomWidth: 1,
         borderBottomColor: colors.border,
+    },
+    preselectChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        alignSelf: 'flex-start',
+        backgroundColor: colors.primaryLight,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 14,
+        marginHorizontal: 12,
+        marginTop: 8,
+        marginBottom: 4,
+    },
+    preselectChipText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: colors.primary,
     },
     filterPill: {
         paddingHorizontal: 14,

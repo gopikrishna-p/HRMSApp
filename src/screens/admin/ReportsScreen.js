@@ -1,34 +1,26 @@
+// src/screens/admin/ReportsScreen.js
+// Stub replaced with ComingSoon placeholder (Phase 4 of the parity audit).
+// Until the reports module is built, admins can pull per-employee data from
+// the existing analytics screens or the approval-screen Statistics tabs.
+
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import ComingSoon from '../../components/ui/ComingSoon';
 import { colors } from '../../theme/colors';
 
 const ReportsScreen = ({ navigation }) => {
     return (
-        <View style={styles.container}>
-            <Text style={styles.title}>Reports & Analytics</Text>
-            <Text style={styles.subtitle}>Generate comprehensive reports</Text>
-        </View>
+        <ComingSoon
+            title="Reports & Analytics"
+            description="A consolidated reporting hub (payroll, attendance, leave-balance exports) is on the roadmap."
+            suggestion="In the meantime: per-employee attendance exports live in All Attendance, and each approval screen has a Statistics tab."
+            icon="file-export"
+            accent={colors.warning}
+            action={{
+                label: 'Open All Attendance',
+                onPress: () => navigation.navigate('AllAttendanceAnalyticsScreen'),
+            }}
+        />
     );
 };
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.background,
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 20,
-    },
-    title: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-        marginBottom: 8,
-    },
-    subtitle: {
-        fontSize: 14,
-        color: colors.textSecondary,
-    },
-});
 
 export default ReportsScreen;

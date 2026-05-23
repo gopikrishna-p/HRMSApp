@@ -26,18 +26,22 @@ const m = (name) => `/api/method/hrms.api.${name}`;
  * @returns {any} Extracted data or default value
  */
 export const extractFrappeData = (response, defaultValue = null) => {
-    if (!response || !response.success) {
+    // Bail out for both HTTP-level failures AND inner Frappe `status:'error'` /
+    // `success:false` payloads. Without this short-circuit, callers that destructure
+    // the returned data on the happy path would see partial/empty fields after a
+    // Frappe exception (the "✅ loaded 0 requests" silent-fail bug).
+    if (!isApiSuccess(response)) {
         return defaultValue;
     }
-    
+
     // Level 1: response.data.message (Frappe's standard wrapper)
     let data = response.data?.message;
-    
+
     if (data === undefined || data === null) {
         // Some APIs return data directly without message wrapper
         data = response.data;
     }
-    
+
     // Level 2: Check if backend wrapped with {success, data: {message: ...}}
     if (data && typeof data === 'object' && !Array.isArray(data)) {
         // Check if it's a custom backend response wrapper
@@ -53,7 +57,7 @@ export const extractFrappeData = (response, defaultValue = null) => {
             return data.data;
         }
     }
-    
+
     return data ?? defaultValue;
 };
 
@@ -96,7 +100,26 @@ export const getApiErrorMessage = (response, defaultMsg = 'An error occurred') =
     if (!response) {
         return defaultMsg;
     }
-    
+
+    // Frappe puts detailed exception text in `_server_messages` — a JSON-stringified
+    // array whose first element is itself JSON. Try this first; it gives the
+    // most accurate user-facing message (e.g. "Insufficient leave balance").
+    const sm = response.data?._server_messages;
+    if (typeof sm === 'string') {
+        try {
+            const arr = JSON.parse(sm);
+            if (Array.isArray(arr) && arr.length) {
+                const first = JSON.parse(arr[0]);
+                if (first?.message) {
+                    // Strip HTML tags Frappe sometimes embeds in its messages.
+                    return String(first.message).replace(/<[^>]+>/g, '').trim();
+                }
+            }
+        } catch (e) {
+            // fall through to the generic checks below
+        }
+    }
+
     // Check various locations for error messages
     const message = response.data?.message;
     if (typeof message === 'string') {
@@ -111,7 +134,7 @@ export const getApiErrorMessage = (response, defaultMsg = 'An error occurred') =
     if (response.message) {
         return response.message;
     }
-    
+
     return defaultMsg;
 };
 
@@ -141,13 +164,48 @@ class ApiService {
 
         // Response interceptor
         this.api.interceptors.response.use(
-            (response) => ({
-                success: true,
-                data: response.data,
-                status: response.status,
-            }),
+            (response) => {
+                // Frappe whitelisted functions that catch their own exceptions return
+                // HTTP 200 with `{ status: 'error' | success: false, ... }` in the
+                // body. Without this demotion, every screen using the legacy
+                // `if (response.success)` check treats that as a successful no-op
+                // (the "✅ loaded 0 requests" bug).
+                const innerMsg = response?.data?.message;
+                if (innerMsg && typeof innerMsg === 'object') {
+                    if (innerMsg.status === 'error' || innerMsg.success === false) {
+                        const rawMsg = innerMsg.message || innerMsg.error || 'Request failed';
+                        const cleanMsg = typeof rawMsg === 'string'
+                            ? rawMsg.replace(/<[^>]+>/g, '').trim()
+                            : rawMsg;
+                        return {
+                            success: false,
+                            status: response.status,
+                            message: cleanMsg,
+                            data: response.data,
+                        };
+                    }
+                }
+                return {
+                    success: true,
+                    data: response.data,
+                    status: response.status,
+                };
+            },
             (error) => {
+                // Try Frappe's _server_messages first (richest exception detail).
+                let parsedFromServerMsgs = null;
+                const sm = error.response?.data?._server_messages;
+                if (typeof sm === 'string') {
+                    try {
+                        const arr = JSON.parse(sm);
+                        if (Array.isArray(arr) && arr.length) {
+                            const first = JSON.parse(arr[0]);
+                            if (first?.message) parsedFromServerMsgs = String(first.message);
+                        }
+                    } catch (_) { /* fall through */ }
+                }
                 const rawMessage =
+                    parsedFromServerMsgs ||
                     error.response?.data?._error_message ||
                     error.response?.data?.message ||
                     error.message;
@@ -959,6 +1017,61 @@ class ApiService {
             from_date: filters.from_date || null,
             to_date: filters.to_date || null,
             docstatus: filters.docstatus !== undefined ? filters.docstatus : null,
+            limit: filters.limit || 500
+        });
+    }
+
+    /**
+     * Submit a Mode-2 (Take-First) compensatory advance leave.
+     * The employee takes the leave on credit and must work a holiday/weekend
+     * in the same calendar month to settle. Backend forfeits unsettled
+     * records at month-end (balance restored, Attendance flipped to Absent).
+     *
+     * Uses: submit_compensatory_advance_leave
+     * @param {Object} data - {employee, leave_type, from_date, to_date, reason, half_day, half_day_date}
+     * @returns {Promise} Response with leave_application name and submission status
+     */
+    submitCompensatoryAdvanceLeave(data) {
+        return this.post(m('submit_compensatory_advance_leave'), {
+            employee: data.employee,
+            leave_type: data.leave_type,
+            from_date: data.from_date,
+            to_date: data.to_date,
+            reason: data.reason || null,
+            half_day: data.half_day || 0,
+            half_day_date: data.half_day_date || null
+        });
+    }
+
+    /**
+     * Get the current employee's pending Mode-2 settlements.
+     * Uses: get_employee_pending_settlements
+     * @param {Object} filters - {employee, month}  (employee defaults to current user; month is optional YYYY-MM-01)
+     * @returns {Promise} Response with settlements list and count
+     */
+    getMyPendingSettlements(filters = {}) {
+        return this.get(m('get_employee_pending_settlements'), {
+            employee: filters.employee || null,
+            month: filters.month || null
+        });
+    }
+
+    /**
+     * Admin-only: list pending Mode-2 settlements across all employees, with
+     * department/employee/status/urgency filters. Backs the AdvanceSettlementsAdmin
+     * screen — lets HR monitor forfeit risk before month-end.
+     *
+     * Uses: get_admin_pending_settlements
+     * @param {Object} filters - {department, employee, status, urgent_only (0|1), month, limit}
+     * @returns {Promise} Response with settlements list, count, and by_status histogram
+     */
+    getAllPendingSettlements(filters = {}) {
+        return this.get(m('get_admin_pending_settlements'), {
+            department: filters.department || null,
+            employee: filters.employee || null,
+            status: filters.status || null,
+            urgent_only: filters.urgent_only ? 1 : 0,
+            month: filters.month || null,
             limit: filters.limit || 500
         });
     }

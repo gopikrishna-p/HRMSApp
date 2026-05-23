@@ -1,34 +1,25 @@
+// src/screens/admin/AttendanceAnalyticsScreen.js
+// Stub replaced with ComingSoon placeholder (Phase 4 of the parity audit).
+// The closest functional equivalent today is AllAttendanceAnalyticsScreen.
+
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import ComingSoon from '../../components/ui/ComingSoon';
 import { colors } from '../../theme/colors';
 
 const AttendanceAnalyticsScreen = ({ navigation }) => {
     return (
-        <View style={styles.container}>
-            <Text style={styles.title}>Attendance Analytics</Text>
-            <Text style={styles.subtitle}>Trends, late/early, absences</Text>
-        </View>
+        <ComingSoon
+            title="Attendance Analytics"
+            description="Trend charts, late/early arrival patterns and absence rollups across departments are still under construction."
+            suggestion="For per-employee attendance history right now, use the All Attendance screen and pick the employee from the dropdown."
+            icon="chart-bar"
+            accent={colors.warning}
+            action={{
+                label: 'Open All Attendance',
+                onPress: () => navigation.navigate('AllAttendanceAnalyticsScreen'),
+            }}
+        />
     );
 };
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.background,
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 20,
-    },
-    title: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-        marginBottom: 8,
-    },
-    subtitle: {
-        fontSize: 14,
-        color: colors.textSecondary,
-    },
-});
 
 export default AttendanceAnalyticsScreen;

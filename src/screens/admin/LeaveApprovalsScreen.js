@@ -17,15 +17,16 @@ import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
 import Input from '../../components/common/Input';
-import apiService, { extractFrappeData, isApiSuccess } from '../../services/api.service';
+import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 
-const LeaveApprovalsScreen = ({ navigation }) => {
+const LeaveApprovalsScreen = ({ navigation, route }) => {
     // State
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
-    
-    // Tab state
-    const [activeTab, setActiveTab] = useState('pending'); // 'pending', 'history', 'statistics', 'apply'
+
+    // Tab state — deep-links from EmployeeManagement can pass route.params.tab
+    // (e.g. 'history') to land directly on the right tab.
+    const [activeTab, setActiveTab] = useState(route?.params?.tab || 'pending'); // 'pending', 'history', 'statistics', 'apply'
     
     // Leave applications
     const [pendingLeaves, setPendingLeaves] = useState([]);
@@ -67,6 +68,16 @@ const LeaveApprovalsScreen = ({ navigation }) => {
         loadInitialData();
     }, []);
 
+    // Deep-link from EmployeeManagement → "View Leave History" passes
+    // `{ preselectEmployee: <empId>, tab: 'history' }` to this screen so HR
+    // lands on that employee's leave history without manually filtering.
+    useEffect(() => {
+        const target = route?.params?.preselectEmployee;
+        if (target && employees.length > 0 && selectedEmployee !== target) {
+            setSelectedEmployee(target);
+        }
+    }, [route?.params?.preselectEmployee, employees]);
+
     const loadInitialData = async () => {
         setLoading(true);
         try {
@@ -102,9 +113,17 @@ const LeaveApprovalsScreen = ({ navigation }) => {
     const loadEmployees = async () => {
         try {
             const response = await apiService.getAllEmployees();
-            if (response.success && response.data?.message) {
-                const empData = response.data.message;
-                setEmployees(Array.isArray(empData) ? empData : []);
+            // Backend returns { status, employees:[...], statistics, filters } — the
+            // list is nested under .employees. The original code naively assumed the
+            // whole response.data.message was already the array, so Array.isArray
+            // always failed and the dropdown stayed empty (bug exposed by "Apply on
+            // Behalf"). Accept both shapes for safety.
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, {});
+                const list = Array.isArray(data) ? data
+                    : Array.isArray(data?.employees) ? data.employees
+                    : [];
+                setEmployees(list);
             } else {
                 setEmployees([]);
             }
@@ -131,7 +150,9 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                 console.log('✅ Pending leaves loaded:', result.applications?.length || 0, 'applications');
                 setPendingLeaves(Array.isArray(result.applications) ? result.applications : []);
             } else {
-                console.error('❌ Failed to fetch leaves:', response);
+                const msg = getApiErrorMessage(response, 'Failed to fetch pending leaves');
+                console.error('❌ Failed to fetch leaves:', msg);
+                Alert.alert('Error', msg);
                 setPendingLeaves([]);
             }
         } catch (error) {
@@ -161,7 +182,9 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                 console.log('📋 History leaves loaded:', history.length, 'from', applications.length, 'total');
                 setHistoryLeaves(history);
             } else {
-                console.error('❌ Failed to fetch history:', response);
+                const msg = getApiErrorMessage(response, 'Failed to fetch leave history');
+                console.error('❌ Failed to fetch history:', msg);
+                Alert.alert('Error', msg);
                 setHistoryLeaves([]);
             }
         } catch (error) {
@@ -571,6 +594,12 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                     <Text style={styles.statusText}>{leave.status}</Text>
                 </View>
             </View>
+
+            {Number(leave.is_compensatory_advance) === 1 && (
+                <View style={styles.advanceChip}>
+                    <Text style={styles.advanceChipText}>⏳ Compensatory Advance</Text>
+                </View>
+            )}
 
             <View style={styles.leaveDetails}>
                 <View style={styles.detailRow}>
@@ -1030,7 +1059,7 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                     onPress={() => setActiveTab('apply')}
                 >
                     <Text style={[styles.tabText, activeTab === 'apply' && styles.tabTextActive]}>
-                        Apply Leave
+                        Apply on Behalf
                     </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -1221,6 +1250,20 @@ const styles = StyleSheet.create({
     statusText: {
         fontSize: 10,
         fontWeight: '600',
+    },
+    advanceChip: {
+        alignSelf: 'flex-start',
+        backgroundColor: '#FEF3C7',
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        borderRadius: 8,
+        marginTop: 8,
+        marginBottom: 4,
+    },
+    advanceChipText: {
+        fontSize: 11,
+        fontWeight: '700',
+        color: '#92400E',
     },
     leaveDetails: {
         marginBottom: 10,

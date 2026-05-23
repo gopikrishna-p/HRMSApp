@@ -1,34 +1,25 @@
+// src/screens/admin/TodayEmployeeAnalyticsScreen.js
+// Stub replaced with ComingSoon placeholder (Phase 4 of the parity audit).
+// Today's roll-up by status is already available in TodayAttendanceScreen.
+
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import ComingSoon from '../../components/ui/ComingSoon';
 import { colors } from '../../theme/colors';
 
 const TodayEmployeeAnalyticsScreen = ({ navigation }) => {
     return (
-        <View style={styles.container}>
-            <Text style={styles.title}>Today Employee Analytics</Text>
-            <Text style={styles.subtitle}>Counts and heatmap</Text>
-        </View>
+        <ComingSoon
+            title="Today Employee Analytics"
+            description="Real-time counts, a department heatmap and a per-hour activity chart are still being built."
+            suggestion="For the live present / absent / holiday breakdown today, use the Today's Attendance screen."
+            icon="chart-pie"
+            accent={colors.warning}
+            action={{
+                label: "Open Today's Attendance",
+                onPress: () => navigation.navigate('TodayAttendance'),
+            }}
+        />
     );
 };
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.background,
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 20,
-    },
-    title: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-        marginBottom: 8,
-    },
-    subtitle: {
-        fontSize: 14,
-        color: colors.textSecondary,
-    },
-});
 
 export default TodayEmployeeAnalyticsScreen;

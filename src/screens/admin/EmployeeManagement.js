@@ -457,6 +457,107 @@ const EmployeeManagement = ({ navigation }) => {
                             </View>
                         </View>
 
+                        {/* Quick Actions — admin-on-behalf deep-links (Phase 3 + 3.x from
+                            ADMIN_EMPLOYEE_PARITY_AUDIT.md: B1, B2, B3, B4, B5). Each
+                            closes the detail modal first so the destination screen is
+                            visible underneath. Wraps to multiple rows automatically. */}
+                        <View style={styles.quickActionsSection}>
+                            <Text style={styles.sectionTitle}>
+                                <Icon name="link" size={14} color={COLORS.textPrimary} /> Quick Actions
+                            </Text>
+                            <View style={styles.quickActionsGrid}>
+                                <TouchableOpacity
+                                    style={styles.quickActionCard}
+                                    onPress={() => {
+                                        setDetailsModalVisible(false);
+                                        navigation.navigate('LeaveApprovals', {
+                                            preselectEmployee: employeeDetails.name,
+                                            tab: 'history',
+                                        });
+                                    }}
+                                >
+                                    <Icon name="calendar-month" size={18} color={COLORS.primary} />
+                                    <Text style={styles.quickActionLabel}>Leave History</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.quickActionCard}
+                                    onPress={() => {
+                                        setDetailsModalVisible(false);
+                                        navigation.navigate('AllAttendanceAnalyticsScreen', {
+                                            preselectEmployee: employeeDetails.name,
+                                        });
+                                    }}
+                                >
+                                    <Icon name="clock-check" size={18} color={COLORS.primary} />
+                                    <Text style={styles.quickActionLabel}>Attendance</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.quickActionCard}
+                                    onPress={() => {
+                                        setDetailsModalVisible(false);
+                                        navigation.navigate('AdvanceSettlementsAdmin', {
+                                            preselectEmployee: employeeDetails.name,
+                                        });
+                                    }}
+                                >
+                                    <Icon name="hourglass-empty" size={18} color={COLORS.primary} />
+                                    <Text style={styles.quickActionLabel}>Mode-2 Settlements</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.quickActionCard}
+                                    onPress={() => {
+                                        setDetailsModalVisible(false);
+                                        navigation.navigate('WFHApprovals', {
+                                            preselectEmployee: employeeDetails.name,
+                                            tab: 'history',
+                                        });
+                                    }}
+                                >
+                                    <Icon name="home-account" size={18} color={COLORS.primary} />
+                                    <Text style={styles.quickActionLabel}>WFH History</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.quickActionCard}
+                                    onPress={() => {
+                                        setDetailsModalVisible(false);
+                                        navigation.navigate('OnSiteApprovals', {
+                                            preselectEmployee: employeeDetails.name,
+                                            tab: 'history',
+                                        });
+                                    }}
+                                >
+                                    <Icon name="map-marker-radius" size={18} color={COLORS.primary} />
+                                    <Text style={styles.quickActionLabel}>On-Site History</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.quickActionCard}
+                                    onPress={() => {
+                                        setDetailsModalVisible(false);
+                                        navigation.navigate('ExpenseClaimApproval', {
+                                            preselectEmployee: employeeDetails.name,
+                                            tab: 'history',
+                                        });
+                                    }}
+                                >
+                                    <Icon name="cash-multiple" size={18} color={COLORS.primary} />
+                                    <Text style={styles.quickActionLabel}>Expense History</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.quickActionCard}
+                                    onPress={() => {
+                                        setDetailsModalVisible(false);
+                                        navigation.navigate('TravelRequestApproval', {
+                                            preselectEmployee: employeeDetails.name,
+                                            tab: 'history',
+                                        });
+                                    }}
+                                >
+                                    <Icon name="airplane" size={18} color={COLORS.primary} />
+                                    <Text style={styles.quickActionLabel}>Travel History</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+
                         {/* Edit Permission Section */}
                         <View style={styles.permissionSection}>
                             <Text style={styles.sectionTitle}>
@@ -1445,6 +1546,47 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: COLORS.white,
         fontWeight: '500',
+    },
+
+    // Quick Actions (Phase 3 deep-links)
+    quickActionsSection: {
+        paddingHorizontal: 16,
+        paddingTop: 16,
+    },
+    quickActionsRow: {
+        // legacy 3-button row (kept for back-compat if referenced elsewhere)
+        flexDirection: 'row',
+        gap: 8,
+        marginTop: 8,
+    },
+    quickActionsGrid: {
+        // Wrapping grid — each card targets ~31% width so 3 fit per row with gaps,
+        // wrapping to a second row for 4-7 entries.
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginTop: 8,
+    },
+    quickActionCard: {
+        flexBasis: '31%',
+        flexGrow: 1,
+        backgroundColor: COLORS.surface,
+        borderRadius: 12,
+        paddingVertical: 14,
+        paddingHorizontal: 6,
+        alignItems: 'center',
+        elevation: 2,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 3,
+    },
+    quickActionLabel: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: COLORS.textPrimary,
+        marginTop: 6,
+        textAlign: 'center',
     },
 
     // Permission Section

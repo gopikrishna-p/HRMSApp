@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, ScrollView, RefreshControl, ActivityIndicator, Dimensions } from 'react-native';
+import { View, ScrollView, RefreshControl, ActivityIndicator, Dimensions, TouchableOpacity } from 'react-native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { Text, useTheme } from 'react-native-paper';
 import { useAuth } from '../../context/AuthContext';
@@ -56,8 +56,27 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
     });
 
     const [pendingNotifications, setPendingNotifications] = useState(0);
+    const [pendingSettlements, setPendingSettlements] = useState({ count: 0, earliestDeadline: null });
 
     const handleLogout = async () => { await logout(); };
+
+    // Fetch Mode-2 (Compensatory Advance) pending settlements for the dashboard card.
+    const fetchPendingSettlements = async () => {
+        try {
+            if (!employee?.name) return;
+            const response = await ApiService.getMyPendingSettlements({ employee: employee.name });
+            const data = extractFrappeData(response, {});
+            const list = Array.isArray(data?.settlements) ? data.settlements : [];
+            const earliest = list.reduce((acc, s) => {
+                if (!s.month_end) return acc;
+                if (!acc) return s.month_end;
+                return new Date(s.month_end) < new Date(acc) ? s.month_end : acc;
+            }, null);
+            setPendingSettlements({ count: list.length, earliestDeadline: earliest });
+        } catch (e) {
+            setPendingSettlements({ count: 0, earliestDeadline: null });
+        }
+    };
 
     // Get first day of current month
     const getFirstDayOfCurrentMonth = () => {
@@ -204,7 +223,8 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
             if (employee?.name) {
                 fetchAnalytics();
                 fetchPendingNotifications();
-                
+                fetchPendingSettlements();
+
                 // Initialize FCM for push notifications
                 initializeFCM();
             } else {
@@ -226,6 +246,7 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
         setRefreshing(true);
         fetchAnalytics();
         fetchPendingNotifications();
+        fetchPendingSettlements();
     }, [employee?.name]);
 
     // Fetch pending notifications from system
@@ -490,6 +511,61 @@ const { width } = Dimensions.get('window');    const EmployeeDashboard = ({ navi
                             </View>
                         </View>
                     )}
+
+                    {/* Pending Compensatory Settlements (Mode-2) — only when count > 0 */}
+                    {pendingSettlements.count > 0 && (() => {
+                        const deadline = pendingSettlements.earliestDeadline
+                            ? new Date(pendingSettlements.earliestDeadline)
+                            : null;
+                        const today = new Date(); today.setHours(0, 0, 0, 0);
+                        const daysLeft = deadline
+                            ? Math.round((deadline - today) / (1000 * 60 * 60 * 24))
+                            : null;
+                        const urgent = daysLeft !== null && daysLeft <= 7;
+                        const accent = urgent ? custom.palette.danger : custom.palette.warning;
+                        return (
+                            <TouchableOpacity
+                                activeOpacity={0.85}
+                                onPress={() => navigation.navigate('PendingSettlements')}
+                                style={{
+                                    backgroundColor: '#FFF',
+                                    padding: 12,
+                                    borderRadius: 10,
+                                    marginBottom: 8,
+                                    borderLeftWidth: 4,
+                                    borderLeftColor: accent,
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    elevation: 2,
+                                    shadowColor: '#000',
+                                    shadowOpacity: 0.08,
+                                    shadowRadius: 3,
+                                    shadowOffset: { width: 0, height: 1 },
+                                }}
+                            >
+                                <View style={{
+                                    width: 40, height: 40, borderRadius: 10,
+                                    backgroundColor: accent + '26',
+                                    alignItems: 'center', justifyContent: 'center', marginRight: 10,
+                                }}>
+                                    <Icon name="hourglass-half" size={18} color={accent} />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={{ fontSize: 13, fontWeight: '700', color: custom.palette.textPrimary }}>
+                                        {pendingSettlements.count} pending settlement{pendingSettlements.count > 1 ? 's' : ''}
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: custom.palette.textSecondary, marginTop: 2 }}>
+                                        {daysLeft !== null
+                                            ? (daysLeft < 0
+                                                ? 'Deadline passed — forfeit imminent'
+                                                : `Settle by ${deadline.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} (${daysLeft} day${daysLeft === 1 ? '' : 's'} left)`)
+                                            : 'Compensatory advance leaves on credit'}
+                                    </Text>
+                                </View>
+                                <Icon name="chevron-right" size={14} color="#9CA3AF" />
+                            </TouchableOpacity>
+                        );
+                    })()}
 
                     {/* Sections */}
                     <Section title="Attendance" icon="calendar-check" tint={custom.palette.primary}>

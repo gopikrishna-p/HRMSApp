@@ -14,7 +14,7 @@ const MONTHS = [
     'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
-function AdminSalaryTrackerScreen({ navigation }) {
+function AdminSalaryTrackerScreen({ navigation, route }) {
     const [tab, setTab] = useState('all'); // 'all' | 'pending'
     const [records, setRecords] = useState([]);
     const [pendingReviews, setPendingReviews] = useState([]);
@@ -42,6 +42,21 @@ function AdminSalaryTrackerScreen({ navigation }) {
     const [adminEmployeeId, setAdminEmployeeId] = useState(null);
 
     useEffect(() => { loadData(); loadDepartments(); loadAdminEmployee(); }, []);
+
+    // When AdminDashboard's "My Salary Tracker" shortcut routes here with
+    // `{ preselectEmployee: <admin's own id> }`, jump straight into the
+    // self-request Add modal so admin can submit their own pending-salary
+    // request without scrolling through everyone else's records.
+    useEffect(() => {
+        if (route?.params?.preselectEmployee) {
+            setAddMode('self');
+            setShowAddModal(true);
+            // Clear the param so a subsequent focus doesn't re-open the modal
+            // after the user dismisses it. Safe because we already captured intent.
+            navigation.setParams?.({ preselectEmployee: undefined });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [route?.params?.preselectEmployee]);
 
     useFocusEffect(
         useCallback(() => { loadData(); }, [filterMonth, filterStatus])

@@ -25,7 +25,7 @@ import ApiService from '../../services/api.service';
 import showToast from '../../utils/Toast';
 import AttendanceList from '../../components/admin/AttendanceList';
 
-function AllAttendanceAnalyticsScreen({ navigation }) {
+function AllAttendanceAnalyticsScreen({ navigation, route }) {
     // ===========================================
     // STATE MANAGEMENT
     // ===========================================
@@ -66,6 +66,16 @@ function AllAttendanceAnalyticsScreen({ navigation }) {
         console.log('AllAttendanceAnalyticsScreen mounted');
         initializeComponent();
     }, []);
+
+    // Pre-select an employee when AdminDashboard's "My Attendance" shortcut routes here
+    // with `{ preselectEmployee: <admin's own employee id> }`. We wait until the employee
+    // list is loaded so the picker's options render correctly.
+    useEffect(() => {
+        const target = route?.params?.preselectEmployee;
+        if (target && employees.length > 0 && selectedEmployee !== target) {
+            setSelectedEmployee(target);
+        }
+    }, [route?.params?.preselectEmployee, employees]);
 
     useEffect(() => {
         if (selectedEmployee) {

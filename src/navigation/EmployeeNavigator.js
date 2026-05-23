@@ -11,6 +11,7 @@ import OnSiteRequestScreen from '../screens/employee/OnSiteRequestScreen';
 import HolidayListScreen from '../screens/employee/HolidayListScreen';
 import LeaveApplicationScreen from '../screens/employee/LeaveApplicationScreen';
 import CompensatoryLeaveScreen from '../screens/employee/CompensatoryLeaveScreen';
+import PendingSettlementsScreen from '../screens/employee/PendingSettlementsScreen';
 import ExpenseClaimScreen from '../screens/employee/ExpenseClaimScreen';
 import TravelRequestScreen from '../screens/employee/TravelRequestScreen';
 
@@ -56,6 +57,7 @@ const EmployeeNavigator = () => {
             <Stack.Screen name="HolidayList" component={HolidayListScreen} options={{ title: 'Holiday List' }} />
             <Stack.Screen name="LeaveApplication" component={LeaveApplicationScreen} options={{ title: 'Apply Leave' }} />
             <Stack.Screen name="CompensatoryLeave" component={CompensatoryLeaveScreen} options={{ title: 'Comp-Off Request' }} />
+            <Stack.Screen name="PendingSettlements" component={PendingSettlementsScreen} options={{ title: 'Pending Settlements' }} />
 
             <Stack.Screen name="ExpenseClaim" component={ExpenseClaimScreen} options={{ title: 'Expense Claim' }} />
             <Stack.Screen name="TravelRequest" component={TravelRequestScreen} options={{ title: 'Travel Request' }} />

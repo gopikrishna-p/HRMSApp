@@ -18,7 +18,7 @@ import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
 import Input from '../../components/common/Input';
-import apiService from '../../services/api.service';
+import apiService, { isApiSuccess, extractFrappeData, getApiErrorMessage } from '../../services/api.service';
 
 const CompApprovalScreen = ({ navigation }) => {
     // State management
@@ -97,9 +97,14 @@ const CompApprovalScreen = ({ navigation }) => {
     const loadEmployees = async () => {
         try {
             const response = await apiService.getAllEmployees();
-            if (response.success && response.data?.message) {
-                const empData = response.data.message;
-                setEmployees(Array.isArray(empData) ? empData : []);
+            // Backend returns the list nested under .employees, not as the top-level
+            // message body. Accept both shapes for safety.
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, {});
+                const list = Array.isArray(data) ? data
+                    : Array.isArray(data?.employees) ? data.employees
+                    : [];
+                setEmployees(list);
             } else {
                 setEmployees([]);
             }
@@ -152,15 +157,17 @@ const CompApprovalScreen = ({ navigation }) => {
             });
 
             console.log('📋 Response from getAllCompLeaves:', response);
-            
-            if (response.success && response.data?.message) {
-                const data = response.data.message;
+
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, {});
                 const applications = data.requests || [];
                 console.log('✅ Pending comp leaves loaded:', applications.length, 'requests');
                 setPendingRequests(Array.isArray(applications) ? applications : []);
                 setStatistics(data.statistics || {});
             } else {
-                console.error('❌ Failed to fetch comp leaves:', response);
+                const errMsg = getApiErrorMessage(response, 'Failed to fetch compensatory leaves');
+                console.error('❌ Failed to fetch comp leaves:', errMsg);
+                Alert.alert('Error', errMsg);
                 setPendingRequests([]);
             }
         } catch (error) {
@@ -183,16 +190,17 @@ const CompApprovalScreen = ({ navigation }) => {
                 limit: 200
             });
 
-            if (response.success && response.data?.message) {
-                const data = response.data.message;
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, {});
                 const applications = data.requests || [];
                 // Filter out pending (docstatus=0) from history
-                const historyOnly = Array.isArray(applications) 
+                const historyOnly = Array.isArray(applications)
                     ? applications.filter(app => app.docstatus !== 0)
                     : [];
                 setHistoryRequests(historyOnly);
                 setStatistics(data.statistics || {});
             } else {
+                Alert.alert('Error', getApiErrorMessage(response, 'Failed to load history'));
                 setHistoryRequests([]);
             }
         } catch (error) {
@@ -214,9 +222,11 @@ const CompApprovalScreen = ({ navigation }) => {
                 limit: 500
             });
 
-            if (response.success && response.data?.message) {
-                const data = response.data.message;
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, {});
                 setStatistics(data.statistics || {});
+            } else {
+                Alert.alert('Error', getApiErrorMessage(response, 'Failed to load statistics'));
             }
         } catch (error) {
             console.error('Fetch statistics error:', error);
@@ -894,7 +904,7 @@ const CompApprovalScreen = ({ navigation }) => {
                     onPress={() => setActiveTab('apply')}
                 >
                     <Text style={[styles.tabText, activeTab === 'apply' && styles.tabTextActive]}>
-                        Apply
+                        Apply on Behalf
                     </Text>
                 </TouchableOpacity>
                 <TouchableOpacity

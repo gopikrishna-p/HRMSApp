@@ -20,6 +20,8 @@ import OnSiteSettingsScreen from '../screens/admin/OnSiteSettingsScreen';
 import OnSiteApprovalsScreen from '../screens/admin/OnSiteApprovalsScreen';
 import LeaveApprovalsScreen from '../screens/admin/LeaveApprovalsScreen';
 import CompApprovalScreen from '../screens/admin/CompApprovalScreen';
+import AdvanceSettlementsAdminScreen from '../screens/admin/AdvanceSettlementsAdminScreen';
+import AdminSelfServiceScreen from '../screens/admin/AdminSelfServiceScreen';
 import ExpenseClaimApprovalScreen from '../screens/admin/ExpenseClaimApprovalScreen';
 import TravelRequestApproval from '../screens/admin/TravelRequestApproval';
 import CreateNotificationScreen from '../screens/admin/CreateNotificationScreen';
@@ -30,8 +32,17 @@ import AdminSalaryTrackerDetailScreen from '../screens/admin/AdminSalaryTrackerD
 // Import Employee Screen for Admin Self Leave / Self Expense / Self Travel
 import LeaveApplicationScreen from '../screens/employee/LeaveApplicationScreen';
 import CompensatoryLeaveScreen from '../screens/employee/CompensatoryLeaveScreen';
+import PendingSettlementsScreen from '../screens/employee/PendingSettlementsScreen';
 import ExpenseClaimScreen from '../screens/employee/ExpenseClaimScreen';
 import TravelRequestScreen from '../screens/employee/TravelRequestScreen';
+import WFHRequestScreen from '../screens/employee/WFHRequestScreen';
+import OnSiteRequestScreen from '../screens/employee/OnSiteRequestScreen';
+import HolidayListScreen from '../screens/employee/HolidayListScreen';
+import ProfileScreen from '../screens/employee/ProfileScreen';
+import SalaryStructureScreen from '../screens/employee/SalaryStructureScreen';
+import MyTasksScreen from '../screens/employee/MyTasksScreen';
+import MyProjectsScreen from '../screens/employee/MyProjectsScreen';
+import MyLogsScreen from '../screens/employee/MyLogsScreen';
 
 import ProjectsOverviewScreen from '../screens/admin/ProjectsOverviewScreen';
 import ProjectLogsScreen from '../screens/admin/ProjectLogsScreen';
@@ -77,11 +88,22 @@ const AdminNavigator = () => {
             <Stack.Screen name="LeaveApprovals" component={LeaveApprovalsScreen} options={{ title: 'Leave Approvals' }} />
             <Stack.Screen name="MyLeaveApplication" component={LeaveApplicationScreen} options={{ title: 'My Leave Application' }} />
             <Stack.Screen name="CompApprovals" component={CompApprovalScreen} options={{ title: 'Compensatory Leave Approvals' }} />
+            <Stack.Screen name="AdvanceSettlementsAdmin" component={AdvanceSettlementsAdminScreen} options={{ title: 'Advance Settlement Monitor' }} />
+            <Stack.Screen name="AdminSelfService" component={AdminSelfServiceScreen} options={{ title: 'My Self-Service' }} />
             <Stack.Screen name="MyCompensatoryLeave" component={CompensatoryLeaveScreen} options={{ title: 'My Comp-Off Request' }} />
+            <Stack.Screen name="MyPendingSettlements" component={PendingSettlementsScreen} options={{ title: 'My Pending Settlements' }} />
             <Stack.Screen name="ExpenseClaimApproval" component={ExpenseClaimApprovalScreen} options={{ title: 'Expense Claim Approvals' }} />
             <Stack.Screen name="MyExpenseClaim" component={ExpenseClaimScreen} options={{ title: 'My Expense Claim' }} />
             <Stack.Screen name="TravelRequestApproval" component={TravelRequestApproval} options={{ title: 'Travel Request Approvals' }} />
             <Stack.Screen name="MyTravelRequest" component={TravelRequestScreen} options={{ title: 'My Travel Request' }} />
+            <Stack.Screen name="MyWFHRequest" component={WFHRequestScreen} options={{ title: 'My WFH Request' }} />
+            <Stack.Screen name="MyOnSiteRequest" component={OnSiteRequestScreen} options={{ title: 'My On-Site Request' }} />
+            <Stack.Screen name="MyHolidayList" component={HolidayListScreen} options={{ title: 'My Holiday List' }} />
+            <Stack.Screen name="MyProfile" component={ProfileScreen} options={{ title: 'My Profile' }} />
+            <Stack.Screen name="MySalaryStructure" component={SalaryStructureScreen} options={{ title: 'My Salary Structure' }} />
+            <Stack.Screen name="MyTasks" component={MyTasksScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="MyProjects" component={MyProjectsScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="MyLogs" component={MyLogsScreen} options={{ headerShown: false }} />
             <Stack.Screen name="CreateNotification" component={CreateNotificationScreen} options={{ title: 'Create Notification' }} />
 
             <Stack.Screen name="ProjectsOverview" component={ProjectsOverviewScreen} options={{ title: 'Projects Overview' }} />

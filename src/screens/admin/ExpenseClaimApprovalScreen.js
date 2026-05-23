@@ -17,17 +17,22 @@ import { colors } from '../../theme/colors';
 import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
 import Loading from '../../components/common/Loading';
-import apiService, { extractFrappeData, isApiSuccess } from '../../services/api.service';
+import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 
-const ExpenseClaimApprovalScreen = ({ navigation }) => {
-    const [activeTab, setActiveTab] = useState('pending'); // pending, apply, history, statistics
+const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
+    const [activeTab, setActiveTab] = useState(route?.params?.tab || 'pending'); // pending, apply, history, statistics
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
-    
+
     // Data states
     const [claims, setClaims] = useState([]);
     const [statistics, setStatistics] = useState({});
     const [filterStatus, setFilterStatus] = useState('Draft'); // For pending tab
+    // Phase 3.x deep-link from EmployeeManagement Quick Actions (B5).
+    const [preselectFilter, setPreselectFilter] = useState(route?.params?.preselectEmployee || '');
+    const displayedClaims = preselectFilter
+        ? claims.filter((c) => c.employee === preselectFilter)
+        : claims;
     
     // Payable accounts
     const [payableAccounts, setPayableAccounts] = useState([]);
@@ -61,6 +66,11 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
     }, []);
 
     useEffect(() => {
+        if (route?.params?.preselectEmployee) setPreselectFilter(route.params.preselectEmployee);
+        if (route?.params?.tab) setActiveTab(route.params.tab);
+    }, [route?.params?.preselectEmployee, route?.params?.tab]);
+
+    useEffect(() => {
         loadClaims();
     }, [activeTab, filterStatus]);
     
@@ -75,9 +85,14 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
     const loadEmployees = async () => {
         try {
             const response = await apiService.getAllEmployees();
-            if (response.success && response.data?.message) {
-                const empData = response.data.message;
-                setEmployees(Array.isArray(empData) ? empData : []);
+            // Backend returns the list nested under .employees, not as the top-level
+            // message body. Accept both shapes for safety.
+            if (isApiSuccess(response)) {
+                const data = extractFrappeData(response, {});
+                const list = Array.isArray(data) ? data
+                    : Array.isArray(data?.employees) ? data.employees
+                    : [];
+                setEmployees(list);
             } else {
                 setEmployees([]);
             }
@@ -370,12 +385,12 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
                     // Calculate total from sanctionedAmounts
                     const totalSanctioned = Object.values(sanctionedAmounts)
                         .reduce((sum, amt) => sum + parseFloat(amt || 0), 0);
-                    
+
                     message = `Expense claim approved successfully\nTotal Sanctioned: ₹${totalSanctioned.toFixed(2)}`;
                 } else {
                     message = `Expense claim ${type}d successfully`;
                 }
-                    
+
                 Alert.alert(
                     'Success',
                     message,
@@ -384,6 +399,8 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
                         loadClaims();
                     }}]
                 );
+            } else {
+                Alert.alert('Error', getApiErrorMessage(response, `Failed to ${type} expense claim`));
             }
         } catch (error) {
             console.error(`${type} claim error:`, error);
@@ -492,6 +509,19 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
         );
     };
 
+    const renderPreselectChip = () =>
+        preselectFilter ? (
+            <TouchableOpacity
+                style={styles.preselectChip}
+                onPress={() => setPreselectFilter('')}
+                activeOpacity={0.7}
+            >
+                <Icon name="user" size={11} color={colors.primary} />
+                <Text style={styles.preselectChipText}>Filtered to {preselectFilter}</Text>
+                <Icon name="times" size={11} color={colors.primary} />
+            </TouchableOpacity>
+        ) : null;
+
     const renderPendingTab = () => (
         <ScrollView
             style={styles.tabContent}
@@ -499,9 +529,10 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
             }
         >
+            {renderPreselectChip()}
             {loading ? (
                 <Loading />
-            ) : claims.length === 0 ? (
+            ) : displayedClaims.length === 0 ? (
                 <View style={styles.emptyContainer}>
                     <Text style={styles.emptyText}>No pending expense claims</Text>
                     <Text style={styles.emptySubtext}>All claims have been processed</Text>
@@ -510,10 +541,10 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
                 <>
                     <View style={styles.pendingHeader}>
                         <Text style={styles.pendingCount}>
-                            {claims.length} Pending Approval{claims.length !== 1 ? 's' : ''}
+                            {displayedClaims.length} Pending Approval{displayedClaims.length !== 1 ? 's' : ''}
                         </Text>
                     </View>
-                    {claims.map(renderClaimCard)}
+                    {displayedClaims.map(renderClaimCard)}
                     <View style={styles.bottomPadding} />
                 </>
             )}
@@ -700,15 +731,16 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
                 }
             >
+                {renderPreselectChip()}
                 {loading ? (
                     <Loading />
-                ) : claims.length === 0 ? (
+                ) : displayedClaims.length === 0 ? (
                     <View style={styles.emptyContainer}>
                         <Text style={styles.emptyText}>No expense claims found</Text>
                     </View>
                 ) : (
                     <>
-                        {claims.map(renderClaimCard)}
+                        {displayedClaims.map(renderClaimCard)}
                         <View style={styles.bottomPadding} />
                     </>
                 )}
@@ -798,7 +830,7 @@ const ExpenseClaimApprovalScreen = ({ navigation }) => {
                     onPress={() => setActiveTab('apply')}
                 >
                     <Text style={[styles.tabText, activeTab === 'apply' && styles.activeTabText]}>
-                        Apply
+                        Apply on Behalf
                     </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -1199,6 +1231,24 @@ const styles = StyleSheet.create({
         backgroundColor: colors.white,
         borderBottomWidth: 1,
         borderBottomColor: colors.border,
+    },
+    preselectChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        alignSelf: 'flex-start',
+        backgroundColor: colors.primaryLight,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 14,
+        marginHorizontal: 12,
+        marginTop: 8,
+        marginBottom: 4,
+    },
+    preselectChipText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: colors.primary,
     },
     filterPill: {
         paddingHorizontal: 14,
