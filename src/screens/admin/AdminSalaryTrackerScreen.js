@@ -93,17 +93,36 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
                 ApiService.getPendingSalarySummary(),
             ]);
 
+            // Stable comparator on the trailing numeric segment of the
+            // Employee ID (HR-EMP-00001 → 00037). Used to sort the three
+            // lists below so admin sees records grouped by employee in a
+            // predictable order.
+            const empIdNum = (s) => {
+                const m = String(s || '').match(/(\d+)\s*$/);
+                return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+            };
+            const byEmpId = (a, b) => empIdNum(a?.employee) - empIdNum(b?.employee);
+
             const listData = listResp?.data?.message || listResp?.data;
             const listArr = listData?.data || [];
-            setRecords(Array.isArray(listArr) ? listArr : []);
+            const sortedList = (Array.isArray(listArr) ? [...listArr] : []).sort(byEmpId);
+            setRecords(sortedList);
 
             const pendingData = pendingResp?.data?.message || pendingResp?.data;
             const pendingArr = pendingData?.data || [];
-            setPendingReviews(Array.isArray(pendingArr) ? pendingArr : []);
+            const sortedPending = (Array.isArray(pendingArr) ? [...pendingArr] : []).sort(byEmpId);
+            setPendingReviews(sortedPending);
 
             const sumData = summaryResp?.data?.message || summaryResp?.data;
             const sumObj = sumData?.data || {};
-            setSummary(Array.isArray(sumObj?.employees) ? sumObj.employees : (Array.isArray(sumObj) ? sumObj : []));
+            const rawSummary = Array.isArray(sumObj?.employees) ? sumObj.employees : (Array.isArray(sumObj) ? sumObj : []);
+            // Per-employee summary uses `employee_id` (not `employee`) — sort
+            // by the trailing numeric segment so the top-5 list shows in
+            // employee-ID order.
+            const sortedSummary = [...rawSummary].sort(
+                (a, b) => empIdNum(a?.employee_id || a?.employee) - empIdNum(b?.employee_id || b?.employee)
+            );
+            setSummary(sortedSummary);
         } catch (err) {
             console.error('Load admin salary tracker error:', err);
         } finally {

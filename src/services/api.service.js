@@ -1909,6 +1909,13 @@ class ApiService {
         });
     }
 
+    /** Employee: acknowledge an amount received against own tracker */
+    recordReceivedAmountByEmployee({ tracker_id, amount, payment_date, payment_mode, reference, remarks }) {
+        return this.post(m('record_received_amount_by_employee'), {
+            tracker_id, amount, payment_date, payment_mode, reference, remarks,
+        });
+    }
+
     /** Admin: Delete a payment entry */
     deleteSalaryPayment({ tracker_id, row_idx }) {
         return this.post(m('delete_salary_payment'), { tracker_id, row_idx });

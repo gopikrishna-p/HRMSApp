@@ -148,9 +148,20 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                 const rawData = response.data.message;
                 const data = Array.isArray(rawData) ? rawData : (rawData.employees || []);
                 const activeEmployees = data.filter(emp => emp.status === 'Active');
-                activeEmployees.sort((a, b) =>
-                    (a.employee_name || a.name).localeCompare(b.employee_name || b.name)
-                );
+                // Sort by the trailing numeric segment of the Employee ID
+                // (e.g. HR-EMP-00001) — gives ascending order 00001 → 00037
+                // regardless of department or name. Falls back to a plain
+                // localeCompare on `name` if no number is present.
+                const empIdNum = (s) => {
+                    const m = String(s || '').match(/(\d+)\s*$/);
+                    return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+                };
+                activeEmployees.sort((a, b) => {
+                    const na = empIdNum(a.name);
+                    const nb = empIdNum(b.name);
+                    if (na !== nb) return na - nb;
+                    return String(a.name || '').localeCompare(String(b.name || ''));
+                });
 
                 setEmployees(activeEmployees);
                 setFilteredEmployees(activeEmployees);
@@ -895,7 +906,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                                 {filteredEmployees.map((emp) => (
                                     <Picker.Item
                                         key={emp.name}
-                                        label={`${emp.employee_name || emp.name} ${emp.designation ? `(${emp.designation})` : ''}`}
+                                        label={`${emp.name} — ${emp.employee_name || emp.name}`}
                                         value={emp.name}
                                     />
                                 ))}

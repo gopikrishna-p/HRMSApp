@@ -1,17 +1,49 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     View, Text, StyleSheet, ScrollView, TouchableOpacity,
-    ActivityIndicator, RefreshControl,
+    ActivityIndicator, RefreshControl, Modal, TextInput, Alert,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import ApiService from '../../services/api.service';
+import showToast from '../../utils/Toast';
+import { formatLocalDate } from '../../utils/dateFormat';
 
 function SalaryTrackerDetailScreen({ route, navigation }) {
     const { trackerId } = route.params;
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+
+    // "Record Received Amount" modal state
+    const [showReceiptModal, setShowReceiptModal] = useState(false);
+    const [receiptAmount, setReceiptAmount] = useState('');
+    const [receiptMode, setReceiptMode] = useState('Bank Transfer');
+    const [receiptReference, setReceiptReference] = useState('');
+    const [receiptRemarks, setReceiptRemarks] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+    // 'full' | 'half' | 'quarter' | 'custom' — drives the chip highlight in
+    // the receipt modal so the user can fill the most common partial
+    // amounts in one tap.
+    const [receiptPreset, setReceiptPreset] = useState('full');
+
+    const applyReceiptPreset = (preset) => {
+        const pending = Math.max(0, Number(data?.pending_amount || 0));
+        setReceiptPreset(preset);
+        if (pending <= 0) {
+            setReceiptAmount('');
+            return;
+        }
+        if (preset === 'full') setReceiptAmount(pending.toFixed(2));
+        else if (preset === 'half') setReceiptAmount(String(Math.round(pending / 2)));
+        else if (preset === 'quarter') setReceiptAmount(String(Math.round(pending / 4)));
+        else setReceiptAmount('');                  // 'custom'
+    };
+
+    const onReceiptAmountChange = (text) => {
+        setReceiptAmount(text);
+        if (receiptPreset !== 'custom') setReceiptPreset('custom');
+    };
 
     useEffect(() => { loadDetail(); }, []);
 
@@ -39,6 +71,61 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
     };
 
     const formatCurrency = (amt) => `₹${(amt || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+    const openReceiptModal = () => {
+        // Start with the "Full" preset selected — most common case is
+        // "received exactly what was owed", one tap to confirm.
+        const pending = Math.max(0, Number(data?.pending_amount || 0));
+        setReceiptAmount(pending > 0 ? pending.toFixed(2) : '');
+        setReceiptPreset('full');
+        setReceiptMode('Bank Transfer');
+        setReceiptReference('');
+        setReceiptRemarks('');
+        setShowReceiptModal(true);
+    };
+
+    const submitReceipt = async () => {
+        const parsed = parseFloat(receiptAmount);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+            Alert.alert('Invalid amount', 'Enter a positive received amount.');
+            return;
+        }
+        const pending = Math.max(0, Number(data?.pending_amount || 0));
+        if (pending > 0 && parsed > pending + 0.01) {
+            Alert.alert(
+                'Exceeds pending',
+                `You can record up to ₹${pending.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (the pending balance).`,
+            );
+            return;
+        }
+        setSubmitting(true);
+        try {
+            const resp = await ApiService.recordReceivedAmountByEmployee({
+                tracker_id: trackerId,
+                amount: parsed,
+                payment_date: formatLocalDate(new Date()),
+                payment_mode: receiptMode,
+                reference: receiptReference,
+                remarks: receiptRemarks,
+            });
+            const result = resp?.data?.message || resp?.data;
+            if (result?.status === 'success') {
+                showToast({ type: 'success', text1: 'Receipt recorded', text2: result.message });
+                setShowReceiptModal(false);
+                await loadDetail();
+            } else {
+                throw new Error(result?.message || 'Could not record receipt');
+            }
+        } catch (err) {
+            const msg = err?.response?.data?.exception
+                || err?.response?.data?._server_messages
+                || err?.message
+                || 'Failed to record receipt';
+            Alert.alert('Could not record receipt', String(msg).slice(0, 300));
+        } finally {
+            setSubmitting(false);
+        }
+    };
 
     const getStatusColor = (status) => {
         switch (status) {
@@ -78,6 +165,10 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
 
     const paidPct = data.salary_to_pay > 0 ? ((data.total_paid / data.salary_to_pay) * 100) : 0;
     const payments = data.payments || [];
+    const presentTotal = data.attended_days != null
+        ? data.attended_days
+        : ((data.present_days || 0) + (data.wfh_days || 0) + (data.onsite_days || 0));
+    const officeDays = data.office_days != null ? data.office_days : data.present_days;
 
     return (
         <View style={styles.container}>
@@ -96,21 +187,22 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
                     </View>
                 </View>
 
-                {/* Salary Breakdown */}
+                {/* Salary Breakdown — mirrors the All-Employees Excel columns
+                    O–U: Total Earnings → TDS → WFH → Absent → Total Deductions
+                    → Salary to Pay. Sub-deductions are listed before the
+                    "Total Deductions" sum so the math reads top-to-bottom. */}
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>💵 Salary Breakdown</Text>
                     <View style={styles.breakdownCard}>
-                        <BreakdownRow label="Total Earnings" value={formatCurrency(data.total_earnings)} color="#6366F1" />
-                        <BreakdownRow label="Total Deductions" value={`- ${formatCurrency(data.total_deductions)}`} color="#EF4444" />
-                        <BreakdownRow label="Net Salary" value={formatCurrency(data.net_salary)} color="#1F2937" bold />
-                        {(data.wfh_deduction > 0) && (
-                            <BreakdownRow label="WFH Deduction" value={`- ${formatCurrency(data.wfh_deduction)}`} color="#F59E0B" />
-                        )}
-                        {(data.absent_deduction > 0) && (
-                            <BreakdownRow label="Absent Deduction" value={`- ${formatCurrency(data.absent_deduction)}`} color="#EF4444" />
-                        )}
+                        <BreakdownRow label="💰 Total Earnings"   value={formatCurrency(data.total_earnings)}   color="#1F2937" bold />
                         <View style={styles.divider} />
-                        <BreakdownRow label="Salary to Pay" value={formatCurrency(data.salary_to_pay)} color="#6366F1" bold />
+                        <BreakdownRow label="➖ TDS Deductions"   value={`- ${formatCurrency(data.tds_deduction)}`}    color="#EF4444" />
+                        <BreakdownRow label="🏠 WFH Deduction"    value={`- ${formatCurrency(data.wfh_deduction)}`}    color="#F59E0B" />
+                        <BreakdownRow label="❌ Absent Ded."       value={`- ${formatCurrency(data.absent_deduction)}`} color="#EF4444" />
+                        <View style={styles.divider} />
+                        <BreakdownRow label="➖ Total Deductions" value={`- ${formatCurrency(data.total_deductions)}`}  color="#EF4444" bold />
+                        <View style={styles.divider} />
+                        <BreakdownRow label="💳 Salary to Pay"    value={formatCurrency(data.salary_to_pay)}   color="#10B981" bold />
                     </View>
                 </View>
 
@@ -132,19 +224,30 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
                             <View style={[styles.progressBar, { width: `${Math.min(paidPct, 100)}%` }]} />
                         </View>
                         <Text style={styles.progressLabel}>{paidPct.toFixed(1)}% Paid</Text>
+
+                        {/* Employee can acknowledge receipt only on Approved records
+                            that still have a pending balance. */}
+                        {data.status === 'Approved' && Number(data.pending_amount || 0) > 0 ? (
+                            <TouchableOpacity style={styles.receiptButton} onPress={openReceiptModal}>
+                                <Icon name="hand-holding-usd" size={14} color="#fff" />
+                                <Text style={styles.receiptButtonText}>I Received This Amount</Text>
+                            </TouchableOpacity>
+                        ) : null}
                     </View>
                 </View>
 
-                {/* Attendance Summary */}
+                {/* Attendance Summary — mirrors Excel columns F–O.
+                    `Present = Office + WFH + Onsite` so the employee sees the
+                    same composite used to compute the absent shortfall. */}
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>📋 Attendance</Text>
                     <View style={styles.attendanceGrid}>
                         <AttendanceItem icon="calendar-check" label="Working" value={data.working_days} color="#6366F1" />
-                        <AttendanceItem icon="user-check" label="Present" value={data.present_days} color="#10B981" />
-                        <AttendanceItem icon="home" label="WFH" value={data.wfh_days} color="#F59E0B" />
-                        <AttendanceItem icon="times-circle" label="Absent" value={data.absent_days} color="#EF4444" />
-                        <AttendanceItem icon="calendar-minus" label="Leave" value={data.leave_days} color="#8B5CF6" />
-                        <AttendanceItem icon="map-marker-alt" label="On-site" value={data.onsite_days} color="#3B82F6" />
+                        <AttendanceItem icon="check-circle"   label="Present" value={presentTotal} color="#10B981" />
+                        <AttendanceItem icon="building"       label="Office"  value={officeDays} color="#10B981" />
+                        <AttendanceItem icon="home"           label="WFH"     value={data.wfh_days} color="#F59E0B" />
+                        <AttendanceItem icon="map-marker-alt" label="Onsite"  value={data.onsite_days} color="#3B82F6" />
+                        <AttendanceItem icon="times-circle"   label="Absent"  value={data.absent_days} color="#EF4444" />
                     </View>
                 </View>
 
@@ -182,6 +285,123 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
 
                 <View style={{ height: 40 }} />
             </ScrollView>
+
+            {/* Record-receipt modal */}
+            <Modal
+                visible={showReceiptModal}
+                transparent
+                animationType="slide"
+                onRequestClose={() => setShowReceiptModal(false)}
+            >
+                <View style={styles.modalBackdrop}>
+                    <View style={styles.modalCard}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>Acknowledge Receipt</Text>
+                            <TouchableOpacity onPress={() => setShowReceiptModal(false)}>
+                                <Icon name="times" size={20} color="#6B7280" />
+                            </TouchableOpacity>
+                        </View>
+                        <Text style={styles.modalHint}>
+                            Pending: {formatCurrency(data?.pending_amount)}. Enter what you actually received.
+                        </Text>
+
+                        {/* Quick presets — Full / Half / Quarter / Custom.
+                            Active chip is highlighted; typing into the input
+                            switches back to "Custom" so the chips never lie
+                            about what's in the field. */}
+                        {Number(data?.pending_amount || 0) > 0 ? (
+                            <>
+                                <Text style={styles.modalLabel}>Quick Amount</Text>
+                                <View style={styles.presetRow}>
+                                    {[
+                                        { key: 'full',    label: 'Full',    sub: formatCurrency(data.pending_amount) },
+                                        { key: 'half',    label: 'Half',    sub: formatCurrency(Math.round(data.pending_amount / 2)) },
+                                        { key: 'quarter', label: 'Quarter', sub: formatCurrency(Math.round(data.pending_amount / 4)) },
+                                        { key: 'custom',  label: 'Custom',  sub: 'Type below' },
+                                    ].map((p) => {
+                                        const active = receiptPreset === p.key;
+                                        return (
+                                            <TouchableOpacity
+                                                key={p.key}
+                                                style={[styles.presetChip, active && styles.presetChipActive]}
+                                                onPress={() => applyReceiptPreset(p.key)}
+                                            >
+                                                <Text style={[styles.presetChipLabel, active && styles.presetChipLabelActive]}>
+                                                    {p.label}
+                                                </Text>
+                                                <Text style={[styles.presetChipSub, active && styles.presetChipSubActive]}>
+                                                    {p.sub}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </View>
+                            </>
+                        ) : null}
+
+                        <Text style={styles.modalLabel}>Amount Received *</Text>
+                        <TextInput
+                            style={styles.modalInput}
+                            keyboardType="decimal-pad"
+                            placeholder="e.g. 25000"
+                            value={receiptAmount}
+                            onChangeText={onReceiptAmountChange}
+                        />
+
+                        <Text style={styles.modalLabel}>Payment Mode</Text>
+                        <View style={styles.modeRow}>
+                            {['Bank Transfer', 'Cash', 'UPI', 'Cheque'].map((mode) => (
+                                <TouchableOpacity
+                                    key={mode}
+                                    style={[
+                                        styles.modeChip,
+                                        receiptMode === mode && styles.modeChipActive,
+                                    ]}
+                                    onPress={() => setReceiptMode(mode)}
+                                >
+                                    <Text
+                                        style={[
+                                            styles.modeChipText,
+                                            receiptMode === mode && styles.modeChipTextActive,
+                                        ]}
+                                    >
+                                        {mode}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+
+                        <Text style={styles.modalLabel}>Reference (optional)</Text>
+                        <TextInput
+                            style={styles.modalInput}
+                            placeholder="UTR / transaction id"
+                            value={receiptReference}
+                            onChangeText={setReceiptReference}
+                        />
+
+                        <Text style={styles.modalLabel}>Remarks (optional)</Text>
+                        <TextInput
+                            style={[styles.modalInput, { minHeight: 60, textAlignVertical: 'top' }]}
+                            placeholder="Anything to flag for HR…"
+                            value={receiptRemarks}
+                            onChangeText={setReceiptRemarks}
+                            multiline
+                        />
+
+                        <TouchableOpacity
+                            style={[styles.modalSubmit, submitting && { opacity: 0.6 }]}
+                            onPress={submitReceipt}
+                            disabled={submitting}
+                        >
+                            {submitting ? (
+                                <ActivityIndicator color="#fff" />
+                            ) : (
+                                <Text style={styles.modalSubmitText}>Confirm Receipt</Text>
+                            )}
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -245,6 +465,49 @@ const styles = StyleSheet.create({
     paymentMode: { fontSize: 11, color: '#6366F1', backgroundColor: '#EEF2FF', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, overflow: 'hidden' },
     paymentRef: { fontSize: 11, color: '#6B7280' },
     paymentRemarks: { fontSize: 11, color: '#9CA3AF', marginTop: 4, fontStyle: 'italic' },
+
+    receiptButton: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+        gap: 8, marginTop: 16, paddingVertical: 12, backgroundColor: '#10B981',
+        borderRadius: 10,
+    },
+    receiptButtonText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+
+    modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+    modalCard: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '90%' },
+    modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+    modalTitle: { fontSize: 17, fontWeight: '700', color: '#111827' },
+    modalHint: { fontSize: 12, color: '#6B7280', marginBottom: 12 },
+    modalLabel: { fontSize: 12, fontWeight: '600', color: '#374151', marginTop: 10, marginBottom: 6 },
+    modalInput: {
+        borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8,
+        paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, color: '#111827',
+        backgroundColor: '#F9FAFB',
+    },
+    modeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    modeChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#F9FAFB' },
+    modeChipActive: { borderColor: '#6366F1', backgroundColor: '#EEF2FF' },
+    modeChipText: { fontSize: 12, color: '#6B7280', fontWeight: '600' },
+    modeChipTextActive: { color: '#6366F1' },
+
+    presetRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
+    presetChip: {
+        flexGrow: 1, minWidth: '22%',
+        paddingHorizontal: 10, paddingVertical: 8,
+        borderRadius: 10, borderWidth: 1,
+        borderColor: '#E5E7EB', backgroundColor: '#F9FAFB',
+        alignItems: 'center',
+    },
+    presetChipActive: { borderColor: '#6366F1', backgroundColor: '#EEF2FF' },
+    presetChipLabel: { fontSize: 12, fontWeight: '700', color: '#374151' },
+    presetChipLabelActive: { color: '#6366F1' },
+    presetChipSub: { fontSize: 10, color: '#9CA3AF', marginTop: 2 },
+    presetChipSubActive: { color: '#4F46E5' },
+    modalSubmit: {
+        marginTop: 18, backgroundColor: '#6366F1', paddingVertical: 14,
+        borderRadius: 10, alignItems: 'center',
+    },
+    modalSubmitText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 });
 
 export default SalaryTrackerDetailScreen;

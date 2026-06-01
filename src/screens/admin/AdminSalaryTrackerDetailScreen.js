@@ -24,6 +24,33 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
     const [payRef, setPayRef] = useState('');
     const [payRemarks, setPayRemarks] = useState('');
     const [payLoading, setPayLoading] = useState(false);
+    // 'full' | 'half' | 'quarter' | 'custom' — drives the chip highlight in
+    // the payment modal. Defaults to 'custom' so nothing is pre-set; clicking
+    // a preset both fills the amount and highlights its chip.
+    const [payPreset, setPayPreset] = useState('custom');
+
+    // Recompute the amount when a preset chip is tapped. Quarter/half are
+    // rounded to whole rupees (no fractional paisa) — admins keep partial-
+    // payment splits on round numbers.
+    const applyPaymentPreset = (preset) => {
+        const pending = Number(data?.pending_amount || 0);
+        setPayPreset(preset);
+        if (pending <= 0) {
+            setPayAmount('');
+            return;
+        }
+        if (preset === 'full') setPayAmount(String(pending.toFixed(2)));
+        else if (preset === 'half') setPayAmount(String(Math.round(pending / 2)));
+        else if (preset === 'quarter') setPayAmount(String(Math.round(pending / 4)));
+        else setPayAmount('');                    // 'custom'
+    };
+
+    // When the user types into the amount input directly, drop the preset
+    // highlight so the chips don't lie about what's in the field.
+    const onPayAmountChange = (text) => {
+        setPayAmount(text);
+        if (payPreset !== 'custom') setPayPreset('custom');
+    };
 
     useEffect(() => { loadDetail(); }, []);
 
@@ -236,21 +263,22 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
                     </View>
                 )}
 
-                {/* Salary Breakdown */}
+                {/* Salary Breakdown — mirrors the All-Employees Excel columns
+                    O–U: Total Earnings → TDS → WFH → Absent → Total Deductions
+                    → Salary to Pay. Sub-deductions are listed before the
+                    "Total Deductions" sum so the math reads top-to-bottom. */}
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>💵 Salary Breakdown</Text>
                     <View style={styles.breakdownCard}>
-                        <BreakdownRow label="Total Earnings" value={formatCurrency(data.total_earnings)} color="#6366F1" />
-                        <BreakdownRow label="Total Deductions" value={`- ${formatCurrency(data.total_deductions)}`} color="#EF4444" />
-                        <BreakdownRow label="Net Salary" value={formatCurrency(data.net_salary)} color="#1F2937" bold />
-                        {(data.wfh_deduction > 0) && (
-                            <BreakdownRow label="WFH Deduction" value={`- ${formatCurrency(data.wfh_deduction)}`} color="#F59E0B" />
-                        )}
-                        {(data.absent_deduction > 0) && (
-                            <BreakdownRow label="Absent Deduction" value={`- ${formatCurrency(data.absent_deduction)}`} color="#EF4444" />
-                        )}
+                        <BreakdownRow label="💰 Total Earnings"   value={formatCurrency(data.total_earnings)}   color="#1F2937" bold />
                         <View style={styles.divider} />
-                        <BreakdownRow label="Salary to Pay" value={formatCurrency(data.salary_to_pay)} color="#6366F1" bold />
+                        <BreakdownRow label="➖ TDS Deductions"   value={`- ${formatCurrency(data.tds_deduction)}`}    color="#EF4444" />
+                        <BreakdownRow label="🏠 WFH Deduction"    value={`- ${formatCurrency(data.wfh_deduction)}`}    color="#F59E0B" />
+                        <BreakdownRow label="❌ Absent Ded."       value={`- ${formatCurrency(data.absent_deduction)}`} color="#EF4444" />
+                        <View style={styles.divider} />
+                        <BreakdownRow label="➖ Total Deductions" value={`- ${formatCurrency(data.total_deductions)}`}  color="#EF4444" bold />
+                        <View style={styles.divider} />
+                        <BreakdownRow label="💳 Salary to Pay"    value={formatCurrency(data.salary_to_pay)}   color="#10B981" bold />
                     </View>
                 </View>
 
@@ -281,16 +309,18 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
                     </View>
                 </View>
 
-                {/* Attendance */}
+                {/* Attendance — mirrors Excel columns F–O. `Present = Office +
+                    WFH + Onsite` is the composite used for the absent-shortfall
+                    calc, so admin can match the Excel reading line-by-line. */}
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>📋 Attendance</Text>
                     <View style={styles.attendanceGrid}>
                         <AttendanceItem icon="calendar-check" label="Working" value={data.working_days} color="#6366F1" />
-                        <AttendanceItem icon="user-check" label="Present" value={data.present_days} color="#10B981" />
-                        <AttendanceItem icon="home" label="WFH" value={data.wfh_days} color="#F59E0B" />
-                        <AttendanceItem icon="times-circle" label="Absent" value={data.absent_days} color="#EF4444" />
-                        <AttendanceItem icon="calendar-minus" label="Leave" value={data.leave_days} color="#8B5CF6" />
-                        <AttendanceItem icon="map-marker-alt" label="On-site" value={data.onsite_days} color="#3B82F6" />
+                        <AttendanceItem icon="check-circle"   label="Present" value={data.attended_days != null ? data.attended_days : ((data.present_days || 0) + (data.wfh_days || 0) + (data.onsite_days || 0))} color="#10B981" />
+                        <AttendanceItem icon="building"       label="Office"  value={data.office_days != null ? data.office_days : data.present_days} color="#10B981" />
+                        <AttendanceItem icon="home"           label="WFH"     value={data.wfh_days} color="#F59E0B" />
+                        <AttendanceItem icon="map-marker-alt" label="Onsite"  value={data.onsite_days} color="#3B82F6" />
+                        <AttendanceItem icon="times-circle"   label="Absent"  value={data.absent_days} color="#EF4444" />
                     </View>
                 </View>
 
@@ -303,35 +333,54 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
                             <Text style={styles.noPaymentsText}>No payments recorded yet</Text>
                         </View>
                     ) : (
-                        payments.map((p, index) => (
-                            <View key={index} style={styles.paymentItem}>
-                                <View style={styles.paymentDot} />
-                                <View style={styles.paymentContent}>
-                                    <View style={styles.paymentHeader}>
-                                        <Text style={styles.paymentAmount}>{formatCurrency(p.amount)}</Text>
-                                        <View style={styles.paymentActions}>
-                                            <Text style={styles.paymentDate}>{p.payment_date}</Text>
-                                            <TouchableOpacity
-                                                onPress={() => handleDeletePayment(p.idx)}
-                                                style={styles.deleteBtn}
-                                            >
-                                                <Icon name="trash-alt" size={12} color="#EF4444" />
-                                            </TouchableOpacity>
+                        payments.map((p, index) => {
+                            // Employee-recorded receipts are tagged with a
+                            // "[employee]" prefix in remarks by the backend.
+                            // Strip it for display and show a small badge so
+                            // admin can spot self-acknowledged entries.
+                            const rawRemarks = p.remarks || '';
+                            const isEmployeeRecorded = rawRemarks.startsWith('[employee]');
+                            const displayRemarks = isEmployeeRecorded
+                                ? rawRemarks.replace(/^\[employee\]\s*/, '')
+                                : rawRemarks;
+                            return (
+                                <View key={index} style={styles.paymentItem}>
+                                    <View style={[styles.paymentDot, isEmployeeRecorded && { backgroundColor: '#6366F1' }]} />
+                                    <View style={styles.paymentContent}>
+                                        <View style={styles.paymentHeader}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <Text style={styles.paymentAmount}>{formatCurrency(p.amount)}</Text>
+                                                {isEmployeeRecorded ? (
+                                                    <View style={styles.employeeTag}>
+                                                        <Icon name="user" size={9} color="#fff" />
+                                                        <Text style={styles.employeeTagText}>Employee-recorded</Text>
+                                                    </View>
+                                                ) : null}
+                                            </View>
+                                            <View style={styles.paymentActions}>
+                                                <Text style={styles.paymentDate}>{p.payment_date}</Text>
+                                                <TouchableOpacity
+                                                    onPress={() => handleDeletePayment(p.idx)}
+                                                    style={styles.deleteBtn}
+                                                >
+                                                    <Icon name="trash-alt" size={12} color="#EF4444" />
+                                                </TouchableOpacity>
+                                            </View>
                                         </View>
+                                        <View style={styles.paymentMeta}>
+                                            {p.payment_mode ? (
+                                                <Text style={styles.paymentMode}>{p.payment_mode}</Text>
+                                            ) : null}
+                                            {p.reference ? (
+                                                <Text style={styles.paymentRefText}>Ref: {p.reference}</Text>
+                                            ) : null}
+                                        </View>
+                                        {displayRemarks ? <Text style={styles.paymentRemarks}>{displayRemarks}</Text> : null}
+                                        {p.recorded_by ? <Text style={styles.paymentRecordedBy}>by {p.recorded_by}</Text> : null}
                                     </View>
-                                    <View style={styles.paymentMeta}>
-                                        {p.payment_mode ? (
-                                            <Text style={styles.paymentMode}>{p.payment_mode}</Text>
-                                        ) : null}
-                                        {p.reference ? (
-                                            <Text style={styles.paymentRefText}>Ref: {p.reference}</Text>
-                                        ) : null}
-                                    </View>
-                                    {p.remarks ? <Text style={styles.paymentRemarks}>{p.remarks}</Text> : null}
-                                    {p.recorded_by ? <Text style={styles.paymentRecordedBy}>by {p.recorded_by}</Text> : null}
                                 </View>
-                            </View>
-                        ))
+                            );
+                        })
                     )}
                 </View>
 
@@ -347,6 +396,40 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
                             Pending: {formatCurrency(data.pending_amount)}
                         </Text>
 
+                        {/* Quick presets — one-tap fills for the most common
+                            partial-payment splits. The active chip is
+                            highlighted; typing into the input below switches
+                            back to "Custom" automatically. */}
+                        {Number(data.pending_amount || 0) > 0 ? (
+                            <>
+                                <Text style={styles.inputLabel}>Quick Amount</Text>
+                                <View style={styles.presetRow}>
+                                    {[
+                                        { key: 'full',    label: 'Full',    sub: formatCurrency(data.pending_amount) },
+                                        { key: 'half',    label: 'Half',    sub: formatCurrency(Math.round(data.pending_amount / 2)) },
+                                        { key: 'quarter', label: 'Quarter', sub: formatCurrency(Math.round(data.pending_amount / 4)) },
+                                        { key: 'custom',  label: 'Custom',  sub: 'Type below' },
+                                    ].map((p) => {
+                                        const active = payPreset === p.key;
+                                        return (
+                                            <TouchableOpacity
+                                                key={p.key}
+                                                style={[styles.presetChip, active && styles.presetChipActive]}
+                                                onPress={() => applyPaymentPreset(p.key)}
+                                            >
+                                                <Text style={[styles.presetChipLabel, active && styles.presetChipLabelActive]}>
+                                                    {p.label}
+                                                </Text>
+                                                <Text style={[styles.presetChipSub, active && styles.presetChipSubActive]}>
+                                                    {p.sub}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </View>
+                            </>
+                        ) : null}
+
                         <Text style={styles.inputLabel}>Amount *</Text>
                         <TextInput
                             style={styles.textInput}
@@ -354,7 +437,7 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
                             placeholderTextColor="#9CA3AF"
                             keyboardType="numeric"
                             value={payAmount}
-                            onChangeText={setPayAmount}
+                            onChangeText={onPayAmountChange}
                         />
 
                         <Text style={styles.inputLabel}>Payment Date</Text>
@@ -395,25 +478,6 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
                             value={payRemarks}
                             onChangeText={setPayRemarks}
                         />
-
-                        <View style={styles.quickAmounts}>
-                            {data.pending_amount > 0 && (
-                                <TouchableOpacity
-                                    style={styles.quickBtn}
-                                    onPress={() => setPayAmount(String(data.pending_amount))}
-                                >
-                                    <Text style={styles.quickBtnText}>Full: {formatCurrency(data.pending_amount)}</Text>
-                                </TouchableOpacity>
-                            )}
-                            {data.pending_amount > 0 && (
-                                <TouchableOpacity
-                                    style={styles.quickBtn}
-                                    onPress={() => setPayAmount(String(Math.round(data.pending_amount / 2)))}
-                                >
-                                    <Text style={styles.quickBtnText}>Half: {formatCurrency(data.pending_amount / 2)}</Text>
-                                </TouchableOpacity>
-                            )}
-                        </View>
 
                         <View style={styles.modalButtons}>
                             <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowPaymentModal(false)}>
@@ -530,6 +594,12 @@ const styles = StyleSheet.create({
     paymentRefText: { fontSize: 11, color: '#6B7280' },
     paymentRemarks: { fontSize: 11, color: '#9CA3AF', marginTop: 4, fontStyle: 'italic' },
     paymentRecordedBy: { fontSize: 10, color: '#9CA3AF', marginTop: 2 },
+    employeeTag: {
+        flexDirection: 'row', alignItems: 'center', gap: 4,
+        backgroundColor: '#6366F1', paddingHorizontal: 8, paddingVertical: 3,
+        borderRadius: 10,
+    },
+    employeeTagText: { color: '#fff', fontSize: 10, fontWeight: '700' },
     // Modal
     modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
     modalContainer: { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '85%' },
@@ -542,9 +612,27 @@ const styles = StyleSheet.create({
     },
     pickerBox: { borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10, overflow: 'hidden' },
     pickerInner: { height: 50 },
+    // Old single-line quick-fill buttons (Full/Half) replaced by the chip
+    // preset row above the Amount field — kept the styles below for any
+    // lingering uses, but they're no longer rendered in this screen.
     quickAmounts: { flexDirection: 'row', gap: 8, marginTop: 12 },
     quickBtn: { backgroundColor: '#EEF2FF', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
     quickBtnText: { color: '#6366F1', fontSize: 12, fontWeight: '600' },
+    presetRow: {
+        flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4,
+    },
+    presetChip: {
+        flexGrow: 1, minWidth: '22%',
+        paddingHorizontal: 10, paddingVertical: 8,
+        borderRadius: 10, borderWidth: 1,
+        borderColor: '#E5E7EB', backgroundColor: '#F9FAFB',
+        alignItems: 'center',
+    },
+    presetChipActive: { borderColor: '#6366F1', backgroundColor: '#EEF2FF' },
+    presetChipLabel: { fontSize: 12, fontWeight: '700', color: '#374151' },
+    presetChipLabelActive: { color: '#6366F1' },
+    presetChipSub: { fontSize: 10, color: '#9CA3AF', marginTop: 2 },
+    presetChipSubActive: { color: '#4F46E5' },
     modalButtons: { flexDirection: 'row', gap: 12, marginTop: 20 },
     cancelBtn: {
         flex: 1, paddingVertical: 14, borderRadius: 12, borderWidth: 1,
