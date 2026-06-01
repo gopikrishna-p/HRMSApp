@@ -22,6 +22,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import RNFS from 'react-native-fs';
+import ReactNativeBlobUtil from 'react-native-blob-util';
 import ApiService from '../../services/api.service';
 import { formatLocalDate } from '../../utils/dateFormat';
 import showToast from '../../utils/Toast';
@@ -309,17 +310,21 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
     // Save the exported PDF/Excel to the device's public Downloads folder so
     // the user can open it directly from their file-manager / Files app.
     //
-    // - Android < 10 (API < 29): WRITE_EXTERNAL_STORAGE permission is required
-    //   before writing to /storage/emulated/0/Download. We prompt for it.
-    // - Android 10–12 (API 29–32): scoped storage is in effect; writing to the
-    //   public Downloads folder still works (it's a "well-known" public dir).
-    //   We optionally request WRITE_EXTERNAL_STORAGE for backward compatibility.
-    // - Android 13+ (API 33+): WRITE_EXTERNAL_STORAGE is a no-op; the app can
-    //   write to the public Downloads folder for its own files without it.
+    // On a modern Android target (this app targets SDK 35), scoped storage is
+    // fully enforced and `requestLegacyExternalStorage` is ignored, so a raw
+    // RNFS.writeFile() to /storage/emulated/0/Download fails with EACCES. The
+    // only supported way to put a file into the public Downloads folder is via
+    // MediaStore, which we reach through react-native-blob-util's
+    // MediaCollection.copyToMediaStore (Android API 29+).
     //
-    // If the public Downloads write fails for any reason, we fall back to the
-    // app's private external dir (the old behavior) so the user still gets the
-    // file — and the alert tells them where it ended up.
+    // - Android 10+ (API 29+): write a temp file to app cache, then copy it
+    //   into MediaStore's Download collection. No runtime permission needed.
+    // - Android 9 and below (API < 29): MediaStore copy isn't available; we
+    //   request WRITE_EXTERNAL_STORAGE and write straight to Downloads.
+    // - iOS: no public Downloads folder — save in app docs.
+    //
+    // If anything fails we fall back to the app's private external dir so the
+    // user still gets the file — and the alert tells them where it ended up.
     const downloadFile = async (base64Data, fileName, mimeType) => {
         const base64Content = base64Data.replace(/^data:.*?;base64,/, '');
 
@@ -346,35 +351,72 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                 return filePath;
             }
 
-            // Android: prompt for legacy storage permission only on API < 33.
-            if (Platform.Version < 33) {
+            // Android 10+ (API 29+): use MediaStore via react-native-blob-util.
+            if (Platform.Version >= 29) {
+                // MediaStore requires a valid mimeType — derive one from the
+                // file extension if the API didn't return a usable content_type.
+                const lower = (fileName || '').toLowerCase();
+                const resolvedMime = mimeType
+                    || (lower.endsWith('.xlsx') ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                        : lower.endsWith('.xls') ? 'application/vnd.ms-excel'
+                        : lower.endsWith('.pdf') ? 'application/pdf'
+                        : lower.endsWith('.csv') ? 'text/csv'
+                        : 'application/octet-stream');
+
+                // Write to a temp file in app cache first, then hand it to MediaStore.
+                const tempPath = `${ReactNativeBlobUtil.fs.dirs.CacheDir}/${fileName}`;
+                await ReactNativeBlobUtil.fs.writeFile(tempPath, base64Content, 'base64');
                 try {
-                    const granted = await PermissionsAndroid.request(
-                        PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
+                    await ReactNativeBlobUtil.MediaCollection.copyToMediaStore(
                         {
-                            title: 'Save to Downloads',
-                            message: 'HRMS needs permission to save your exported file to your Downloads folder.',
-                            buttonPositive: 'Allow',
-                            buttonNegative: 'Cancel',
-                        }
+                            name: fileName,
+                            parentFolder: '',
+                            mimeType: resolvedMime,
+                        },
+                        'Download',
+                        tempPath,
                     );
-                    if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-                        // Fall back so the user still gets the file.
-                        const fp = await writeToFallback();
-                        Alert.alert(
-                            'Saved to App Storage',
-                            `Storage permission was denied, so we saved the file to the app's private folder instead:\n\n${fileName}`,
-                        );
-                        return fp;
-                    }
-                } catch (_) {
-                    // PermissionsAndroid throws on misconfigured environments —
-                    // continue and let the write attempt either succeed or fail
-                    // through to the catch block.
+                } finally {
+                    // Clean up the temp copy regardless of outcome.
+                    ReactNativeBlobUtil.fs.unlink(tempPath).catch(() => {});
                 }
+
+                Alert.alert(
+                    'Export Successful',
+                    `Saved to Downloads:\n${fileName}\n\nOpen any file manager (or the Files / Downloads app) to find it.`,
+                    [{ text: 'OK' }]
+                );
+                showToast({ type: 'success', text1: 'Saved to Downloads', text2: fileName });
+                return `Download/${fileName}`;
             }
 
-            // Write directly into the public Downloads folder.
+            // Android 9 and below (API < 29): legacy storage. Request permission
+            // and write straight to the public Downloads folder.
+            try {
+                const granted = await PermissionsAndroid.request(
+                    PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
+                    {
+                        title: 'Save to Downloads',
+                        message: 'HRMS needs permission to save your exported file to your Downloads folder.',
+                        buttonPositive: 'Allow',
+                        buttonNegative: 'Cancel',
+                    }
+                );
+                if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+                    const fp = await writeToFallback();
+                    Alert.alert(
+                        'Saved to App Storage',
+                        `Storage permission was denied, so we saved the file to the app's private folder instead:\n\n${fileName}`,
+                    );
+                    showToast({ type: 'warning', text1: 'Saved to app storage', text2: fileName });
+                    return fp;
+                }
+            } catch (_) {
+                // PermissionsAndroid throws on misconfigured environments —
+                // continue and let the write attempt either succeed or fail
+                // through to the catch block.
+            }
+
             const downloadsDir = RNFS.DownloadDirectoryPath;
             const filePath = `${downloadsDir}/${fileName}`;
             await RNFS.writeFile(filePath, base64Content, 'base64');

@@ -5,6 +5,8 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
+import { toastConfig } from './config/toastConfig';
+
 import { AuthProvider } from './context/AuthContext';
 import AppNavigator from './navigation/AppNavigator';
 import { theme } from './theme/theme';
@@ -53,7 +55,7 @@ const App = () => {
                     <AuthProvider>
                         <StatusBar barStyle="light-content" />
                         <AppNavigator />
-                        <Toast />
+                        <Toast config={toastConfig} />
                     </AuthProvider>
                 </PaperProvider>
             </SafeAreaProvider>
