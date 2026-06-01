@@ -1081,6 +1081,100 @@ class ApiService {
 
 
     /* -------------------------
+     * EMPLOYEE ONBOARDING
+     *
+     * Admin-only flow that replaces the Excel-by-email onboarding loop.
+     * See PART 4 of the deepgridhrms plan file for backend design.
+     * -----------------------*/
+
+    /**
+     * Admin creates a new onboarding invitation. Returns the magic link
+     * (in case the SMTP email silently fails — admin can copy + paste).
+     * Uses: create_onboarding_invitation
+     */
+    createOnboardingInvitation({ invitation_email, first_name, last_name, company, department, designation }) {
+        return this.post(m('create_onboarding_invitation'), {
+            invitation_email,
+            first_name: first_name || null,
+            last_name: last_name || null,
+            company: company || null,
+            department: department || null,
+            designation: designation || null,
+        });
+    }
+
+    /**
+     * Regenerate the magic token + re-send the email. Used when the
+     * original link expired or the new hire never received it.
+     * Uses: resend_onboarding_invitation
+     */
+    resendOnboardingInvitation(name) {
+        return this.post(m('resend_onboarding_invitation'), { name });
+    }
+
+    /**
+     * Cancel an invitation (blanks the token so the public link stops
+     * working). Use when the hire fell through.
+     * Uses: cancel_onboarding_invitation
+     */
+    cancelOnboardingInvitation(name, reason = null) {
+        return this.post(m('cancel_onboarding_invitation'), { name, reason });
+    }
+
+    /**
+     * List Employee Onboarding Requests for the admin UI. Returns records
+     * grouped by status counts (for filter chips).
+     * Uses: get_onboarding_requests
+     */
+    getOnboardingRequests({ status = null, limit = 200 } = {}) {
+        return this.get(m('get_onboarding_requests'), { status, limit });
+    }
+
+    /**
+     * Detail view of a single Onboarding Request (includes invitation_link
+     * for active rows so admin can copy it).
+     * Uses: get_onboarding_request_detail
+     */
+    getOnboardingRequestDetail(name) {
+        return this.get(m('get_onboarding_request_detail'), { name });
+    }
+
+    /**
+     * THE one-shot approval. Backend atomically creates User + Employee +
+     * Salary Structure Assignment + Leave Policy Assignment.
+     * Uses: approve_onboarding_request
+     *
+     * @param {Object} payload - all admin-fill fields
+     */
+    approveOnboardingRequest(payload) {
+        return this.post(m('approve_onboarding_request'), {
+            name: payload.name,
+            company: payload.company,
+            department: payload.department,
+            designation: payload.designation,
+            date_of_joining: payload.date_of_joining,
+            default_shift: payload.default_shift,
+            holiday_list: payload.holiday_list,
+            salary_structure: payload.salary_structure,
+            base: payload.base,
+            variable: payload.variable,
+            leave_policy: payload.leave_policy,
+            company_email: payload.company_email,
+            branch: payload.branch || null,
+            reports_to: payload.reports_to || null,
+        });
+    }
+
+    /**
+     * Reject a submitted onboarding with a reason.
+     * Uses: reject_onboarding_request
+     */
+    rejectOnboardingRequest(name, reason) {
+        return this.post(m('reject_onboarding_request'), { name, reason });
+    }
+
+
+    /* -------------------------
      * EXPENSE CLAIMS
      * -----------------------*/
     

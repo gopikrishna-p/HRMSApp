@@ -192,16 +192,38 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
                 </View>
             </View>
             
+            {/* Show monthly Earnings + Deductions (always computed from the
+                Salary Structure). Base/Variable are the raw Assignment fields
+                which are often 0 for structures that use fixed-amount earning
+                rows, so we only render them when non-zero to avoid showing
+                misleading ₹0 chips. */}
             <View style={styles.cardFooter}>
                 <View style={styles.salaryRow}>
-                    <Text style={styles.salaryLabel}>Base:</Text>
-                    <Text style={styles.salaryValue}>{formatCurrency(item.base)}</Text>
+                    <Text style={styles.salaryLabel}>Earnings:</Text>
+                    <Text style={styles.salaryValue}>{formatCurrency(item.total_earnings)}</Text>
                 </View>
                 <View style={styles.salaryRow}>
-                    <Text style={styles.salaryLabel}>Variable:</Text>
-                    <Text style={styles.salaryValue}>{formatCurrency(item.variable)}</Text>
+                    <Text style={styles.salaryLabel}>Deductions:</Text>
+                    <Text style={styles.salaryValue}>{formatCurrency(item.total_deductions)}</Text>
                 </View>
             </View>
+
+            {(Number(item.base) > 0 || Number(item.variable) > 0) ? (
+                <View style={styles.cardFooter}>
+                    {Number(item.base) > 0 ? (
+                        <View style={styles.salaryRow}>
+                            <Text style={styles.salaryLabel}>Base:</Text>
+                            <Text style={styles.salaryValueMuted}>{formatCurrency(item.base)}</Text>
+                        </View>
+                    ) : null}
+                    {Number(item.variable) > 0 ? (
+                        <View style={styles.salaryRow}>
+                            <Text style={styles.salaryLabel}>Variable:</Text>
+                            <Text style={styles.salaryValueMuted}>{formatCurrency(item.variable)}</Text>
+                        </View>
+                    ) : null}
+                </View>
+            ) : null}
 
             {item.from_date ? (
                 <View style={styles.effectiveDateRow}>
@@ -594,6 +616,11 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '600',
         color: colors.textPrimary,
+    },
+    salaryValueMuted: {
+        fontSize: 13,
+        fontWeight: '500',
+        color: colors.textSecondary,
     },
     structureBadge: {
         position: 'absolute',

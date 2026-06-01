@@ -50,6 +50,10 @@ import ProjectTasksScreen from '../screens/admin/ProjectTasksScreen';
 import AdminNotifications from '../screens/admin/AdminNotifications';
 import AdminDailyTasksScreen from '../screens/admin/AdminDailyTasksScreen';
 
+import EmployeeOnboardingListScreen from '../screens/admin/EmployeeOnboardingListScreen';
+import EmployeeOnboardingDetailScreen from '../screens/admin/EmployeeOnboardingDetailScreen';
+import CreateOnboardingInvitationScreen from '../screens/admin/CreateOnboardingInvitationScreen';
+
 const Stack = createNativeStackNavigator();
 
 const AdminNavigator = () => {
@@ -113,6 +117,10 @@ const AdminNavigator = () => {
             <Stack.Screen name="AdminSalaryTracker" component={AdminSalaryTrackerScreen} options={{ title: 'Salary Tracker' }} />
             <Stack.Screen name="AdminSalaryTrackerDetail" component={AdminSalaryTrackerDetailScreen} options={{ title: 'Salary Detail' }} />
             <Stack.Screen name="AdminDailyTasksScreen" component={AdminDailyTasksScreen} options={{ headerShown: false }} />
+
+            <Stack.Screen name="EmployeeOnboardingList" component={EmployeeOnboardingListScreen} options={{ title: 'Employee Onboarding' }} />
+            <Stack.Screen name="EmployeeOnboardingDetail" component={EmployeeOnboardingDetailScreen} options={{ title: 'Onboarding Request' }} />
+            <Stack.Screen name="CreateOnboardingInvitation" component={CreateOnboardingInvitationScreen} options={{ title: 'New Invitation' }} />
         </Stack.Navigator>
     );
 };

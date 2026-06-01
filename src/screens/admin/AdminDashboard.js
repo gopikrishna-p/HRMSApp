@@ -49,6 +49,7 @@ const AdminDashboard = ({ navigation }) => {
         compLeaveApprovals: 0,
         notifications: 0,
     });
+    const [pendingOnboarding, setPendingOnboarding] = useState(0);
 
     // Leave balance state for admin (if they are also an employee)
     const [leaveBalance, setLeaveBalance] = useState({
@@ -89,6 +90,21 @@ const AdminDashboard = ({ navigation }) => {
         }
     };
 
+    const fetchPendingOnboarding = async () => {
+        try {
+            const response = await ApiService.getOnboardingRequests({ status: 'Submitted', limit: 50 });
+            if (!isApiSuccess(response)) {
+                setPendingOnboarding(0);
+                return;
+            }
+            const data = extractFrappeData(response, {});
+            const list = Array.isArray(data?.requests) ? data.requests : [];
+            setPendingOnboarding(list.length);
+        } catch (e) {
+            setPendingOnboarding(0);
+        }
+    };
+
     useEffect(() => {
         fetchDashboardData();
         
@@ -113,6 +129,7 @@ const AdminDashboard = ({ navigation }) => {
                 fetchPendingApprovals(),
                 fetchLeaveBalance(),
                 fetchPendingSettlements(),
+                fetchPendingOnboarding(),
             ]);
         } catch (error) {
             console.error('Dashboard load error:', error);
@@ -562,6 +579,14 @@ const AdminDashboard = ({ navigation }) => {
                 <Section title="Employee Management" icon="users-cog" tint="#EC4899">
                     <ListItem title="Employee Management" subtitle="Manage employee records" leftIcon="users"
                         tint="#EC4899" onPress={() => navigation.navigate('EmployeeManagement')} />
+                    <ListItem
+                        title="Employee Onboarding"
+                        subtitle="Invite new hires & approve onboarding submissions"
+                        leftIcon="user-plus"
+                        badge={pendingOnboarding || null}
+                        tint="#EC4899"
+                        onPress={() => navigation.navigate('EmployeeOnboardingList')}
+                    />
                 </Section>
 
                 <Section title="Payroll & Salary" icon="money-check-alt" tint="#8E44AD">

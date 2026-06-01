@@ -868,13 +868,11 @@ const CompApprovalScreen = ({ navigation }) => {
 
     return (
         <View style={styles.container}>
-            {/* My Comp-Off Button */}
-            <TouchableOpacity 
-                style={styles.myCompOffButton}
-                onPress={() => navigation.navigate('MyCompensatoryLeave')}
-            >
-                <Text style={styles.myCompOffButtonText}>📋 Apply My Comp-Off</Text>
-            </TouchableOpacity>
+            {/* "Apply My Comp-Off" button removed — was a duplicate of the
+                dashboard's My Self-Service → Comp-Off Request entry (both
+                navigated to MyCompensatoryLeave). This screen now focuses on
+                managing OTHER employees' comp-off requests; admin's own path
+                lives on AdminDashboard → My Self-Service. */}
 
             {/* Header Tabs */}
             <View style={styles.tabBar}>
@@ -936,26 +934,8 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: colors.background || '#F5F5F5',
     },
-    myCompOffButton: {
-        backgroundColor: colors.primary || '#007AFF',
-        paddingVertical: 12,
-        paddingHorizontal: 16,
-        marginHorizontal: 12,
-        marginTop: 12,
-        marginBottom: 8,
-        borderRadius: 10,
-        alignItems: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 3,
-    },
-    myCompOffButtonText: {
-        color: colors.white || '#FFFFFF',
-        fontSize: 16,
-        fontWeight: '600',
-    },
+    // myCompOffButton / myCompOffButtonText removed — duplicate of dashboard's
+    // My Self-Service → Comp-Off Request.
     tabBar: {
         flexDirection: 'row',
         backgroundColor: '#FFFFFF',

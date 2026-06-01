@@ -513,13 +513,8 @@ const TravelRequestApproval = ({ navigation, route }) => {
             style={styles.tabContent}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         >
-            {/* My Travel Request Button */}
-            <TouchableOpacity
-                style={styles.myTravelButton}
-                onPress={() => navigation.navigate('MyTravelRequest')}
-            >
-                <Text style={styles.myTravelButtonText}>+ Apply My Travel Request</Text>
-            </TouchableOpacity>
+            {/* "Apply My Travel Request" button removed — duplicate of
+                dashboard's My Self-Service → My Travel Request entry. */}
 
             <View style={styles.applySection}>
                 <Text style={styles.applySectionTitle}>Create Travel Request for Employee</Text>
@@ -1298,25 +1293,8 @@ const styles = StyleSheet.create({
         color: colors.textSecondary,
         marginTop: 6,
     },
-    // Apply Tab Styles
-    myTravelButton: {
-        backgroundColor: colors.success,
-        marginHorizontal: 12,
-        marginTop: 12,
-        paddingVertical: 14,
-        borderRadius: 10,
-        alignItems: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 3,
-    },
-    myTravelButtonText: {
-        color: colors.white,
-        fontSize: 15,
-        fontWeight: '600',
-    },
+    // myTravelButton / myTravelButtonText removed — duplicate of dashboard's
+    // My Self-Service → My Travel Request.
     applySection: {
         padding: 12,
     },

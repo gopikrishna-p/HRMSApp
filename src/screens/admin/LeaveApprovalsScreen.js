@@ -1012,13 +1012,11 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
 
     return (
         <View style={styles.container}>
-            {/* My Leave Button for Admin Self */}
-            <TouchableOpacity
-                style={styles.myLeaveButton}
-                onPress={() => navigation.navigate('MyLeaveApplication')}
-            >
-                <Text style={styles.myLeaveButtonText}>📝 Apply My Leave</Text>
-            </TouchableOpacity>
+            {/* The standalone "Apply My Leave" button was removed — it was a
+                duplicate of the dashboard's My Self-Service → Apply Leave
+                entry (both navigated to MyLeaveApplication). This screen
+                stays focused on managing OTHER employees' leaves; admin self
+                service lives in one place (AdminDashboard → My Self-Service). */}
 
             {/* Tab Navigation */}
             <View style={styles.tabContainer}>
@@ -1073,26 +1071,8 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: colors.background,
     },
-    myLeaveButton: {
-        backgroundColor: colors.primary,
-        paddingVertical: 12,
-        paddingHorizontal: 16,
-        marginHorizontal: 12,
-        marginTop: 12,
-        marginBottom: 8,
-        borderRadius: 10,
-        alignItems: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 3,
-    },
-    myLeaveButtonText: {
-        color: colors.white,
-        fontSize: 16,
-        fontWeight: '600',
-    },
+    // myLeaveButton / myLeaveButtonText removed — see comment near the
+    // render block above. Admin self-service is now centralized on the dashboard.
     tabContainer: {
         flexDirection: 'row',
         backgroundColor: colors.white,
