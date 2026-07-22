@@ -349,7 +349,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
                 setSnack({
                     visible: true,
                     msg: res.success
-                        ? `Bulk checkout: ${res.data?.successful ?? 0} OK, ${res.data?.failed ?? 0} failed`
+                        ? `Bulk checkout: ${res.data?.message?.successful ?? 0} OK, ${res.data?.message?.failed ?? 0} failed`
                         : res.message || 'Bulk checkout failed',
                 });
                 
@@ -372,7 +372,7 @@ const ManualCheckInOutScreen = ({ navigation }) => {
                 setSnack({
                     visible: true,
                     msg: res.success
-                        ? `Bulk update: ${res.data?.successful ?? 0} OK, ${res.data?.failed ?? 0} failed`
+                        ? `Bulk update: ${res.data?.message?.successful ?? 0} OK, ${res.data?.message?.failed ?? 0} failed`
                         : res.message || 'Bulk update failed',
                 });
                 

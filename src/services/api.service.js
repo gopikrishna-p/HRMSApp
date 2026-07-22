@@ -272,11 +272,6 @@ class ApiService {
         return this.get(m('get_all_employees'));
     }
 
-    getEmployeeCount() {
-        // You had this twice in Python; both names mapped to same method name
-        return this.get(m('get_employee_count'));
-    }
-
     getDepartments() {
         return this.get(m('get_departments_list'));
     }
@@ -300,21 +295,7 @@ class ApiService {
         return this.post(m('save_fcm_token'), { token, device_type });
     }
 
-    sendAdminNotification({ docname }) {
-        return this.post(m('send_admin_notification'), { docname });
-    }
-
     // New notification APIs
-    sendAdminBroadcast({ title, body, target_type, target_ids, department_id }) {
-        return this.post(m('send_admin_broadcast'), { 
-            title, 
-            body, 
-            target_type, 
-            target_ids, 
-            department_id 
-        });
-    }
-
     createNotification({ title, message, target_type, target_employees, department }) {
         return this.post(m('create_notification'), {
             title,
@@ -323,10 +304,6 @@ class ApiService {
             target_employees,
             department
         });
-    }
-
-    sendWFHNotification(requestData) {
-        return this.post(m('send_wfh_notification'), requestData);
     }
 
     getNotificationSettings() {
@@ -452,10 +429,6 @@ class ApiService {
         return this.get(m('get_today_attendance'), { date });
     }
 
-    getAttendanceByDate({ date, employee_id, department }) {
-        return this.get(m('get_attendance_by_date'), { date, employee_id, department });
-    }
-
     getAttendanceRecordsForDate({ date }) {
         return this.get(m('get_attendance_records_for_date'), { date });
     }
@@ -534,10 +507,6 @@ class ApiService {
     /* -------------------------
      * ANALYTICS / REPORTS
      * -----------------------*/
-    getAttendanceAnalytics(period = 'week') {
-        return this.get(m('get_attendance_analytics'), { period });
-    }
-
     getAttendanceAnalyticsByRange({ start_date, end_date, department, employee_id }) {
         return this.get(m('get_attendance_analytics_by_date_range'), {
             start_date,
@@ -549,18 +518,6 @@ class ApiService {
 
     getEmployeeStatistics() {
         return this.get(m('get_employee_statistics'));
-    }
-
-    getDepartmentStatistics() {
-        return this.get(m('get_department_statistics'));
-    }
-
-    getAbsentEmployeesList() {
-        return this.get(m('get_absent_employees_list'));
-    }
-
-    getLateArrivalsList() {
-        return this.get(m('get_late_arrivals_list'));
     }
 
     exportAttendanceReport({
@@ -586,21 +543,12 @@ class ApiService {
         return this.get(m('get_leave_applications'), { employee, for_approval, include_balances });
     }
 
-    createLeaveApplication(payload) {
-        // {employee, leave_type, from_date, to_date, half_day, half_day_date, description, leave_approver}
-        return this.post(m('create_leave_application'), payload);
-    }
-
     getLeaveBalanceMap({ employee }) {
         return this.get(m('get_leave_balance_map'), { employee });
     }
 
     getHolidays({ start_date, end_date }) {
         return this.get(m('get_holidays'), { start_date, end_date });
-    }
-
-    getShiftAssignments({ employee, start_date, end_date }) {
-        return this.get(m('get_shift_assignments'), { employee, start_date, end_date });
     }
 
     /**
@@ -634,15 +582,6 @@ class ApiService {
  * @param {Object} params - {start_date, end_date, format, department}
  * @returns {Promise} Response with file download info
  */
-    exportAllEmployeesReport({ start_date, end_date, format = 'pdf', department }) {
-        return this.post(m('export_all_employees_attendance'), {
-            start_date,
-            end_date,
-            export_format: format,
-            department,
-        });
-    }
-
 
 
     /**
@@ -650,14 +589,6 @@ class ApiService {
   * @param {Object} params - {employee_id, start_date, end_date}
   * @returns {Promise} Response with analytics data
   */
-    getEmployeeAttendanceAnalytics({ employee_id, start_date, end_date }) {
-        return this.get(m('get_employee_attendance_analytics'), {
-            employee_id,
-            start_date,
-            end_date,
-        });
-    }
-
     /**
      * Get comprehensive employee analytics (NEW)
      * Single API call for all dashboard metrics
@@ -905,14 +836,6 @@ class ApiService {
      * @param {Object} params - {employee, status_filter, limit}
      * @returns {Promise} Response with historical applications
      */
-    getLeaveHistory(params = {}) {
-        return this.get(m('get_leave_history'), {
-            employee: params.employee || null,
-            status_filter: params.status_filter || null,
-            limit: params.limit || 500
-        });
-    }
-
     /**
      * Get current user's employee ID
      * @returns {Promise} Employee ID

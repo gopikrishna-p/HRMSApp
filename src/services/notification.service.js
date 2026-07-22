@@ -794,58 +794,6 @@ class NotificationService {
     // ==========================================
     // API NOTIFICATIONS
     // ==========================================
-    async sendAdminNotification({ title, body, target_type, target_ids, department_id }) {
-        try {
-            const response = await ApiService.sendAdminNotification({
-                title,
-                body,
-                target_type, // 'all', 'department', 'specific'
-                target_ids,
-                department_id,
-            });
-            
-            return response;
-        } catch (error) {
-            console.error('Error sending admin notification:', error);
-            throw error;
-        }
-    }
-
-    async sendWFHNotification(requestData) {
-        try {
-            if (!this.isInitialized) {
-                console.warn('NotificationService not initialized');
-                return false;
-            }
-
-            const title = 'WFH Request Submitted';
-            const body = `Your WFH request from ${requestData.from_date} to ${requestData.to_date} has been submitted for approval`;
-            
-            await this.showLocalNotification({
-                title,
-                body,
-                data: {
-                    type: 'wfh_request',
-                    request_id: requestData.request_id,
-                    action: 'view_request'
-                },
-                channelId: 'wfh_requests'
-            });
-
-            // Also send to backend for admin notification
-            try {
-                const response = await ApiService.sendWFHNotification(requestData);
-                return response;
-            } catch (error) {
-                console.warn('Failed to send backend WFH notification:', error);
-                return false;
-            }
-        } catch (error) {
-            console.error('Error sending WFH notification:', error);
-            return false;
-        }
-    }
-
     async sendWFHApprovalNotification(isApproved, date, adminComments = '') {
         try {
             if (!this.isInitialized) {
