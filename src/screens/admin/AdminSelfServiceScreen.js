@@ -9,13 +9,12 @@
 // screen so the admin can act on themselves while the management screens
 // (LeaveApprovals "Apply on Behalf", etc.) cover the act-for-others case.
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, ScrollView, RefreshControl, StyleSheet } from 'react-native';
+import React from 'react';
+import { View, ScrollView, StyleSheet } from 'react-native';
 import { Text, useTheme } from 'react-native-paper';
 import Section from '../../components/ui/Section';
 import ListItem from '../../components/ui/ListItem';
 import { useAuth } from '../../context/AuthContext';
-import ApiService, { extractFrappeData, isApiSuccess } from '../../services/api.service';
 import { colors } from '../../theme/colors';
 
 const TINT = '#06B6D4';
@@ -24,39 +23,10 @@ const AdminSelfServiceScreen = ({ navigation }) => {
     const { employee } = useAuth();
     const { custom } = useTheme();
 
-    const [pendingSettlements, setPendingSettlements] = useState(0);
-    const [refreshing, setRefreshing] = useState(false);
-
-    const fetchPendingSettlements = useCallback(async () => {
-        try {
-            if (!employee?.name) return;
-            const response = await ApiService.getMyPendingSettlements({ employee: employee.name });
-            if (!isApiSuccess(response)) {
-                setPendingSettlements(0);
-                return;
-            }
-            const data = extractFrappeData(response, {});
-            setPendingSettlements(Array.isArray(data?.settlements) ? data.settlements.length : 0);
-        } catch (_) {
-            setPendingSettlements(0);
-        }
-    }, [employee?.name]);
-
-    useEffect(() => {
-        fetchPendingSettlements();
-    }, [fetchPendingSettlements]);
-
-    const onRefresh = async () => {
-        setRefreshing(true);
-        await fetchPendingSettlements();
-        setRefreshing(false);
-    };
-
     return (
         <ScrollView
             style={styles.container}
             contentContainerStyle={styles.content}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         >
             <View style={styles.header}>
                 <Text style={styles.headerTitle}>My Self-Service</Text>
@@ -69,7 +39,7 @@ const AdminSelfServiceScreen = ({ navigation }) => {
             <Section title="Leaves & Time Off" icon="umbrella-beach" tint={TINT}>
                 <ListItem
                     title="Apply Leave"
-                    subtitle="Submit your own leave application (regular or compensatory advance)"
+                    subtitle="Submit your own leave application"
                     leftIcon="calendar-plus"
                     tint={TINT}
                     onPress={() => navigation.navigate('MyLeaveApplication')}
@@ -80,14 +50,6 @@ const AdminSelfServiceScreen = ({ navigation }) => {
                     leftIcon="calendar-check"
                     tint={TINT}
                     onPress={() => navigation.navigate('MyCompensatoryLeave')}
-                />
-                <ListItem
-                    title="Pending Settlements"
-                    subtitle="Mode-2 advance leaves awaiting settlement"
-                    leftIcon="hourglass-half"
-                    badge={pendingSettlements || null}
-                    tint={TINT}
-                    onPress={() => navigation.navigate('MyPendingSettlements')}
                 />
                 <ListItem
                     title="My Holiday List"

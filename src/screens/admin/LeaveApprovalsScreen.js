@@ -571,12 +571,6 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
                 </View>
             </View>
 
-            {Number(leave.is_compensatory_advance) === 1 && (
-                <View style={styles.advanceChip}>
-                    <Text style={styles.advanceChipText}>⏳ Compensatory Advance</Text>
-                </View>
-            )}
-
             <View style={styles.leaveDetails}>
                 <View style={styles.detailRow}>
                     <Text style={styles.detailLabel}>Date:</Text>
@@ -1206,20 +1200,6 @@ const styles = StyleSheet.create({
     statusText: {
         fontSize: 10,
         fontWeight: '600',
-    },
-    advanceChip: {
-        alignSelf: 'flex-start',
-        backgroundColor: '#FEF3C7',
-        paddingHorizontal: 8,
-        paddingVertical: 3,
-        borderRadius: 8,
-        marginTop: 8,
-        marginBottom: 4,
-    },
-    advanceChipText: {
-        fontSize: 11,
-        fontWeight: '700',
-        color: '#92400E',
     },
     leaveDetails: {
         marginBottom: 10,

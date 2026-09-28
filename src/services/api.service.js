@@ -947,61 +947,6 @@ class ApiService {
         });
     }
 
-    /**
-     * Submit a Mode-2 (Take-First) compensatory advance leave.
-     * The employee takes the leave on credit and must work a holiday/weekend
-     * in the same calendar month to settle. Backend forfeits unsettled
-     * records at month-end (balance restored, Attendance flipped to Absent).
-     *
-     * Uses: submit_compensatory_advance_leave
-     * @param {Object} data - {employee, leave_type, from_date, to_date, reason, half_day, half_day_date}
-     * @returns {Promise} Response with leave_application name and submission status
-     */
-    submitCompensatoryAdvanceLeave(data) {
-        return this.post(m('submit_compensatory_advance_leave'), {
-            employee: data.employee,
-            leave_type: data.leave_type,
-            from_date: data.from_date,
-            to_date: data.to_date,
-            reason: data.reason || null,
-            half_day: data.half_day || 0,
-            half_day_date: data.half_day_date || null
-        });
-    }
-
-    /**
-     * Get the current employee's pending Mode-2 settlements.
-     * Uses: get_employee_pending_settlements
-     * @param {Object} filters - {employee, month}  (employee defaults to current user; month is optional YYYY-MM-01)
-     * @returns {Promise} Response with settlements list and count
-     */
-    getMyPendingSettlements(filters = {}) {
-        return this.get(m('get_employee_pending_settlements'), {
-            employee: filters.employee || null,
-            month: filters.month || null
-        });
-    }
-
-    /**
-     * Admin-only: list pending Mode-2 settlements across all employees, with
-     * department/employee/status/urgency filters. Backs the AdvanceSettlementsAdmin
-     * screen — lets HR monitor forfeit risk before month-end.
-     *
-     * Uses: get_admin_pending_settlements
-     * @param {Object} filters - {department, employee, status, urgent_only (0|1), month, limit}
-     * @returns {Promise} Response with settlements list, count, and by_status histogram
-     */
-    getAllPendingSettlements(filters = {}) {
-        return this.get(m('get_admin_pending_settlements'), {
-            department: filters.department || null,
-            employee: filters.employee || null,
-            status: filters.status || null,
-            urgent_only: filters.urgent_only ? 1 : 0,
-            month: filters.month || null,
-            limit: filters.limit || 500
-        });
-    }
-
 
     /* -------------------------
      * EMPLOYEE ONBOARDING

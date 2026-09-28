@@ -4,7 +4,6 @@ import {
     View,
     ScrollView,
     StyleSheet,
-    TouchableOpacity,
     RefreshControl,
     Modal,
     FlatList,
@@ -59,35 +58,8 @@ const AdminDashboard = ({ navigation }) => {
         total_balance: 0
     });
 
-    const [pendingSettlements, setPendingSettlements] = useState({ count: 0, earliestDeadline: null });
-
     const handleLogout = async () => {
         await logout();
-    };
-
-    // Fetch the admin's own pending Mode-2 (Compensatory Advance) settlements.
-    // Admin is also an employee, so they can apply a Mode-2 leave on themselves
-    // via the `MyLeaveApplication` route — this card surfaces the deadlines
-    // exactly like the EmployeeDashboard does.
-    const fetchPendingSettlements = async () => {
-        try {
-            if (!employee?.name) return;
-            const response = await ApiService.getMyPendingSettlements({ employee: employee.name });
-            if (!isApiSuccess(response)) {
-                setPendingSettlements({ count: 0, earliestDeadline: null });
-                return;
-            }
-            const data = extractFrappeData(response, {});
-            const list = Array.isArray(data?.settlements) ? data.settlements : [];
-            const earliest = list.reduce((acc, s) => {
-                if (!s.month_end) return acc;
-                if (!acc) return s.month_end;
-                return new Date(s.month_end) < new Date(acc) ? s.month_end : acc;
-            }, null);
-            setPendingSettlements({ count: list.length, earliestDeadline: earliest });
-        } catch (e) {
-            setPendingSettlements({ count: 0, earliestDeadline: null });
-        }
     };
 
     const fetchPendingOnboarding = async () => {
@@ -128,7 +100,6 @@ const AdminDashboard = ({ navigation }) => {
                 fetchDashboardStats(),
                 fetchPendingApprovals(),
                 fetchLeaveBalance(),
-                fetchPendingSettlements(),
                 fetchPendingOnboarding(),
             ]);
         } catch (error) {
@@ -453,60 +424,6 @@ const AdminDashboard = ({ navigation }) => {
                     </View>
                 )}
 
-                {/* My Pending Compensatory Settlements (Mode-2) — admin-as-employee surface */}
-                {pendingSettlements.count > 0 && (() => {
-                    const deadline = pendingSettlements.earliestDeadline
-                        ? new Date(pendingSettlements.earliestDeadline)
-                        : null;
-                    const today = new Date(); today.setHours(0, 0, 0, 0);
-                    const daysLeft = deadline
-                        ? Math.round((deadline - today) / (1000 * 60 * 60 * 24))
-                        : null;
-                    const urgent = daysLeft !== null && daysLeft <= 7;
-                    const accent = urgent ? custom.palette.danger : custom.palette.warning;
-                    return (
-                        <TouchableOpacity
-                            activeOpacity={0.85}
-                            onPress={() => navigation.navigate('MyPendingSettlements')}
-                            style={{
-                                backgroundColor: '#FFF',
-                                padding: 12,
-                                borderRadius: 10,
-                                marginBottom: 14,
-                                borderLeftWidth: 4,
-                                borderLeftColor: accent,
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                                elevation: 2,
-                                shadowColor: '#000',
-                                shadowOpacity: 0.08,
-                                shadowRadius: 3,
-                                shadowOffset: { width: 0, height: 1 },
-                            }}
-                        >
-                            <View style={{
-                                width: 40, height: 40, borderRadius: 10,
-                                backgroundColor: accent + '26',
-                                alignItems: 'center', justifyContent: 'center', marginRight: 10,
-                            }}>
-                                <Icon name="hourglass-half" size={18} color={accent} />
-                            </View>
-                            <View style={{ flex: 1 }}>
-                                <Text style={{ fontSize: 13, fontWeight: '700', color: custom.palette.textPrimary }}>
-                                    {pendingSettlements.count} pending settlement{pendingSettlements.count > 1 ? 's' : ''}
-                                </Text>
-                                <Text style={{ fontSize: 11, color: custom.palette.textSecondary, marginTop: 2 }}>
-                                    {daysLeft !== null
-                                        ? (daysLeft < 0
-                                            ? 'Deadline passed — forfeit imminent'
-                                            : `Settle by ${deadline.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} (${daysLeft} day${daysLeft === 1 ? '' : 's'} left)`)
-                                        : 'Compensatory advance leaves on credit'}
-                                </Text>
-                            </View>
-                            <Icon name="chevron-right" size={14} color="#9CA3AF" />
-                        </TouchableOpacity>
-                    );
-                })()}
 
                 {/* Sections */}
                 <Section title="Attendance Control" icon="clipboard-check" tint={custom.palette.primary}>
@@ -518,15 +435,6 @@ const AdminDashboard = ({ navigation }) => {
                         tint={custom.palette.primary} onPress={() => navigation.navigate('TodayAttendance')} />
                     <ListItem title="All Attendance Analytics List" subtitle="View all employee records" leftIcon="list-alt"
                         tint={custom.palette.primary} onPress={() => navigation.navigate('AllAttendanceAnalyticsScreen')} />
-                </Section>
-
-                <Section title="Analytics & Reports" icon="chart-line" tint={custom.palette.warning}>
-                    <ListItem title="Attendance Analytics" subtitle="Trends, late/early, absences" leftIcon="chart-bar"
-                        tint={custom.palette.warning} onPress={() => navigation.navigate('AttendanceAnalytics')} />
-                    <ListItem title="Today Employee Analytics" subtitle="Real-time counts & heatmap" leftIcon="chart-pie"
-                        tint={custom.palette.warning} onPress={() => navigation.navigate('TodayEmployeeAnalytics')} />
-                    <ListItem title="Reports & Analytics" subtitle="Comprehensive reports" leftIcon="file-alt"
-                        tint={custom.palette.warning} onPress={() => navigation.navigate('Reports')} />
                 </Section>
 
                 <Section title="WFH Policy & Settings" icon="home" tint={custom.palette.success}>
@@ -548,22 +456,18 @@ const AdminDashboard = ({ navigation }) => {
                         tint="#8B5CF6" onPress={() => navigation.navigate('LeaveApprovals')} />
                     <ListItem title="Compensatory Leave Approvals" subtitle="Approve comp leave for holidays" leftIcon="calendar-plus" badge={pendingData.compLeaveApprovals || null}
                         tint="#8B5CF6" onPress={() => navigation.navigate('CompApprovals')} />
-                    <ListItem title="Advance Settlement Monitor" subtitle="Track Mode-2 settlements at forfeit risk" leftIcon="hourglass-half"
-                        tint="#8B5CF6" onPress={() => navigation.navigate('AdvanceSettlementsAdmin')} />
                 </Section>
 
                 {/* Admin is also an employee. The 15-item self-service list (Apply Leave,
                     WFH/OnSite, expense, travel, profile, payroll, work) was getting long and
                     duplicated the "Apply on Behalf" tabs in the management screens, so it now
                     lives on a dedicated AdminSelfServiceScreen — surfaced here as one hero
-                    card. The standalone "Pending Settlements" urgency card above stays as it
-                    is a time-sensitive action surface. */}
+                    card. */}
                 <Section title="My Self-Service" icon="user-circle" tint="#06B6D4">
                     <ListItem
                         title="Open My Self-Service"
                         subtitle="Leaves, attendance, payroll, profile, work — everything for yourself"
                         leftIcon="user-circle"
-                        badge={pendingSettlements.count || null}
                         tint="#06B6D4"
                         onPress={() => navigation.navigate('AdminSelfService')}
                     />

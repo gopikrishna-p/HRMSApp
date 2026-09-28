@@ -33,7 +33,6 @@ const LeaveApplicationScreen = ({ navigation }) => {
     const [halfDayDate, setHalfDayDate] = useState(new Date());
     const [reason, setReason] = useState('');
     const [selectedApprover, setSelectedApprover] = useState('');
-    const [isCompensatoryAdvance, setIsCompensatoryAdvance] = useState(false);
     
     // Date picker controls
     const [showFromDatePicker, setShowFromDatePicker] = useState(false);
@@ -55,23 +54,6 @@ const LeaveApplicationScreen = ({ navigation }) => {
     useEffect(() => {
         loadInitialData();
     }, []);
-
-    // Compensatory Advance (Mode-2) is only relevant for compensatory leave types
-    // with zero balance. If the user changes type or balance refreshes, drop the flag.
-    const isCompType = (type) => !!type && type.toLowerCase().includes('comp');
-    const canTakeCompAdvance = () => {
-        if (!isCompType(selectedLeaveType)) return false;
-        const b = balances[selectedLeaveType];
-        const remaining = Number(b?.balance_leaves ?? 0);
-        return remaining <= 0;
-    };
-
-    useEffect(() => {
-        if (!canTakeCompAdvance() && isCompensatoryAdvance) {
-            setIsCompensatoryAdvance(false);
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedLeaveType, balances]);
 
     const loadInitialData = async () => {
         setLoading(true);
@@ -194,19 +176,15 @@ const LeaveApplicationScreen = ({ navigation }) => {
             return;
         }
 
-        // Mode-2 (Compensatory Advance) skips the client-side balance check —
-        // the leave is taken on credit and the backend enforces eligibility.
-        if (!isCompensatoryAdvance) {
-            const balance = balances[selectedLeaveType];
-            if (balance && balance.balance_leaves !== undefined) {
-                const requestedDays = Math.ceil((toDate - fromDate) / (1000 * 60 * 60 * 24)) + 1;
-                if (balance.balance_leaves < requestedDays) {
-                    Alert.alert(
-                        'Insufficient Balance',
-                        `You only have ${balance.balance_leaves} days remaining for ${selectedLeaveType}`
-                    );
-                    return;
-                }
+        const currentBalance = balances[selectedLeaveType];
+        if (currentBalance && currentBalance.balance_leaves !== undefined) {
+            const requestedDays = Math.ceil((toDate - fromDate) / (1000 * 60 * 60 * 24)) + 1;
+            if (currentBalance.balance_leaves < requestedDays) {
+                Alert.alert(
+                    'Insufficient Balance',
+                    `You only have ${currentBalance.balance_leaves} days remaining for ${selectedLeaveType}`
+                );
+                return;
             }
         }
 
@@ -223,25 +201,13 @@ const LeaveApplicationScreen = ({ navigation }) => {
                 leave_approver: selectedApprover || null
             };
 
-            const response = isCompensatoryAdvance
-                ? await apiService.submitCompensatoryAdvanceLeave({
-                      employee: employeeId,
-                      leave_type: selectedLeaveType,
-                      from_date: leaveData.from_date,
-                      to_date: leaveData.to_date,
-                      reason: leaveData.description,
-                      half_day: leaveData.half_day,
-                      half_day_date: leaveData.half_day_date,
-                  })
-                : await apiService.submitLeave(leaveData);
+            const response = await apiService.submitLeave(leaveData);
 
             if (isApiSuccess(response)) {
                 const result = extractFrappeData(response, {});
                 const days = result.total_leave_days ?? 'N/A';
                 const balance = result.leave_balance ?? 'N/A';
-                const successMsg = isCompensatoryAdvance
-                    ? `Compensatory advance submitted!\nWork a holiday or weekend in the same month to settle, or it will be auto-converted to Absent at month-end.`
-                    : `Leave submitted successfully!\n${days} day(s) requested.\nRemaining balance: ${balance}`;
+                const successMsg = `Leave submitted successfully!\n${days} day(s) requested.\nRemaining balance: ${balance}`;
                 Alert.alert(
                     'Success',
                     successMsg,
@@ -254,7 +220,6 @@ const LeaveApplicationScreen = ({ navigation }) => {
                                 setIsHalfDay(false);
                                 setFromDate(new Date());
                                 setToDate(new Date());
-                                setIsCompensatoryAdvance(false);
                                 // Refresh data
                                 loadLeaveBalances(employeeId);
                                 loadMyLeaves(employeeId);
@@ -364,30 +329,7 @@ const LeaveApplicationScreen = ({ navigation }) => {
                 </View>
             </View>
 
-            {!isCompensatoryAdvance && renderBalanceCard()}
-
-            {/* Mode-2: Compensatory Advance toggle (Take leave on credit) */}
-            {canTakeCompAdvance() && (
-                <TouchableOpacity
-                    style={[styles.checkboxContainer, styles.compAdvanceRow]}
-                    onPress={() => setIsCompensatoryAdvance(!isCompensatoryAdvance)}
-                >
-                    <View style={[styles.checkbox, isCompensatoryAdvance && styles.checkboxChecked]}>
-                        {isCompensatoryAdvance && <Text style={styles.checkmark}>✓</Text>}
-                    </View>
-                    <Text style={styles.checkboxLabel}>Take this on credit (Compensatory Advance)</Text>
-                </TouchableOpacity>
-            )}
-
-            {isCompensatoryAdvance && (
-                <View style={styles.compAdvanceBanner}>
-                    <Text style={styles.compAdvanceBannerTitle}>⚠ You're applying without balance.</Text>
-                    <Text style={styles.compAdvanceBannerText}>
-                        You must work a holiday or weekend in {fromDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })} to settle this leave.
-                        Anything still pending at month-end is auto-converted to Absent and your balance is restored.
-                    </Text>
-                </View>
-            )}
+            {renderBalanceCard()}
 
             {/* From Date */}
             <View style={styles.inputGroup}>
@@ -576,11 +518,6 @@ const LeaveApplicationScreen = ({ navigation }) => {
                                         <Text style={styles.statusText}>{leave.status}</Text>
                                     </View>
                                 </View>
-                                {Number(leave.is_compensatory_advance) === 1 && (
-                                    <View style={styles.compAdvanceChip}>
-                                        <Text style={styles.compAdvanceChipText}>⏳ Compensatory Advance</Text>
-                                    </View>
-                                )}
 
                                 <View style={styles.leaveDetails}>
                                     <Text style={styles.leaveDate}>
@@ -741,44 +678,6 @@ const styles = StyleSheet.create({
     checkboxLabel: {
         fontSize: 15,
         color: colors.textPrimary,
-    },
-    compAdvanceRow: {
-        backgroundColor: colors.warningLight,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        borderRadius: 10,
-    },
-    compAdvanceBanner: {
-        backgroundColor: colors.warningLight,
-        borderLeftWidth: 4,
-        borderLeftColor: colors.warning,
-        padding: 12,
-        borderRadius: 8,
-        marginBottom: 16,
-    },
-    compAdvanceBannerTitle: {
-        fontSize: 13,
-        fontWeight: '700',
-        color: '#92400E',
-        marginBottom: 4,
-    },
-    compAdvanceBannerText: {
-        fontSize: 12,
-        color: '#92400E',
-        lineHeight: 17,
-    },
-    compAdvanceChip: {
-        alignSelf: 'flex-start',
-        backgroundColor: colors.warningLight,
-        paddingHorizontal: 8,
-        paddingVertical: 3,
-        borderRadius: 8,
-        marginTop: 6,
-    },
-    compAdvanceChipText: {
-        fontSize: 11,
-        fontWeight: '700',
-        color: '#92400E',
     },
     textArea: {
         height: 100,

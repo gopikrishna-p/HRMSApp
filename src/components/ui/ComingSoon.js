@@ -2,8 +2,7 @@
 //
 // Reusable placeholder screen for features that are registered in navigation
 // but not yet implemented. Replaces the bare "title + subtitle" stubs that
-// previously rendered for AttendanceAnalytics, TodayEmployeeAnalytics,
-// AttendanceManagement, Reports, Payslip, ForgotPassword.
+// previously rendered for Payslip and ForgotPassword.
 //
 // Phase 4 of ADMIN_EMPLOYEE_PARITY_AUDIT.md. Either remove the dashboard
 // menu items that point to stubs, or route them to this component so admin

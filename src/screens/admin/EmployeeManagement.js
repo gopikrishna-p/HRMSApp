@@ -495,18 +495,6 @@ const EmployeeManagement = ({ navigation }) => {
                                     style={styles.quickActionCard}
                                     onPress={() => {
                                         setDetailsModalVisible(false);
-                                        navigation.navigate('AdvanceSettlementsAdmin', {
-                                            preselectEmployee: employeeDetails.name,
-                                        });
-                                    }}
-                                >
-                                    <Icon name="hourglass-empty" size={18} color={COLORS.primary} />
-                                    <Text style={styles.quickActionLabel}>Mode-2 Settlements</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={styles.quickActionCard}
-                                    onPress={() => {
-                                        setDetailsModalVisible(false);
                                         navigation.navigate('WFHApprovals', {
                                             preselectEmployee: employeeDetails.name,
                                             tab: 'history',
