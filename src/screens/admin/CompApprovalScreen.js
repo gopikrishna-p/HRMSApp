@@ -20,7 +20,7 @@ import Loading from '../../components/common/Loading';
 import Input from '../../components/common/Input';
 import apiService, { isApiSuccess, extractFrappeData, getApiErrorMessage } from '../../services/api.service';
 import { loadAllEmployees } from '../../utils/employeeData';
-import { formatLocalDate } from '../../utils/dateFormat';
+import { formatLocalDate, clampToDateRange } from '../../utils/dateFormat';
 
 const CompApprovalScreen = ({ navigation }) => {
     // State management
@@ -80,6 +80,14 @@ const CompApprovalScreen = ({ navigation }) => {
             fetchStatistics();
         }
     }, [activeTab, filterDepartment, filterEmployee, filterStatus]);
+
+    // Keep the half-day date inside the worked range; the server rejects it otherwise.
+    useEffect(() => {
+        const clamped = clampToDateRange(applyHalfDayDate, applyWorkFromDate, applyWorkEndDate);
+        if (clamped !== applyHalfDayDate) {
+            setApplyHalfDayDate(clamped);
+        }
+    }, [applyHalfDayDate, applyWorkFromDate, applyWorkEndDate]);
 
     const loadDepartments = async () => {
         try {
@@ -276,7 +284,7 @@ const CompApprovalScreen = ({ navigation }) => {
                 );
                 fetchPendingRequests();
             } else {
-                Alert.alert('Error', response.data?.message || `Failed to ${actionType} request`);
+                Alert.alert('Error', getApiErrorMessage(response, `Failed to ${actionType} request`));
             }
         } catch (error) {
             console.error(`${actionType} error:`, error);
@@ -299,7 +307,7 @@ const CompApprovalScreen = ({ navigation }) => {
             Alert.alert('Validation Error', 'Please provide a reason for working on holiday');
             return;
         }
-        if (applyWorkEndDate < applyWorkFromDate) {
+        if (formatLocalDate(applyWorkEndDate) < formatLocalDate(applyWorkFromDate)) {
             Alert.alert('Validation Error', 'Work end date cannot be before start date');
             return;
         }
@@ -345,7 +353,7 @@ const CompApprovalScreen = ({ navigation }) => {
                     ]
                 );
             } else {
-                Alert.alert('Error', response.data?.message || 'Failed to submit comp-off request');
+                Alert.alert('Error', getApiErrorMessage(response, 'Failed to submit comp-off request'));
             }
         } catch (error) {
             console.error('Admin apply comp-off error:', error);
@@ -491,6 +499,8 @@ const CompApprovalScreen = ({ navigation }) => {
                                 value={applyHalfDayDate}
                                 mode="date"
                                 display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                minimumDate={applyWorkFromDate}
+                                maximumDate={applyWorkEndDate}
                                 onChange={(event, date) => {
                                     setShowApplyHalfDayPicker(Platform.OS === 'ios');
                                     if (date) setApplyHalfDayDate(date);

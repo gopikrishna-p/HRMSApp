@@ -18,7 +18,7 @@ import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import { loadAllEmployees } from '../../utils/employeeData';
-import { formatLocalDate } from '../../utils/dateFormat';
+import { formatLocalDate, clampToDateRange } from '../../utils/dateFormat';
 
 const LeaveApprovalsScreen = ({ navigation, route }) => {
     // State
@@ -302,9 +302,9 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             if (response.success && response.data?.message) {
                 const types = Array.isArray(response.data.message) ? response.data.message : [];
                 setLeaveTypes(types);
-                if (types.length > 0 && !applyLeaveType) {
-                    setApplyLeaveType(types[0]);
-                }
+                // Keep the chosen type only if this employee has it; otherwise pick
+                // their first type (a previous employee's type may not apply here).
+                setApplyLeaveType(current => (types.includes(current) ? current : (types[0] || '')));
             } else {
                 setLeaveTypes([]);
             }
@@ -345,6 +345,14 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
         }
     }, [applyForEmployee]);
 
+    // Keep the half-day date inside the chosen range; the server rejects it otherwise.
+    useEffect(() => {
+        const clamped = clampToDateRange(applyHalfDayDate, applyFromDate, applyToDate);
+        if (clamped !== applyHalfDayDate) {
+            setApplyHalfDayDate(clamped);
+        }
+    }, [applyHalfDayDate, applyFromDate, applyToDate]);
+
     const handleAdminSubmitLeave = async () => {
         // Validation
         if (!applyForEmployee) {
@@ -357,7 +365,7 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             return;
         }
 
-        if (applyFromDate > applyToDate) {
+        if (formatLocalDate(applyFromDate) > formatLocalDate(applyToDate)) {
             Alert.alert('Validation Error', 'From date cannot be after To date');
             return;
         }

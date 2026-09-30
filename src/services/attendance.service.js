@@ -256,11 +256,13 @@ class AttendanceService {
             return [];
         }
         
-        // Filter leaves that fall within the date range
+        // Keep approved leaves that fall within the date range. The API also returns
+        // Open and Rejected applications, which are not days on leave.
         const startDate = new Date(start_date);
         const endDate = new Date(end_date);
-        
+
         const filteredLeaves = leaves.filter(leave => {
+            if (leave.status !== 'Approved') return false;
             if (!leave.from_date || !leave.to_date) return false;
             const fromDate = new Date(leave.from_date);
             const toDate = new Date(leave.to_date);

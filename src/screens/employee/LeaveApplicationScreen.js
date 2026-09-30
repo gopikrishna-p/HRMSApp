@@ -17,7 +17,7 @@ import Input from '../../components/common/Input';
 import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
-import { formatLocalDate } from '../../utils/dateFormat';
+import { formatLocalDate, clampToDateRange } from '../../utils/dateFormat';
 
 const LeaveApplicationScreen = ({ navigation }) => {
     // State for form
@@ -54,6 +54,14 @@ const LeaveApplicationScreen = ({ navigation }) => {
     useEffect(() => {
         loadInitialData();
     }, []);
+
+    // Keep the half-day date inside the chosen range; the server rejects it otherwise.
+    useEffect(() => {
+        const clamped = clampToDateRange(halfDayDate, fromDate, toDate);
+        if (clamped !== halfDayDate) {
+            setHalfDayDate(clamped);
+        }
+    }, [halfDayDate, fromDate, toDate]);
 
     const loadInitialData = async () => {
         setLoading(true);
@@ -166,7 +174,7 @@ const LeaveApplicationScreen = ({ navigation }) => {
             return;
         }
 
-        if (fromDate > toDate) {
+        if (formatLocalDate(fromDate) > formatLocalDate(toDate)) {
             Alert.alert('Validation Error', 'From date cannot be after To date');
             return;
         }
@@ -176,18 +184,8 @@ const LeaveApplicationScreen = ({ navigation }) => {
             return;
         }
 
-        const currentBalance = balances[selectedLeaveType];
-        if (currentBalance && currentBalance.balance_leaves !== undefined) {
-            const requestedDays = Math.ceil((toDate - fromDate) / (1000 * 60 * 60 * 24)) + 1;
-            if (currentBalance.balance_leaves < requestedDays) {
-                Alert.alert(
-                    'Insufficient Balance',
-                    `You only have ${currentBalance.balance_leaves} days remaining for ${selectedLeaveType}`
-                );
-                return;
-            }
-        }
-
+        // No client-side balance check: the server counts working days, holidays and
+        // half days correctly and returns "Insufficient leave balance" when needed.
         setLoading(true);
         try {
             const leaveData = {

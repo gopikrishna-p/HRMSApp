@@ -32,4 +32,29 @@ export const formatLocalDate = (date) => {
  */
 export const todayLocalYMD = () => formatLocalDate(new Date());
 
+/**
+ * Keep `date` inside [min, max], comparing calendar days only (time is ignored).
+ * Used to keep a half-day date inside the selected leave / work range, which the
+ * backend requires.
+ *
+ * @param {Date} date
+ * @param {Date} min
+ * @param {Date} max
+ * @returns {Date} `date` itself when already in range (or when min > max, which
+ *   the screen's own validation reports), otherwise `min` or `max`.
+ */
+export const clampToDateRange = (date, min, max) => {
+    if (formatLocalDate(min) > formatLocalDate(max)) {
+        return date;
+    }
+    const day = formatLocalDate(date);
+    if (day < formatLocalDate(min)) {
+        return min;
+    }
+    if (day > formatLocalDate(max)) {
+        return max;
+    }
+    return date;
+};
+
 export default formatLocalDate;

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
     View, 
     Text, 
@@ -16,7 +16,7 @@ import Input from '../../components/common/Input';
 import Button from '../../components/common/Button';
 import Loading from '../../components/common/Loading';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
-import { formatLocalDate } from '../../utils/dateFormat';
+import { formatLocalDate, clampToDateRange } from '../../utils/dateFormat';
 
 const CompensatoryLeaveScreen = ({ navigation }) => {
     // State management
@@ -77,7 +77,10 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
     };
 
     const loadMyRequests = async () => {
-        if (!employeeId) return;
+        if (!employeeId) {
+            setRefreshing(false);
+            return;
+        }
         
         try {
             setLoading(true);
@@ -106,10 +109,20 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
         }
     };
 
-    const onRefresh = useCallback(() => {
+    // Not memoised: a memoised callback kept the first render's loadMyRequests,
+    // which had no employee yet, so the spinner never stopped.
+    const onRefresh = () => {
         setRefreshing(true);
         loadMyRequests();
-    }, []);
+    };
+
+    // Keep the half-day date inside the worked range; the server rejects it otherwise.
+    useEffect(() => {
+        const clamped = clampToDateRange(halfDayDate, workFromDate, workEndDate);
+        if (clamped !== halfDayDate) {
+            setHalfDayDate(clamped);
+        }
+    }, [halfDayDate, workFromDate, workEndDate]);
 
     // formatLocalDate now lives in src/utils/dateFormat.js (imported above) —
     // was duplicated identically in 4 screens before consolidation.
@@ -127,7 +140,7 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
             return;
         }
 
-        if (workEndDate < workFromDate) {
+        if (formatLocalDate(workEndDate) < formatLocalDate(workFromDate)) {
             Alert.alert('Validation Error', 'Work end date cannot be before start date');
             return;
         }
@@ -172,7 +185,7 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
                     ]
                 );
             } else {
-                Alert.alert('Error', response.data?.message || 'Failed to submit request');
+                Alert.alert('Error', getApiErrorMessage(response, 'Failed to submit request'));
             }
         } catch (error) {
             console.error('Submit error:', error);
@@ -200,7 +213,7 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
                                 Alert.alert('Success', 'Request cancelled successfully');
                                 loadMyRequests();
                             } else {
-                                Alert.alert('Error', response.data?.message || 'Failed to cancel request');
+                                Alert.alert('Error', getApiErrorMessage(response, 'Failed to cancel request'));
                             }
                         } catch (error) {
                             Alert.alert('Error', error.message || 'Failed to cancel request');
@@ -309,6 +322,8 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
                                 value={halfDayDate}
                                 mode="date"
                                 display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                minimumDate={workFromDate}
+                                maximumDate={workEndDate}
                                 onChange={(event, date) => {
                                     setShowHalfDayPicker(Platform.OS === 'ios');
                                     if (date) setHalfDayDate(date);
