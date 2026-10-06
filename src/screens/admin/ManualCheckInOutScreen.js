@@ -26,6 +26,7 @@ import { colors } from '../../theme/colors';
 import { formatLocalDate, formatTimeOfDay, toHHMM, timeOnDay } from '../../utils/dateFormat';
 import showToast from '../../utils/Toast';
 import { STATUS_COLORS } from '../../components/admin/AttendanceList';
+import StatusBadge from '../../components/ui/StatusBadge';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -37,15 +38,8 @@ const TABS = [
     { key: 'missing', label: 'Not Marked', icon: 'user-clock' },
 ];
 
-const STATUS = {
-    'Present': { color: STATUS_COLORS.present, label: 'Present' },
-    'Half Day': { color: STATUS_COLORS.present, label: 'Half Day' },
-    'Work From Home': { color: STATUS_COLORS.wfh, label: 'WFH' },
-    'On Site': { color: STATUS_COLORS.onsite, label: 'On Site' },
-    'On Leave': { color: STATUS_COLORS.leave, label: 'On Leave' },
-    'Absent': { color: STATUS_COLORS.absent, label: 'Absent' },
-    'Not Marked': { color: STATUS_COLORS.muted, label: 'Not Marked' },
-};
+// short labels for the status pill; colours come from StatusBadge
+const STATUS_LABELS = { 'Work From Home': 'WFH' };
 const WORK_TYPES = [
     { key: 'Office', label: 'Office', icon: 'building' },
     { key: 'WFH', label: 'WFH', icon: 'home' },
@@ -347,7 +341,6 @@ const ManualCheckInOutScreen = () => {
     const renderRow = (row) => {
         const isMissing = !row.name;
         const isLeave = row.status === 'On Leave';
-        const status = STATUS[row.status] || { color: STATUS_COLORS.muted, label: row.status };
         const checkIn = formatTimeOfDay(row.in_time);
         const checkOut = formatTimeOfDay(row.out_time);
         const hours = formatHours(row.working_hours);
@@ -372,21 +365,7 @@ const ManualCheckInOutScreen = () => {
                         <Text style={styles.employeeName}>{row.employee_name}</Text>
                         <Text style={styles.employeeId}>{row.employee}</Text>
                     </View>
-                    <View style={styles.badgesContainer}>
-                        {row.late_entry ? (
-                            <View style={[styles.badge, styles.badgeLate]}>
-                                <Text style={styles.badgeText}>Late</Text>
-                            </View>
-                        ) : null}
-                        <View style={[styles.badge, { backgroundColor: status.color }]}>
-                            <Text style={styles.badgeText}>{status.label}</Text>
-                        </View>
-                        {!isMissing ? (
-                            <View style={[styles.badge, row.docstatus === 1 ? styles.badgeSubmitted : styles.badgeDraft]}>
-                                <Text style={styles.badgeText}>{row.docstatus === 1 ? 'Submitted' : 'Draft'}</Text>
-                            </View>
-                        ) : null}
-                    </View>
+                    <StatusBadge label={STATUS_LABELS[row.status] || row.status} tone={row.status === 'Work From Home' ? 'purple' : undefined} />
                 </View>
 
                 <View style={styles.divider} />
@@ -413,6 +392,15 @@ const ManualCheckInOutScreen = () => {
                         ) : null}
                     </View>
                 )}
+
+                {!isMissing ? (
+                    <View style={styles.tagRow}>
+                        {row.docstatus === 1
+                            ? <StatusBadge small label="Submitted" icon="check" />
+                            : <StatusBadge small label="Draft" icon="pen" />}
+                        {row.late_entry ? <StatusBadge small label="Late" icon="clock" /> : null}
+                    </View>
+                ) : null}
 
                 {!selectMode && !isLeave ? (
                     <View style={styles.actionRow}>
@@ -798,12 +786,7 @@ const styles = StyleSheet.create({
     checkboxDisabled: { borderColor: colors.border },
     employeeName: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
     employeeId: { fontSize: 11, color: colors.textSecondary, marginTop: 1 },
-    badgesContainer: { flexDirection: 'row', gap: 4, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', flexShrink: 1 },
-    badge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 10 },
-    badgeText: { fontSize: 9.5, color: colors.white, fontWeight: '600' },
-    badgeLate: { backgroundColor: STATUS_COLORS.late },
-    badgeDraft: { backgroundColor: colors.textSecondary },
-    badgeSubmitted: { backgroundColor: STATUS_COLORS.present },
+    tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
     divider: { height: 1, backgroundColor: colors.border, marginVertical: 8 },
     timeContainer: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16, rowGap: 4 },
     timeInfo: { flexDirection: 'row', alignItems: 'center', gap: 6 },

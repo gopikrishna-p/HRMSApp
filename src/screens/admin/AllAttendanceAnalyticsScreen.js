@@ -25,6 +25,7 @@ import { formatLocalDate } from '../../utils/dateFormat';
 import showToast from '../../utils/Toast';
 import AttendanceList, { STATUS_COLORS } from '../../components/admin/AttendanceList';
 import { colors } from '../../theme/colors';
+import StatusBadge from '../../components/ui/StatusBadge';
 
 // Attendance and salary are worked out on the server exactly like payroll
 // (hrms.api.attendance_report): only submitted attendance counts, Leave Without Pay
@@ -553,9 +554,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                         <Text style={styles.cardTitle}>Salary</Text>
                     </View>
                     {hasRows ? (
-                        <View style={[styles.statusBadge, isSlip ? styles.badgeSlip : styles.badgeEstimate]}>
-                            <Text style={styles.statusText}>{isSlip ? 'Payslip' : 'Estimate'}</Text>
-                        </View>
+                        <StatusBadge label={isSlip ? 'Payslip' : 'Estimate'} tone={isSlip ? 'success' : 'warning'} icon={isSlip ? 'file-invoice' : 'calculator'} />
                     ) : null}
                 </View>
                 {hasRows ? (
@@ -880,10 +879,6 @@ const styles = StyleSheet.create({
     cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
     cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     cardTitle: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
-    statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
-    statusText: { fontSize: 10, color: colors.white, fontWeight: '600' },
-    badgeSlip: { backgroundColor: STATUS_COLORS.present },
-    badgeEstimate: { backgroundColor: STATUS_COLORS.late },
     infoCard: {
         flexDirection: 'row',
         alignItems: 'center',

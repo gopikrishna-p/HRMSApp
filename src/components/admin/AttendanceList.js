@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { colors } from '../../theme/colors';
+import StatusBadge from '../ui/StatusBadge';
 
 // Same status colours as Today's Attendance, so a status looks the same on every screen
 export const STATUS_COLORS = {
@@ -16,16 +17,16 @@ export const STATUS_COLORS = {
 };
 
 const STATUS = {
-    'Present': { color: STATUS_COLORS.present, icon: 'check-circle' },
-    'Half Day': { color: STATUS_COLORS.present, icon: 'adjust' },
-    'Work From Home': { color: STATUS_COLORS.wfh, icon: 'home', label: 'WFH' },
-    'On Site': { color: STATUS_COLORS.onsite, icon: 'building' },
-    'Absent': { color: STATUS_COLORS.absent, icon: 'times-circle' },
-    'On Leave': { color: STATUS_COLORS.leave, icon: 'calendar-times' },
-    'Holiday': { color: STATUS_COLORS.holiday, icon: 'calendar-day' },
-    'Not Marked': { color: STATUS_COLORS.muted, icon: 'hourglass-half' },
+    'Present': { color: STATUS_COLORS.present, tone: 'success' },
+    'Half Day': { color: STATUS_COLORS.present, tone: 'success' },
+    'Work From Home': { color: STATUS_COLORS.wfh, tone: 'purple', label: 'WFH' },
+    'On Site': { color: STATUS_COLORS.onsite, tone: 'info' },
+    'Absent': { color: STATUS_COLORS.absent, tone: 'danger' },
+    'On Leave': { color: STATUS_COLORS.leave, tone: 'warning' },
+    'Holiday': { color: STATUS_COLORS.holiday, tone: 'indigo' },
+    'Not Marked': { color: STATUS_COLORS.muted, tone: 'neutral' },
 };
-const DEFAULT_STATUS = { color: STATUS_COLORS.muted, icon: 'question-circle' };
+const DEFAULT_STATUS = { color: STATUS_COLORS.muted, tone: 'neutral' };
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -68,24 +69,7 @@ const DayCard = ({ item }) => {
                     <Text style={styles.dateText}>{day.date}</Text>
                     <Text style={styles.weekdayText}>{day.weekday}</Text>
                 </View>
-                <View style={styles.badgesContainer}>
-                    {item.late_arrival === 'Yes' ? (
-                        <View style={[styles.workTypeBadge, styles.badgeLate]}>
-                            <Icon name="clock" size={9} color={colors.white} />
-                            <Text style={styles.workTypeBadgeText}>Late</Text>
-                        </View>
-                    ) : null}
-                    {item.is_draft ? (
-                        <View style={[styles.workTypeBadge, styles.badgeDraft]}>
-                            <Icon name="pen" size={8} color={colors.white} />
-                            <Text style={styles.workTypeBadgeText}>Draft</Text>
-                        </View>
-                    ) : null}
-                    <View style={[styles.statusBadge, { backgroundColor: status.color }]}>
-                        <Icon name={status.icon} size={9} color={colors.white} />
-                        <Text style={styles.statusText}>{status.label || item.status}</Text>
-                    </View>
-                </View>
+                <StatusBadge label={status.label || item.status} tone={status.tone} />
             </View>
 
             {hasTimes ? (
@@ -110,6 +94,13 @@ const DayCard = ({ item }) => {
                         ) : null}
                     </View>
                 </>
+            ) : null}
+
+            {item.late_arrival === 'Yes' || item.is_draft ? (
+                <View style={styles.tagRow}>
+                    {item.is_draft ? <StatusBadge small label="Draft" icon="pen" /> : null}
+                    {item.late_arrival === 'Yes' ? <StatusBadge small label="Late" icon="clock" /> : null}
+                </View>
             ) : null}
 
             {item.note ? (
@@ -148,13 +139,7 @@ const styles = StyleSheet.create({
     dateInfo: { flex: 1 },
     dateText: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
     weekdayText: { fontSize: 11, color: colors.textSecondary, marginTop: 1 },
-    badgesContainer: { flexDirection: 'row', gap: 4, alignItems: 'center' },
-    workTypeBadge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 8, gap: 3 },
-    workTypeBadgeText: { fontSize: 9, color: colors.white, fontWeight: '600' },
-    badgeLate: { backgroundColor: STATUS_COLORS.late },
-    badgeDraft: { backgroundColor: colors.textSecondary },
-    statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
-    statusText: { fontSize: 10, color: colors.white, fontWeight: '600' },
+    tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
     divider: { height: 1, backgroundColor: colors.border, marginVertical: 8 },
     timeContainer: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16, rowGap: 4 },
     timeInfo: { flexDirection: 'row', alignItems: 'center', gap: 6 },

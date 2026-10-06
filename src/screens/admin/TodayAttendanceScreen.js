@@ -23,6 +23,7 @@ import { colors } from '../../theme/colors';
 import { formatLocalDate, formatTimeOfDay } from '../../utils/dateFormat';
 import showToast from '../../utils/Toast';
 import { STATUS_COLORS } from '../../components/admin/AttendanceList';
+import StatusBadge from '../../components/ui/StatusBadge';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -36,10 +37,10 @@ const TABS = [
 ];
 
 const WORK_TYPE = {
-    'Work From Home': { label: 'WFH', icon: 'home', color: STATUS_COLORS.wfh },
-    'On Site': { label: 'On Site', icon: 'map-marker-alt', color: STATUS_COLORS.onsite },
+    'Work From Home': { label: 'WFH', icon: 'home', tone: 'purple' },
+    'On Site': { label: 'On Site', icon: 'map-marker-alt', tone: 'info' },
 };
-const OFFICE = { label: 'Office', icon: 'building', color: STATUS_COLORS.onsite };
+const OFFICE = { label: 'Office', icon: 'building', tone: 'info' };
 
 const formatHours = (hours) => {
     const h = Number(hours) || 0;
@@ -127,11 +128,7 @@ const TodayAttendanceScreen = () => {
         const checkIn = formatTimeOfDay(item.check_in);
         const checkOut = formatTimeOfDay(item.check_out);
         const hours = formatHours(item.working_hours);
-        const state = checkOut
-            ? { label: 'Complete', color: STATUS_COLORS.present }
-            : data.is_today
-                ? { label: 'Checked in', color: STATUS_COLORS.late }
-                : { label: 'No check-out', color: STATUS_COLORS.absent };
+        const state = checkOut ? 'Complete' : data.is_today ? 'Checked in' : 'No check-out';
         return (
             <>
                 <View style={styles.itemHeader}>
@@ -139,21 +136,7 @@ const TodayAttendanceScreen = () => {
                         <Text style={styles.employeeName}>{item.employee_name}</Text>
                         <Text style={styles.employeeId}>{item.employee_id}{item.department ? ` · ${item.department}` : ''}</Text>
                     </View>
-                    <View style={styles.badgesContainer}>
-                        {item.late ? (
-                            <View style={[styles.badge, styles.badgeLate]}>
-                                <Icon name="clock" size={9} color={colors.white} />
-                                <Text style={styles.badgeText}>Late</Text>
-                            </View>
-                        ) : null}
-                        <View style={[styles.badge, { backgroundColor: type.color }]}>
-                            <Icon name={type.icon} size={9} color={colors.white} />
-                            <Text style={styles.badgeText}>{type.label}</Text>
-                        </View>
-                        <View style={[styles.badge, { backgroundColor: state.color }]}>
-                            <Text style={styles.badgeText}>{state.label}</Text>
-                        </View>
-                    </View>
+                    <StatusBadge label={state} />
                 </View>
                 <View style={styles.divider} />
                 <View style={styles.timeContainer}>
@@ -174,6 +157,10 @@ const TodayAttendanceScreen = () => {
                         </View>
                     ) : null}
                 </View>
+                <View style={styles.tagRow}>
+                    <StatusBadge small label={type.label} tone={type.tone} icon={type.icon} />
+                    {item.late ? <StatusBadge small label="Late" icon="clock" /> : null}
+                </View>
                 {item.note ? <Text style={styles.noteText}>{item.note}</Text> : null}
             </>
         );
@@ -183,13 +170,13 @@ const TodayAttendanceScreen = () => {
         let badge;
         let detail;
         if (activeTab === 'absent') {
-            badge = { label: 'Absent', color: STATUS_COLORS.absent };
+            badge = { label: 'Absent', tone: 'danger', color: STATUS_COLORS.absent };
             detail = { icon: 'exclamation-circle', text: item.reason };
         } else if (activeTab === 'leave') {
-            badge = { label: item.lwp ? 'Unpaid leave' : 'On leave', color: STATUS_COLORS.leave };
+            badge = { label: item.lwp ? 'Unpaid leave' : 'On leave', tone: item.lwp ? 'danger' : 'warning', color: STATUS_COLORS.leave };
             detail = { icon: 'calendar-times', text: `${item.leave_type}${item.half_day ? ' (half day)' : ''}` };
         } else {
-            badge = { label: 'Holiday', color: STATUS_COLORS.holiday };
+            badge = { label: 'Holiday', tone: 'indigo', color: STATUS_COLORS.holiday };
             detail = { icon: 'calendar-day', text: item.holiday_name };
         }
         return (
@@ -199,9 +186,7 @@ const TodayAttendanceScreen = () => {
                         <Text style={styles.employeeName}>{item.employee_name}</Text>
                         <Text style={styles.employeeId}>{item.employee_id}{item.department ? ` · ${item.department}` : ''}</Text>
                     </View>
-                    <View style={[styles.badge, { backgroundColor: badge.color }]}>
-                        <Text style={styles.badgeText}>{badge.label}</Text>
-                    </View>
+                    <StatusBadge label={badge.label} tone={badge.tone} />
                 </View>
                 {detail.text ? (
                     <View style={styles.detailRow}>
@@ -488,10 +473,7 @@ const styles = StyleSheet.create({
     itemHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
     employeeName: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
     employeeId: { fontSize: 11, color: colors.textSecondary, marginTop: 1 },
-    badgesContainer: { flexDirection: 'row', gap: 4, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', flexShrink: 1 },
-    badge: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 10 },
-    badgeLate: { backgroundColor: STATUS_COLORS.late },
-    badgeText: { fontSize: 9.5, color: colors.white, fontWeight: '600' },
+    tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
     divider: { height: 1, backgroundColor: colors.border, marginVertical: 8 },
     timeContainer: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16, rowGap: 4 },
     timeInfo: { flexDirection: 'row', alignItems: 'center', gap: 6 },

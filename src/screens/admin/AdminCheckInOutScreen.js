@@ -26,6 +26,7 @@ import { getAvatarColor, getInitials } from '../../theme/adminStyles';
 import { formatTimeOfDay } from '../../utils/dateFormat';
 import showToast from '../../utils/Toast';
 import { STATUS_COLORS } from '../../components/admin/AttendanceList';
+import StatusBadge from '../../components/ui/StatusBadge';
 
 // Haversine distance in metres
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
@@ -291,20 +292,17 @@ const AdminCheckInOutScreen = () => {
         const checkIn = formatTimeOfDay(today.checkInTime);
         const checkOut = formatTimeOfDay(today.checkOutTime);
         const state = !today.hasCheckedIn
-            ? { label: 'Not checked in', color: colors.textSecondary, icon: 'hourglass-start' }
+            ? { label: 'Not checked in', tone: 'neutral', icon: 'hourglass-start' }
             : !today.hasCheckedOut
-                ? { label: 'Checked in', color: STATUS_COLORS.late, icon: 'user-clock' }
-                : { label: 'Completed', color: STATUS_COLORS.present, icon: 'check-circle' };
+                ? { label: 'Checked in', tone: 'warning', icon: 'user-clock' }
+                : { label: 'Completed', tone: 'success', icon: 'check-circle' };
         return (
             <View style={styles.todayRow}>
                 {statusLoading ? (
                     <ActivityIndicator size="small" color={colors.primary} />
                 ) : (
                     <>
-                        <View style={[styles.badge, { backgroundColor: state.color }]}>
-                            <Icon name={state.icon} size={9} color={colors.white} />
-                            <Text style={styles.badgeText}>{state.label}</Text>
-                        </View>
+                        <StatusBadge label={state.label} tone={state.tone} icon={state.icon} />
                         {checkIn ? (
                             <View style={styles.timeInfo}>
                                 <Icon name="sign-in-alt" size={11} color={STATUS_COLORS.present} />
@@ -601,8 +599,6 @@ const styles = StyleSheet.create({
     personId: { fontSize: 12, color: colors.textSecondary, marginTop: 1 },
 
     todayRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 10 },
-    badge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
-    badgeText: { fontSize: 10, color: colors.white, fontWeight: '600' },
     timeInfo: { flexDirection: 'row', alignItems: 'center', gap: 5 },
     timeText: { fontSize: 12, color: '#374151', fontWeight: '500' },
 
