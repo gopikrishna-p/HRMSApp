@@ -5,28 +5,27 @@
 // (Check In -> Check Out -> done). Office mode needs the device inside the office geofence;
 // the server checks the geofence and WFH / On Site eligibility again.
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-    View,
-    Text,
-    StyleSheet,
-    ScrollView,
-    TouchableOpacity,
-    TextInput,
-    Switch,
-    Alert,
-    ActivityIndicator,
-    RefreshControl,
-} from 'react-native';
-import Icon from 'react-native-vector-icons/FontAwesome5';
+import { View, Text, StyleSheet, Switch, Alert, ActivityIndicator } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import AttendanceService from '../../services/attendance.service';
 import { ensureLocationPermission, getCurrentPosition } from '../../utils/location';
-import { colors } from '../../theme/colors';
-import { getAvatarColor, getInitials } from '../../theme/adminStyles';
 import { formatTimeOfDay } from '../../utils/dateFormat';
 import showToast from '../../utils/Toast';
-import { STATUS_COLORS } from '../../components/admin/AttendanceList';
-import StatusBadge from '../../components/ui/StatusBadge';
+import {
+    Screen,
+    Group,
+    Row,
+    Avatar,
+    Segmented,
+    SearchField,
+    StatusText,
+    Button,
+    IconButton,
+    EmptyState,
+    color,
+    space,
+    type,
+} from '../../components/ds';
 
 // Haversine distance in metres
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
@@ -40,9 +39,9 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 };
 
 const WORK_MODES = [
-    { key: 'Office', label: 'Office', icon: 'building', color: colors.primary },
-    { key: 'WFH', label: 'WFH', icon: 'home', color: STATUS_COLORS.wfh },
-    { key: 'Onsite', label: 'On Site', icon: 'map-marker-alt', color: STATUS_COLORS.onsite },
+    { value: 'Office', label: 'Office' },
+    { value: 'WFH', label: 'WFH' },
+    { value: 'Onsite', label: 'On site' },
 ];
 
 const NO_STATUS = { hasCheckedIn: false, hasCheckedOut: false, checkInTime: null, checkOutTime: null, status: null, workType: null };
@@ -188,7 +187,7 @@ const AdminCheckInOutScreen = () => {
     }, [employeeList, searchQuery]);
 
     // eligibility: own flags for the admin; for kiosk the server decides per employee
-    const wfhAllowed = kioskMode ? Boolean(selectedEmployee?.custom_wfh_eligible) : adminWfhEligible;
+    const wfhAllowed = kioskMode ? Boolean(selectedEmployee?.wfh_today ?? selectedEmployee?.custom_wfh_eligible) : adminWfhEligible;
     const onsiteAllowed = kioskMode ? true : adminOnsiteEligible;
     const modeAllowed = (key) => (key === 'WFH' ? wfhAllowed : key === 'Onsite' ? onsiteAllowed : true);
 
@@ -215,7 +214,7 @@ const AdminCheckInOutScreen = () => {
                 return 'Checking location...';
             }
             if (locationStatus === 'error') {
-                return 'Location unavailable. Tap refresh on the location card.';
+                return 'Location unavailable. Tap Refresh under Location.';
             }
             if (locationStatus === 'outside') {
                 return `${distance} m from the office. Move within ${officeLocation?.radius} m or choose WFH / On Site.`;
@@ -274,7 +273,7 @@ const AdminCheckInOutScreen = () => {
             return;
         }
         if (kioskMode) {
-            const mode = WORK_MODES.find((m) => m.key === workMode)?.label;
+            const mode = WORK_MODES.find((m) => m.value === workMode)?.label;
             Alert.alert('Confirm', `${nextAction} for ${targetName} (${targetId})\nWork mode: ${mode}`, [
                 { text: 'Cancel', style: 'cancel' },
                 { text: 'Confirm', onPress: performAction },
@@ -284,143 +283,71 @@ const AdminCheckInOutScreen = () => {
         }
     };
 
-    // ------------------------------------------------------------------ render pieces
-    const renderToday = () => {
-        if (!targetId) {
-            return null;
+    // ------------------------------------------------------------------ render
+    const checkIn = formatTimeOfDay(today.checkInTime);
+    const checkOut = formatTimeOfDay(today.checkOutTime);
+    const todayState = !today.hasCheckedIn ? 'Not checked in' : !today.hasCheckedOut ? 'Checked in' : 'Completed';
+    const todayDetail = [checkIn && `In ${checkIn}`, checkOut && `Out ${checkOut}`].filter(Boolean).join('  \u00B7  ');
+
+    const location = (() => {
+        if (officeError) {
+            return { title: 'No office location', subtitle: officeError, tone: 'danger' };
         }
-        const checkIn = formatTimeOfDay(today.checkInTime);
-        const checkOut = formatTimeOfDay(today.checkOutTime);
-        const state = !today.hasCheckedIn
-            ? { label: 'Not checked in', tone: 'neutral', icon: 'hourglass-start' }
-            : !today.hasCheckedOut
-                ? { label: 'Checked in', tone: 'warning', icon: 'user-clock' }
-                : { label: 'Completed', tone: 'success', icon: 'check-circle' };
-        return (
-            <View style={styles.todayRow}>
-                {statusLoading ? (
-                    <ActivityIndicator size="small" color={colors.primary} />
-                ) : (
-                    <>
-                        <StatusBadge label={state.label} tone={state.tone} icon={state.icon} />
-                        {checkIn ? (
-                            <View style={styles.timeInfo}>
-                                <Icon name="sign-in-alt" size={11} color={STATUS_COLORS.present} />
-                                <Text style={styles.timeText}>{checkIn}</Text>
-                            </View>
-                        ) : null}
-                        {checkOut ? (
-                            <View style={styles.timeInfo}>
-                                <Icon name="sign-out-alt" size={11} color={STATUS_COLORS.absent} />
-                                <Text style={styles.timeText}>{checkOut}</Text>
-                            </View>
-                        ) : null}
-                    </>
-                )}
-            </View>
-        );
-    };
-
-    const renderPerson = (id, name, subtitle) => (
-        <View style={styles.personRow}>
-            <View style={[styles.avatar, { backgroundColor: getAvatarColor(name) }]}>
-                <Text style={styles.avatarText}>{getInitials(name)}</Text>
-            </View>
-            <View style={styles.flex}>
-                <Text style={styles.personName}>{name}</Text>
-                <Text style={styles.personId}>{subtitle || id}</Text>
-            </View>
-        </View>
-    );
-
-    const renderLocation = () => {
-        if (workMode !== 'Office') {
-            const mode = WORK_MODES.find((m) => m.key === workMode);
-            return (
-                <View style={styles.infoCard}>
-                    <Icon name={mode.icon} size={14} color={mode.color} />
-                    <Text style={styles.infoText}>
-                        {workMode === 'WFH' ? 'Work From Home: no location check.' : 'On Site: your current location is recorded.'}
-                    </Text>
-                </View>
-            );
+        if (locationStatus === 'checking') {
+            return { title: 'Checking location', subtitle: 'Getting your position', tone: 'neutral' };
         }
-        const s = officeError
-            ? { color: STATUS_COLORS.absent, icon: 'exclamation-triangle', text: 'No office location' }
-            : {
-                checking: { color: STATUS_COLORS.late, icon: 'location-arrow', text: 'Checking location...' },
-                inside: { color: STATUS_COLORS.present, icon: 'check-circle', text: 'Inside office area' },
-                outside: { color: STATUS_COLORS.absent, icon: 'times-circle', text: 'Outside office area' },
-                error: { color: STATUS_COLORS.absent, icon: 'exclamation-triangle', text: 'Location unavailable' },
-            }[locationStatus];
-        const progress = officeLocation && distance != null ? Math.min(distance / (officeLocation.radius * 2), 1) : 0;
-        return (
-            <View style={styles.card}>
-                <View style={styles.cardHeader}>
-                    <View style={styles.cardTitleRow}>
-                        <Icon name="map-marked-alt" size={14} color={colors.primary} />
-                        <Text style={styles.cardTitle}>Location</Text>
-                    </View>
-                    <TouchableOpacity
-                        style={styles.iconButton}
-                        onPress={checkGeofence}
-                        disabled={!officeLocation || locationStatus === 'checking'}
-                        activeOpacity={0.8}
-                    >
-                        {locationStatus === 'checking' && officeLocation ? (
-                            <ActivityIndicator size="small" color={colors.primary} />
-                        ) : (
-                            <Icon name="sync-alt" size={13} color={colors.primary} />
-                        )}
-                    </TouchableOpacity>
-                </View>
-                <View style={[styles.locationStatus, { backgroundColor: `${s.color}14`, borderColor: `${s.color}40` }]}>
-                    <Icon name={s.icon} size={18} color={s.color} />
-                    <View style={styles.flex}>
-                        <Text style={[styles.locationTitle, { color: s.color }]}>{s.text}</Text>
-                        <Text style={styles.locationSub}>
-                            {officeError
-                                || locationError
-                                || (distance != null && officeLocation
-                                    ? `${distance} m from ${officeLocation.location_name || 'office'} · allowed ${officeLocation.radius} m`
-                                    : 'Getting your position')}
-                        </Text>
-                    </View>
-                </View>
-                {distance != null && officeLocation && !officeError ? (
-                    <View style={styles.progressBarContainer}>
-                        <View style={[styles.progressBarFill, { width: `${progress * 100}%`, backgroundColor: s.color }]} />
-                    </View>
-                ) : null}
-            </View>
-        );
-    };
+        if (locationStatus === 'error') {
+            return { title: 'Location unavailable', subtitle: locationError, tone: 'danger' };
+        }
+        const where = `${distance} m from ${officeLocation?.location_name || 'the office'}, allowed ${officeLocation?.radius} m`;
+        return locationStatus === 'inside'
+            ? { title: 'Inside the office area', subtitle: where, tone: 'success' }
+            : { title: 'Outside the office area', subtitle: where, tone: 'danger' };
+    })();
 
-    const actionStyle = nextAction === 'Check-In' ? styles.actionCheckIn : nextAction === 'Check-Out' ? styles.actionCheckOut : styles.actionDone;
-    const actionDisabled = busy || !nextAction || Boolean(blockedReason) || statusLoading;
+    const actionTitle = !targetId
+        ? 'Check in'
+        : nextAction === 'Check-In'
+            ? (kioskMode ? `Check in ${targetName}` : 'Check in')
+            : nextAction === 'Check-Out'
+                ? (kioskMode ? `Check out ${targetName}` : 'Check out')
+                : 'Completed for today';
 
-    // ------------------------------------------------------------------ main
     return (
-        <View style={styles.container}>
-            <ScrollView
-                contentContainerStyle={styles.scrollContent}
-                keyboardShouldPersistTaps="handled"
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />}
-            >
-                {/* Who */}
-                <View style={styles.card}>
-                    {kioskMode && selectedEmployee
-                        ? renderPerson(selectedEmployee.name, selectedEmployee.employee_name, `${selectedEmployee.name}${selectedEmployee.department ? ` · ${selectedEmployee.department.replace(' - DG', '')}` : ''}`)
-                        : kioskMode
-                            ? renderPerson('', 'Kiosk mode', 'Choose an employee below')
-                            : renderPerson(adminId, adminName, adminId)}
-                    {renderToday()}
-                    <View style={styles.divider} />
-                    <View style={styles.kioskRow}>
-                        <View style={styles.flex}>
-                            <Text style={styles.kioskTitle}>Kiosk mode</Text>
-                            <Text style={styles.kioskSub}>Check in or out another employee on this device</Text>
-                        </View>
+        <Screen
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            footer={(
+                <View>
+                    {blockedReason ? <Text style={styles.blocked}>{blockedReason}</Text> : null}
+                    <Button
+                        title={actionTitle}
+                        variant={nextAction === 'Check-Out' ? 'dangerSolid' : 'primary'}
+                        icon={nextAction === 'Check-In' ? 'log-in' : nextAction === 'Check-Out' ? 'log-out' : 'check'}
+                        onPress={onActionPress}
+                        loading={busy}
+                        disabled={busy || !nextAction || Boolean(blockedReason) || statusLoading}
+                        full
+                    />
+                </View>
+            )}
+        >
+            <Group title={kioskMode ? 'Kiosk' : 'You'}>
+                {kioskMode && !selectedEmployee ? (
+                    <Row icon="monitor" title="Kiosk mode is on" subtitle="Choose the employee below" />
+                ) : (
+                    <Row
+                        left={<Avatar name={targetName} />}
+                        title={targetName}
+                        subtitle={todayDetail || targetId}
+                        right={statusLoading ? <ActivityIndicator size="small" color={color.textTertiary} /> : <StatusText label={todayState} tone={todayState === 'Not checked in' ? 'neutral' : undefined} />}
+                    />
+                )}
+                <Row
+                    icon="monitor"
+                    title="Kiosk mode"
+                    subtitle="Check in or out another employee on this device"
+                    right={(
                         <Switch
                             value={kioskMode}
                             onValueChange={(val) => {
@@ -428,268 +355,87 @@ const AdminCheckInOutScreen = () => {
                                 setSelectedEmployee(null);
                                 setSearchQuery('');
                             }}
-                            trackColor={{ true: colors.primaryLight, false: colors.border }}
-                            thumbColor={kioskMode ? colors.primary : '#F4F4F5'}
-                        />
-                    </View>
-                </View>
-
-                {/* Kiosk: pick the employee */}
-                {kioskMode ? (
-                    <View style={styles.card}>
-                        <View style={styles.cardHeader}>
-                            <View style={styles.cardTitleRow}>
-                                <Icon name="users" size={14} color={colors.primary} />
-                                <Text style={styles.cardTitle}>Employee</Text>
-                            </View>
-                            {selectedEmployee ? (
-                                <TouchableOpacity
-                                    style={styles.linkButton}
-                                    onPress={() => {
-                                        setSelectedEmployee(null);
-                                        setSearchQuery('');
-                                    }}
-                                    activeOpacity={0.8}
-                                >
-                                    <Text style={styles.linkButtonText}>Change</Text>
-                                </TouchableOpacity>
-                            ) : null}
-                        </View>
-                        {selectedEmployee ? (
-                            <Text style={styles.kioskSub}>Selected. Choose the work mode and tap the button below.</Text>
-                        ) : (
-                            <>
-                                <View style={styles.searchContainer}>
-                                    <Icon name="search" size={13} color={colors.textMuted} />
-                                    <TextInput
-                                        style={styles.searchInput}
-                                        placeholder="Search by name or ID"
-                                        placeholderTextColor={colors.textMuted}
-                                        value={searchQuery}
-                                        onChangeText={setSearchQuery}
-                                    />
-                                </View>
-                                {employeeList.length === 0 ? (
-                                    <ActivityIndicator size="small" color={colors.primary} style={styles.listLoader} />
-                                ) : filteredEmployees.length === 0 ? (
-                                    <Text style={styles.emptyText}>No employees match "{searchQuery}"</Text>
-                                ) : (
-                                    filteredEmployees.map((emp) => (
-                                        <TouchableOpacity
-                                            key={emp.name}
-                                            style={styles.employeeOption}
-                                            onPress={() => setSelectedEmployee(emp)}
-                                            activeOpacity={0.8}
-                                        >
-                                            {renderPerson(emp.name, emp.employee_name, emp.name)}
-                                            <Icon name="chevron-right" size={12} color={colors.textMuted} />
-                                        </TouchableOpacity>
-                                    ))
-                                )}
-                            </>
-                        )}
-                    </View>
-                ) : null}
-
-                {/* Work mode */}
-                <View style={styles.card}>
-                    <View style={styles.cardHeader}>
-                        <View style={styles.cardTitleRow}>
-                            <Icon name="briefcase" size={14} color={colors.primary} />
-                            <Text style={styles.cardTitle}>Work Mode</Text>
-                        </View>
-                    </View>
-                    <View style={styles.modeRow}>
-                        {WORK_MODES.map((m) => {
-                            const active = workMode === m.key;
-                            const allowed = modeAllowed(m.key);
-                            return (
-                                <TouchableOpacity
-                                    key={m.key}
-                                    style={[styles.modeOption, active && { backgroundColor: m.color, borderColor: m.color }, !allowed && styles.disabled]}
-                                    onPress={() => allowed && setWorkMode(m.key)}
-                                    disabled={!allowed}
-                                    activeOpacity={0.8}
-                                >
-                                    <Icon name={m.icon} size={16} color={active ? colors.white : m.color} />
-                                    <Text style={[styles.modeText, active && styles.modeTextActive]}>{m.label}</Text>
-                                </TouchableOpacity>
-                            );
-                        })}
-                    </View>
-                    {!wfhAllowed || !onsiteAllowed ? (
-                        <Text style={styles.kioskSub}>
-                            {[!wfhAllowed && 'WFH', !onsiteAllowed && 'On Site'].filter(Boolean).join(' and ')} not enabled for{' '}
-                            {kioskMode ? (selectedEmployee ? targetName : 'this employee') : 'you'}.
-                        </Text>
-                    ) : null}
-                </View>
-
-                {renderLocation()}
-
-                {/* Action */}
-                <TouchableOpacity
-                    style={[styles.actionButton, actionStyle, actionDisabled && styles.actionDisabled]}
-                    onPress={onActionPress}
-                    disabled={actionDisabled}
-                    activeOpacity={0.85}
-                >
-                    {busy ? (
-                        <ActivityIndicator size="small" color={colors.white} />
-                    ) : (
-                        <Icon
-                            name={nextAction === 'Check-In' ? 'sign-in-alt' : nextAction === 'Check-Out' ? 'sign-out-alt' : 'check-circle'}
-                            size={16}
-                            color={colors.white}
+                            trackColor={{ true: '#C7D2FE', false: '#EAECF0' }}
+                            thumbColor={kioskMode ? color.accent : '#FFFFFF'}
                         />
                     )}
-                    <Text style={styles.actionText}>
-                        {!targetId
-                            ? 'Check In'
-                            : nextAction === 'Check-In'
-                                ? `Check In${kioskMode ? ` ${targetName}` : ''}`
-                                : nextAction === 'Check-Out'
-                                    ? `Check Out${kioskMode ? ` ${targetName}` : ''}`
-                                    : 'Completed for today'}
-                    </Text>
-                </TouchableOpacity>
-                {blockedReason ? (
-                    <View style={styles.hintRow}>
-                        <Icon name="info-circle" size={12} color={colors.textSecondary} />
-                        <Text style={styles.hintText}>{blockedReason}</Text>
+                />
+            </Group>
+
+            {kioskMode ? (
+                selectedEmployee ? (
+                    <Group title="Employee" action="Change" onAction={() => { setSelectedEmployee(null); setSearchQuery(''); }}>
+                        <Row left={<Avatar name={selectedEmployee.employee_name} />} title={selectedEmployee.employee_name}
+                            subtitle={[selectedEmployee.name, (selectedEmployee.department || '').replace(' - DG', '')].filter(Boolean).join('  \u00B7  ')} />
+                    </Group>
+                ) : (
+                    <View style={styles.block}>
+                        <SearchField value={searchQuery} onChangeText={setSearchQuery} placeholder="Search by name or ID" style={styles.search} />
+                        {employeeList.length === 0 ? (
+                            <ActivityIndicator color={color.accent} style={styles.loader} />
+                        ) : filteredEmployees.length === 0 ? (
+                            <EmptyState icon="search" title="No match" message={`No employee matches \u201C${searchQuery}\u201D.`} />
+                        ) : (
+                            <Group>
+                                {filteredEmployees.map((emp) => (
+                                    <Row key={emp.name} left={<Avatar name={emp.employee_name} />} title={emp.employee_name} subtitle={emp.name} onPress={() => setSelectedEmployee(emp)} />
+                                ))}
+                            </Group>
+                        )}
                     </View>
-                ) : null}
-            </ScrollView>
-        </View>
+                )
+            ) : null}
+
+            <Group
+                title="Work mode"
+                footer={!wfhAllowed || !onsiteAllowed
+                    ? `${[!wfhAllowed && 'WFH', !onsiteAllowed && 'On site'].filter(Boolean).join(' and ')} not available ${kioskMode ? (selectedEmployee ? `for ${targetName} today` : 'until an employee is chosen') : 'for you today'}.`
+                    : undefined}
+                flush
+            >
+                <Segmented
+                    options={WORK_MODES}
+                    value={workMode}
+                    onChange={(v) => {
+                        if (modeAllowed(v)) {
+                            setWorkMode(v);
+                        } else {
+                            showToast({ type: 'info', text1: `${WORK_MODES.find((m) => m.value === v)?.label} not available`, text2: v === 'WFH' ? 'Request WFH for today first' : 'Not enabled for this employee' });
+                        }
+                    }}
+                />
+            </Group>
+
+            {workMode === 'Office' ? (
+                <Group title="Location">
+                    <Row
+                        icon="map-pin"
+                        title={location.title}
+                        subtitle={location.subtitle}
+                        right={(
+                            <View style={styles.locationRight}>
+                                <StatusText label={location.tone === 'success' ? 'In range' : location.tone === 'danger' ? 'Blocked' : 'Wait'} tone={location.tone} />
+                                <IconButton name="refresh-cw" onPress={checkGeofence} disabled={!officeLocation || locationStatus === 'checking'} label="Refresh location" />
+                            </View>
+                        )}
+                    />
+                </Group>
+            ) : (
+                <Text style={styles.modeNote}>
+                    {workMode === 'WFH' ? 'Working from home: no location check.' : 'On site: your current location is recorded.'}
+                </Text>
+            )}
+        </Screen>
     );
 };
 
-const SHADOW = {
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-};
-
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: colors.background },
-    scrollContent: { padding: 12, paddingBottom: 32 },
-    flex: { flex: 1 },
-    disabled: { opacity: 0.4 },
-
-    card: {
-        backgroundColor: colors.surface,
-        borderRadius: 10,
-        padding: 12,
-        marginBottom: 10,
-        borderWidth: 1,
-        borderColor: colors.borderLight,
-        ...SHADOW,
-    },
-    cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-    cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    cardTitle: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
-    divider: { height: 1, backgroundColor: colors.border, marginVertical: 10 },
-
-    personRow: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-    avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
-    avatarText: { fontSize: 15, fontWeight: '700', color: colors.white },
-    personName: { fontSize: 15, fontWeight: '600', color: colors.textPrimary },
-    personId: { fontSize: 12, color: colors.textSecondary, marginTop: 1 },
-
-    todayRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 10 },
-    timeInfo: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-    timeText: { fontSize: 12, color: '#374151', fontWeight: '500' },
-
-    kioskRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    kioskTitle: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
-    kioskSub: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
-
-    linkButton: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: colors.primary },
-    linkButtonText: { fontSize: 12, fontWeight: '600', color: colors.primary },
-    searchContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        backgroundColor: colors.background,
-        borderRadius: 10,
-        paddingHorizontal: 12,
-        borderWidth: 1,
-        borderColor: colors.border,
-        marginBottom: 8,
-    },
-    searchInput: { flex: 1, paddingVertical: 9, fontSize: 14, color: colors.textPrimary },
-    listLoader: { marginVertical: 12 },
-    employeeOption: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 8,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.borderLight,
-    },
-    emptyText: { fontSize: 12, color: colors.textMuted, textAlign: 'center', paddingVertical: 12 },
-
-    modeRow: { flexDirection: 'row', gap: 8 },
-    modeOption: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
-        paddingVertical: 12,
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: colors.border,
-        backgroundColor: colors.background,
-    },
-    modeText: { fontSize: 12, fontWeight: '700', color: colors.textPrimary },
-    modeTextActive: { color: colors.white },
-
-    infoCard: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        backgroundColor: '#F0F9FF',
-        padding: 10,
-        borderRadius: 8,
-        marginBottom: 10,
-        borderWidth: 1,
-        borderColor: '#BFDBFE',
-    },
-    infoText: { flex: 1, fontSize: 12, fontWeight: '600', color: '#1E40AF' },
-    iconButton: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: colors.background,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    locationStatus: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 10, borderWidth: 1 },
-    locationTitle: { fontSize: 14, fontWeight: '700' },
-    locationSub: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
-    progressBarContainer: { height: 6, backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden', marginTop: 10 },
-    progressBarFill: { height: '100%', borderRadius: 3 },
-
-    actionButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 10,
-        paddingVertical: 14,
-        borderRadius: 12,
-        marginTop: 4,
-        ...SHADOW,
-    },
-    actionCheckIn: { backgroundColor: STATUS_COLORS.present },
-    actionCheckOut: { backgroundColor: STATUS_COLORS.absent },
-    actionDone: { backgroundColor: colors.textSecondary },
-    actionDisabled: { opacity: 0.5, elevation: 0, shadowOpacity: 0 },
-    actionText: { fontSize: 15, fontWeight: '700', color: colors.white },
-    hintRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, paddingHorizontal: 4 },
-    hintText: { flex: 1, fontSize: 12, color: colors.textSecondary },
+    block: { marginBottom: space.xl },
+    search: { marginBottom: space.md },
+    loader: { marginVertical: space.lg },
+    locationRight: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+    modeNote: { ...type.secondary, paddingHorizontal: space.xs, marginTop: -space.md },
+    blocked: { ...type.secondary, textAlign: 'center', marginBottom: space.sm },
 });
 
 export default AdminCheckInOutScreen;

@@ -1,196 +1,64 @@
 // src/screens/admin/AdminSelfServiceScreen.js
 //
-// Admin's personal-employee surface. Previously a 15-item monolithic section
-// on AdminDashboard; refactored to its own screen with 4 thematic sub-sections
-// after the dashboard outgrew a clean single-screen view.
-//
-// Admins land here from the AdminDashboard "My Self-Service" hero card.
-// Every route here is a `My*` route in AdminNavigator that reuses an employee
-// screen so the admin can act on themselves while the management screens
-// (LeaveApprovals "Apply on Behalf", etc.) cover the act-for-others case.
-
+// The admin's own employee self-service: leave, attendance, pay, expenses and work.
+// Every route here is a `My*` route in AdminNavigator that reuses an employee screen so the
+// admin can act on themselves; acting for others lives in the approval screens ("Apply on behalf").
 import React from 'react';
-import { View, ScrollView, StyleSheet } from 'react-native';
-import { Text, useTheme } from 'react-native-paper';
-import Section from '../../components/ui/Section';
-import ListItem from '../../components/ui/ListItem';
 import { useAuth } from '../../context/AuthContext';
-import { colors } from '../../theme/colors';
-
-const TINT = '#06B6D4';
+import { Screen, Group, Row, Avatar } from '../../components/ds';
 
 const AdminSelfServiceScreen = ({ navigation }) => {
-    const { employee } = useAuth();
-    const { custom } = useTheme();
+    const { employee, user } = useAuth();
+    const go = (route, params) => () => navigation.navigate(route, params);
+    const name = employee?.employee_name || user?.full_name || 'My profile';
+    const profileSubtitle = [employee?.name, employee?.designation].filter(Boolean).join('  ·  ');
 
     return (
-        <ScrollView
-            style={styles.container}
-            contentContainerStyle={styles.content}
-        >
-            <View style={styles.header}>
-                <Text style={styles.headerTitle}>My Self-Service</Text>
-                <Text style={styles.headerSubtitle}>
-                    Everything an employee can do for themselves — leaves, attendance, payroll,
-                    profile and work. To act for another employee, use the management screens.
-                </Text>
-            </View>
+        <Screen>
+            <Group>
+                <Row
+                    left={<Avatar name={name} size={44} />}
+                    title={name}
+                    subtitle={profileSubtitle || 'View and update your profile'}
+                    onPress={go('MyProfile')}
+                />
+            </Group>
 
-            <Section title="Leaves & Time Off" icon="umbrella-beach" tint={TINT}>
-                <ListItem
-                    title="Apply Leave"
-                    subtitle="Submit your own leave application"
-                    leftIcon="calendar-plus"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('MyLeaveApplication')}
-                />
-                <ListItem
-                    title="Comp-Off Request"
-                    subtitle="Earn-first comp-off: work a holiday, claim a leave-day later"
-                    leftIcon="calendar-check"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('MyCompensatoryLeave')}
-                />
-                <ListItem
-                    title="My Holiday List"
-                    subtitle="Your applicable holidays for the year"
-                    leftIcon="calendar-alt"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('MyHolidayList')}
-                />
-            </Section>
+            <Group title="Leave">
+                <Row icon="calendar" title="Apply for leave" onPress={go('MyLeaveApplication')} />
+                <Row icon="repeat" title="Comp-off request" subtitle="Claim leave for a holiday you worked" onPress={go('MyCompensatoryLeave')} />
+                <Row icon="sun" title="Holiday list" onPress={go('MyHolidayList')} />
+            </Group>
 
-            <Section title="Attendance & Schedule" icon="user-clock" tint={TINT}>
-                <ListItem
-                    title="WFH Request"
-                    subtitle="Submit your own work-from-home request"
-                    leftIcon="home"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('MyWFHRequest')}
+            <Group title="Attendance">
+                <Row
+                    icon="clock"
+                    title="My attendance"
+                    onPress={go('AllAttendanceAnalyticsScreen', { preselectEmployee: employee?.name })}
                 />
-                <ListItem
-                    title="On-Site Request"
-                    subtitle="Submit your own on-site duty request"
-                    leftIcon="map-marker-alt"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('MyOnSiteRequest')}
-                />
-                <ListItem
-                    title="My Attendance"
-                    subtitle="View your own attendance history"
-                    leftIcon="history"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('AllAttendanceAnalyticsScreen', {
-                        preselectEmployee: employee?.name,
-                    })}
-                />
-            </Section>
+                <Row icon="home" title="WFH request" onPress={go('MyWFHRequest')} />
+                <Row icon="map-pin" title="On-site request" onPress={go('MyOnSiteRequest')} />
+            </Group>
 
-            <Section title="Payroll & Profile" icon="user-circle" tint={TINT}>
-                <ListItem
-                    title="My Profile"
-                    subtitle="View and update your own profile"
-                    leftIcon="id-card"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('MyProfile')}
+            <Group title="Pay and expenses">
+                <Row icon="layers" title="Salary structure" onPress={go('MySalaryStructure')} />
+                <Row
+                    icon="credit-card"
+                    title="Salary tracker"
+                    subtitle="Request pending salary"
+                    onPress={go('AdminSalaryTracker', { preselectEmployee: employee?.name })}
                 />
-                <ListItem
-                    title="My Expense Claim"
-                    subtitle="Submit your own expense claims"
-                    leftIcon="receipt"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('MyExpenseClaim')}
-                />
-                <ListItem
-                    title="My Travel Request"
-                    subtitle="Submit your own travel requests"
-                    leftIcon="plane"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('MyTravelRequest')}
-                />
-                <ListItem
-                    title="My Salary Tracker"
-                    subtitle="Request your own pending salary"
-                    leftIcon="search-dollar"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('AdminSalaryTracker', {
-                        preselectEmployee: employee?.name,
-                    })}
-                />
-                <ListItem
-                    title="My Salary Structure"
-                    subtitle="Your assigned earnings & deductions"
-                    leftIcon="file-invoice-dollar"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('MySalaryStructure')}
-                />
-            </Section>
+                <Row icon="file-text" title="Expense claims" onPress={go('MyExpenseClaim')} />
+                <Row icon="navigation" title="Travel requests" onPress={go('MyTravelRequest')} />
+            </Group>
 
-            <Section title="Work" icon="briefcase" tint={TINT}>
-                <ListItem
-                    title="My Tasks"
-                    subtitle="Tasks assigned to you across projects"
-                    leftIcon="tasks"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('MyTasks')}
-                />
-                <ListItem
-                    title="My Projects"
-                    subtitle="Projects you're assigned to"
-                    leftIcon="project-diagram"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('MyProjects')}
-                />
-                <ListItem
-                    title="My Work Logs"
-                    subtitle="Your personal time logs across projects"
-                    leftIcon="stopwatch"
-                    tint={TINT}
-                    onPress={() => navigation.navigate('MyLogs')}
-                />
-            </Section>
-
-            <Text style={styles.footnote}>
-                Looking to apply on behalf of another employee? Use the matching Approval
-                screen — each has an "Apply on Behalf" tab.
-            </Text>
-        </ScrollView>
+            <Group title="Work" footer="To apply for another employee, use Apply on behalf in the matching approval screen.">
+                <Row icon="check-square" title="Tasks" onPress={go('MyTasks')} />
+                <Row icon="folder" title="Projects" onPress={go('MyProjects')} />
+                <Row icon="watch" title="Work logs" onPress={go('MyLogs')} />
+            </Group>
+        </Screen>
     );
 };
-
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: colors.background },
-    content: { padding: 12, paddingBottom: 32 },
-    header: {
-        backgroundColor: colors.surface,
-        borderRadius: 12,
-        padding: 14,
-        marginBottom: 12,
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOpacity: 0.06,
-        shadowRadius: 3,
-        shadowOffset: { width: 0, height: 1 },
-    },
-    headerTitle: {
-        fontSize: 18,
-        fontWeight: '800',
-        color: colors.textPrimary,
-    },
-    headerSubtitle: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginTop: 4,
-        lineHeight: 17,
-    },
-    footnote: {
-        marginTop: 16,
-        marginHorizontal: 12,
-        fontSize: 11,
-        color: colors.textDisabled,
-        textAlign: 'center',
-        fontStyle: 'italic',
-    },
-});
 
 export default AdminSelfServiceScreen;

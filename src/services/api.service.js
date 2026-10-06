@@ -1198,7 +1198,10 @@ class ApiService {
             cost_center: travelData.cost_center || null,
             name_of_organizer: travelData.name_of_organizer || null,
             address_of_organizer: travelData.address_of_organizer || null,
-            other_details: travelData.other_details || null
+            other_details: travelData.other_details || null,
+            // JSON strings of the travel legs and cost lines (the server accepts both)
+            itinerary: travelData.itinerary || null,
+            costings: travelData.costings || null
         });
     }
 

@@ -1,24 +1,85 @@
+// src/screens/admin/LeaveApprovalsScreen.js
+//
+// Leave applications for HR: approve or reject open requests, browse decided ones, a summary
+// by status / leave type / department, and applying leave on behalf of an employee.
+// Approve and reject remarks are included in the notification the employee receives.
 import React, { useState, useEffect, useCallback } from 'react';
-import {
-    View,
-    Text,
-    StyleSheet,
-    ScrollView,
-    TouchableOpacity,
-    Alert,
-    RefreshControl,
-    TextInput,
-    Modal,
-    Platform,
-} from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, Switch, Platform } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { Picker } from '@react-native-picker/picker';
-import { colors } from '../../theme/colors';
-import Button from '../../components/common/Button';
-import Loading from '../../components/common/Loading';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
+import showToast from '../../utils/Toast';
 import { loadAllEmployees } from '../../utils/employeeData';
 import { formatLocalDate, clampToDateRange } from '../../utils/dateFormat';
+import {
+    Screen,
+    Group,
+    Row,
+    Avatar,
+    Segmented,
+    Sheet,
+    Button,
+    IconButton,
+    SearchField,
+    Field,
+    TextField,
+    SelectField,
+    StatStrip,
+    StatusText,
+    EmptyState,
+    Loading,
+    Icon,
+    color,
+    space,
+    type,
+    formatShortDate,
+} from '../../components/ds';
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// 'YYYY-MM-DD' (or a 'YYYY-MM-DD HH:MM:SS' timestamp) as a local date, no timezone shift
+const toDate = (value) => {
+    const [y, m, d] = String(value || '').slice(0, 10).split('-').map(Number);
+    return y ? new Date(y, m - 1, d) : null;
+};
+const dayLabel = (value) => {
+    const d = toDate(value);
+    if (!d) {
+        return '–';
+    }
+    const label = `${WEEKDAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}`;
+    return d.getFullYear() === new Date().getFullYear() ? label : `${label} ${d.getFullYear()}`;
+};
+const shortDay = (value) => {
+    const d = toDate(value);
+    return d ? formatShortDate(d) : '–';
+};
+const dateRange = (from, to) => {
+    const sameDay = !to || String(from).slice(0, 10) === String(to).slice(0, 10);
+    return sameDay ? dayLabel(from) : `${dayLabel(from)} – ${dayLabel(to)}`;
+};
+const formatDays = (value) => {
+    if (value === null || value === undefined || value === '') {
+        return null;
+    }
+    const n = Number(value);
+    return Number.isNaN(n) ? null : `${n} ${n === 1 ? 'day' : 'days'}`;
+};
+const leaveDays = (leave) => {
+    const days = formatDays(leave.total_leave_days);
+    if (!leave.half_day) {
+        return days;
+    }
+    return Number(leave.total_leave_days) === 0.5 ? 'Half day' : [days, 'incl. half day'].filter(Boolean).join(', ');
+};
+const shortDept = (dept) => String(dept || '').replace(' - DG', '');
+
+const STATUS_OPTIONS = [
+    { value: '', label: 'All statuses' },
+    { value: 'Approved', label: 'Approved' },
+    { value: 'Rejected', label: 'Rejected' },
+    { value: 'Cancelled', label: 'Cancelled' },
+];
 
 const LeaveApprovalsScreen = ({ navigation, route }) => {
     // State
@@ -28,12 +89,12 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
     // Tab state — deep-links from EmployeeManagement can pass route.params.tab
     // (e.g. 'history') to land directly on the right tab.
     const [activeTab, setActiveTab] = useState(route?.params?.tab || 'pending'); // 'pending', 'history', 'statistics', 'apply'
-    
+
     // Leave applications
     const [pendingLeaves, setPendingLeaves] = useState([]);
     const [historyLeaves, setHistoryLeaves] = useState([]);
     const [statistics, setStatistics] = useState(null);
-    
+
     // Admin Apply Leave Form State
     const [applyForEmployee, setApplyForEmployee] = useState('');
     const [applyLeaveType, setApplyLeaveType] = useState('');
@@ -48,25 +109,32 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
     const [showApplyFromDatePicker, setShowApplyFromDatePicker] = useState(false);
     const [showApplyToDatePicker, setShowApplyToDatePicker] = useState(false);
     const [showApplyHalfDayPicker, setShowApplyHalfDayPicker] = useState(false);
-    
+
     // Filters
     const [selectedDepartment, setSelectedDepartment] = useState('');
     const [selectedEmployee, setSelectedEmployee] = useState('');
     const [historyStatusFilter, setHistoryStatusFilter] = useState('');
-    
+
     // Data for filters
     const [departments, setDepartments] = useState([]);
     const [employees, setEmployees] = useState([]);
-    
-    // Action modal
+
+    // Action sheet: actionType '' shows the details, 'approve' / 'reject' the confirmation step
     const [showActionModal, setShowActionModal] = useState(false);
     const [selectedLeave, setSelectedLeave] = useState(null);
     const [actionType, setActionType] = useState(''); // 'approve' or 'reject'
     const [remarks, setRemarks] = useState('');
     const [rejectionReason, setRejectionReason] = useState('');
 
+    // Presentation only: which option sheet is open, its search text, and the low-balance confirmation
+    const [picker, setPicker] = useState(null); // 'department' | 'employee' | 'status' | 'applyEmployee' | 'leaveType'
+    const [pickerQuery, setPickerQuery] = useState('');
+    const [lowBalance, setLowBalance] = useState(null); // { remaining, requestedDays }
+
     useEffect(() => {
         loadInitialData();
+        // Runs once on mount; loadInitialData is a plain function recreated on every render.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // Deep-link from EmployeeManagement → "View Leave History" passes
@@ -77,6 +145,8 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
         if (target && employees.length > 0 && selectedEmployee !== target) {
             setSelectedEmployee(target);
         }
+        // selectedEmployee is left out on purpose: clearing the filter must not re-apply the deep-link.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [route?.params?.preselectEmployee, employees]);
 
     const loadInitialData = async () => {
@@ -89,7 +159,7 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             ]);
         } catch (error) {
             console.error('Error loading initial data:', error);
-            Alert.alert('Error', 'Failed to load leave approvals data');
+            showToast({ type: 'error', text1: 'Could not load leave requests', text2: error?.message });
         } finally {
             setLoading(false);
         }
@@ -125,22 +195,19 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
                 employee: selectedEmployee || null,
             };
 
-            console.log('📋 Fetching pending leaves with filters:', filters);
             const response = await apiService.getAllLeaves(filters);
-            console.log('📋 Response from getAllLeaves:', response);
-            
+
             if (isApiSuccess(response)) {
                 const result = extractFrappeData(response, { applications: [] });
-                console.log('✅ Pending leaves loaded:', result.applications?.length || 0, 'applications');
                 setPendingLeaves(Array.isArray(result.applications) ? result.applications : []);
             } else {
                 const msg = getApiErrorMessage(response, 'Failed to fetch pending leaves');
-                console.error('❌ Failed to fetch leaves:', msg);
-                Alert.alert('Error', msg);
+                console.error('Failed to fetch pending leaves:', msg);
+                showToast({ type: 'error', text1: 'Could not load pending requests', text2: msg });
                 setPendingLeaves([]);
             }
         } catch (error) {
-            console.error('❌ Error fetching pending leaves:', error);
+            console.error('Error fetching pending leaves:', error);
             setPendingLeaves([]);
         }
     };
@@ -154,8 +221,7 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             };
 
             const response = await apiService.getAllLeaves(filters);
-            console.log('📋 History response:', response);
-            
+
             if (isApiSuccess(response)) {
                 const result = extractFrappeData(response, { applications: [] });
                 // Filter history to exclude pending
@@ -163,16 +229,15 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
                 const history = applications.filter(
                     app => ['Approved', 'Rejected', 'Cancelled'].includes(app.status)
                 );
-                console.log('📋 History leaves loaded:', history.length, 'from', applications.length, 'total');
                 setHistoryLeaves(history);
             } else {
                 const msg = getApiErrorMessage(response, 'Failed to fetch leave history');
-                console.error('❌ Failed to fetch history:', msg);
-                Alert.alert('Error', msg);
+                console.error('Failed to fetch leave history:', msg);
+                showToast({ type: 'error', text1: 'Could not load leave history', text2: msg });
                 setHistoryLeaves([]);
             }
         } catch (error) {
-            console.error('❌ Error fetching history:', error);
+            console.error('Error fetching leave history:', error);
             setHistoryLeaves([]);
         }
     };
@@ -192,6 +257,8 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
         } finally {
             setRefreshing(false);
         }
+        // The fetch functions read exactly the filter state listed here.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTab, selectedDepartment, selectedEmployee, historyStatusFilter]);
 
     const fetchStatistics = async () => {
@@ -217,6 +284,8 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
         } else if (activeTab === 'statistics') {
             fetchStatistics();
         }
+        // Refetch when the tab or a filter changes; the fetch functions read exactly this state.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [activeTab, selectedDepartment, selectedEmployee, historyStatusFilter]);
 
     const openActionModal = (leave, action) => {
@@ -228,11 +297,13 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
     };
 
     const handleApprove = async () => {
-        if (!selectedLeave) return;
+        if (!selectedLeave) {
+            return;
+        }
 
         setLoading(true);
         setShowActionModal(false);
-        
+
         try {
             const response = await apiService.approveLeave(
                 selectedLeave.name,
@@ -240,15 +311,15 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             );
 
             if (response.success) {
-                Alert.alert('Success', 'Leave application approved successfully');
+                showToast({ type: 'success', text1: 'Leave approved', text2: selectedLeave.employee_name });
                 fetchPendingLeaves();
                 setRemarks('');
             } else {
-                Alert.alert('Error', response.message || 'Failed to approve leave');
+                showToast({ type: 'error', text1: 'Not approved', text2: response.message || 'Failed to approve leave' });
             }
         } catch (error) {
             console.error('Error approving leave:', error);
-            Alert.alert('Error', error.message || 'Failed to approve leave');
+            showToast({ type: 'error', text1: 'Not approved', text2: error.message || 'Failed to approve leave' });
         } finally {
             setLoading(false);
             setSelectedLeave(null);
@@ -256,16 +327,18 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
     };
 
     const handleReject = async () => {
-        if (!selectedLeave) return;
+        if (!selectedLeave) {
+            return;
+        }
 
         if (!rejectionReason.trim()) {
-            Alert.alert('Validation Error', 'Rejection reason is required');
+            showToast({ type: 'error', text1: 'Enter a reason for rejecting' });
             return;
         }
 
         setLoading(true);
         setShowActionModal(false);
-        
+
         try {
             const response = await apiService.rejectLeave(
                 selectedLeave.name,
@@ -273,15 +346,15 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             );
 
             if (response.success) {
-                Alert.alert('Success', 'Leave application rejected');
+                showToast({ type: 'success', text1: 'Leave rejected', text2: selectedLeave.employee_name });
                 fetchPendingLeaves();
                 setRejectionReason('');
             } else {
-                Alert.alert('Error', response.message || 'Failed to reject leave');
+                showToast({ type: 'error', text1: 'Not rejected', text2: response.message || 'Failed to reject leave' });
             }
         } catch (error) {
             console.error('Error rejecting leave:', error);
-            Alert.alert('Error', error.message || 'Failed to reject leave');
+            showToast({ type: 'error', text1: 'Not rejected', text2: error.message || 'Failed to reject leave' });
         } finally {
             setLoading(false);
             setSelectedLeave(null);
@@ -289,14 +362,14 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
     };
 
     // ===== ADMIN APPLY LEAVE METHODS =====
-    
+
     const loadLeaveTypesForEmployee = async (employeeId) => {
         if (!employeeId) {
             setLeaveTypes([]);
             setApplyLeaveType('');
             return;
         }
-        
+
         try {
             const response = await apiService.getLeaveTypes(employeeId);
             if (response.success && response.data?.message) {
@@ -319,7 +392,7 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             setLeaveBalances({});
             return;
         }
-        
+
         try {
             const response = await apiService.getLeaveBalances(employeeId);
             if (response.success && response.data?.message) {
@@ -356,22 +429,22 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
     const handleAdminSubmitLeave = async () => {
         // Validation
         if (!applyForEmployee) {
-            Alert.alert('Validation Error', 'Please select an employee');
+            showToast({ type: 'error', text1: 'Select an employee' });
             return;
         }
 
         if (!applyLeaveType) {
-            Alert.alert('Validation Error', 'Please select a leave type');
+            showToast({ type: 'error', text1: 'Select a leave type' });
             return;
         }
 
         if (formatLocalDate(applyFromDate) > formatLocalDate(applyToDate)) {
-            Alert.alert('Validation Error', 'From date cannot be after To date');
+            showToast({ type: 'error', text1: 'The start date is after the end date' });
             return;
         }
 
         if (!applyReason.trim()) {
-            Alert.alert('Validation Error', 'Please provide a reason for leave');
+            showToast({ type: 'error', text1: 'Enter a reason for the leave' });
             return;
         }
 
@@ -380,22 +453,14 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
         if (balance && balance.balance_leaves !== undefined) {
             const requestedDays = Math.ceil((applyToDate - applyFromDate) / (1000 * 60 * 60 * 24)) + 1;
             if (balance.balance_leaves < requestedDays && !applyAutoApprove) {
-                Alert.alert(
-                    'Low Balance Warning',
-                    `Selected employee only has ${balance.balance_leaves} days remaining for ${applyLeaveType}. Continue anyway?`,
-                    [
-                        { text: 'Cancel', style: 'cancel' },
-                        { text: 'Continue', onPress: () => submitAdminLeave() }
-                    ]
-                );
+                // Confirmed in the low-balance sheet, which calls submitAdminLeave on "Submit anyway".
+                setLowBalance({ remaining: balance.balance_leaves, requestedDays });
                 return;
             }
         }
 
         submitAdminLeave();
     };
-
-    // formatLocalDate now lives in src/utils/dateFormat.js (imported above).
 
     const submitAdminLeave = async () => {
         setLoading(true);
@@ -419,38 +484,107 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
                 const selectedEmployeeName = employees.find(e => e.name === applyForEmployee)?.employee_name || applyForEmployee;
                 const days = result.total_leave_days ?? 'N/A';
                 const remainingBalance = result.leave_balance ?? '';
-                
-                Alert.alert(
-                    'Success',
-                    `Leave submitted successfully for ${selectedEmployeeName}!\n${days} day(s) requested.${applyAutoApprove ? ' (Auto-approved)' : ''}${remainingBalance !== '' ? `\nRemaining balance: ${remainingBalance}` : ''}`,
-                    [
-                        {
-                            text: 'OK',
-                            onPress: () => {
-                                // Reset form
-                                setApplyReason('');
-                                setApplyIsHalfDay(false);
-                                setApplyFromDate(new Date());
-                                setApplyToDate(new Date());
-                                // Refresh data
-                                loadLeaveBalancesForEmployee(applyForEmployee);
-                                fetchPendingLeaves();
-                                // Switch to pending tab
-                                setActiveTab('pending');
-                            }
-                        }
-                    ]
-                );
+
+                showToast({
+                    type: 'success',
+                    text1: `Leave submitted for ${selectedEmployeeName}`,
+                    text2: [
+                        formatDays(days),
+                        applyAutoApprove ? 'approved' : 'awaiting approval',
+                        remainingBalance !== '' ? `${formatDays(remainingBalance) || remainingBalance} left` : null,
+                    ].filter(Boolean).join(', '),
+                });
+
+                // Reset form (previously done from the success alert's OK button)
+                setApplyReason('');
+                setApplyIsHalfDay(false);
+                setApplyFromDate(new Date());
+                setApplyToDate(new Date());
+                // Refresh data
+                loadLeaveBalancesForEmployee(applyForEmployee);
+                fetchPendingLeaves();
+                // Switch to pending tab
+                setActiveTab('pending');
             } else {
-                Alert.alert('Error', response.message || 'Failed to submit leave application');
+                showToast({ type: 'error', text1: 'Leave not submitted', text2: response.message || 'Failed to submit leave application' });
             }
         } catch (error) {
             console.error('Error submitting leave:', error);
-            Alert.alert('Error', error.message || 'Failed to submit leave application');
+            showToast({ type: 'error', text1: 'Leave not submitted', text2: error.message || 'Failed to submit leave application' });
         } finally {
             setLoading(false);
         }
     };
+
+    // ===== PRESENTATION HELPERS =====
+
+    const busy = loading && !refreshing;
+    const filtersActive = Boolean(selectedDepartment || selectedEmployee || historyStatusFilter);
+    const canAct = activeTab === 'pending';
+
+    const employeeName = (id) => employees.find((e) => e.name === id)?.employee_name || id;
+    const departmentName = (id) => {
+        const dept = departments.find((d) => d.name === id);
+        return dept ? dept.department_name || dept.name : id;
+    };
+
+    const clearFilters = () => {
+        setSelectedDepartment('');
+        setSelectedEmployee('');
+        setHistoryStatusFilter('');
+    };
+
+    const openPicker = (which) => {
+        setPickerQuery('');
+        setPicker(which);
+    };
+
+    const buildPicker = (which) => {
+        const employeeOptions = employees.map((emp) => ({
+            value: emp.name,
+            label: emp.employee_name || emp.name,
+            subtitle: [emp.name, shortDept(emp.department)].filter(Boolean).join('  ·  '),
+        }));
+        switch (which) {
+            case 'department':
+                return {
+                    title: 'Department',
+                    value: selectedDepartment,
+                    onSelect: setSelectedDepartment,
+                    searchable: departments.length > 10,
+                    options: [
+                        { value: '', label: 'All departments' },
+                        ...departments.map((dept) => ({ value: dept.name, label: dept.department_name || dept.name })),
+                    ],
+                };
+            case 'employee':
+                return {
+                    title: 'Employee',
+                    value: selectedEmployee,
+                    onSelect: setSelectedEmployee,
+                    searchable: true,
+                    options: [{ value: '', label: 'All employees' }, ...employeeOptions],
+                };
+            case 'status':
+                return { title: 'Status', value: historyStatusFilter, onSelect: setHistoryStatusFilter, options: STATUS_OPTIONS };
+            case 'applyEmployee':
+                return { title: 'Employee', value: applyForEmployee, onSelect: setApplyForEmployee, searchable: true, options: employeeOptions };
+            case 'leaveType':
+                return {
+                    title: 'Leave type',
+                    value: applyLeaveType,
+                    onSelect: setApplyLeaveType,
+                    options: leaveTypes.map((t) => ({
+                        value: t,
+                        label: t,
+                        detail: leaveBalances[t] ? `${leaveBalances[t].balance_leaves || 0} left` : undefined,
+                    })),
+                };
+            default:
+                return null;
+        }
+    };
+    const pickerConfig = picker ? buildPicker(picker) : null;
 
     const renderBalanceCard = () => {
         if (!applyLeaveType || !leaveBalances[applyLeaveType]) {
@@ -459,558 +593,375 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
 
         const balance = leaveBalances[applyLeaveType];
         return (
-            <View style={styles.applyBalanceCard}>
-                <Text style={styles.applyBalanceTitle}>{applyLeaveType} Balance</Text>
-                <View style={styles.applyBalanceRow}>
-                    <View style={styles.applyBalanceItem}>
-                        <Text style={styles.applyBalanceValue}>{balance.allocated_leaves || 0}</Text>
-                        <Text style={styles.applyBalanceLabel}>Allocated</Text>
-                    </View>
-                    <View style={styles.applyBalanceItem}>
-                        <Text style={[styles.applyBalanceValue, styles.applyBalanceRemaining]}>
-                            {balance.balance_leaves || 0}
-                        </Text>
-                        <Text style={styles.applyBalanceLabel}>Remaining</Text>
-                    </View>
-                    <View style={styles.applyBalanceItem}>
-                        <Text style={styles.applyBalanceValue}>
-                            {(balance.allocated_leaves || 0) - (balance.balance_leaves || 0)}
-                        </Text>
-                        <Text style={styles.applyBalanceLabel}>Used</Text>
-                    </View>
-                </View>
-            </View>
+            <Field label={`${applyLeaveType} balance`}>
+                <StatStrip
+                    items={[
+                        { label: 'Allocated', value: balance.allocated_leaves || 0 },
+                        { label: 'Remaining', value: balance.balance_leaves || 0 },
+                        { label: 'Used', value: (balance.allocated_leaves || 0) - (balance.balance_leaves || 0) },
+                    ]}
+                />
+            </Field>
         );
     };
 
-    const renderFilters = () => (
-        <View style={styles.filtersContainer}>
-            {/* Department Filter */}
-            <View style={styles.filterItem}>
-                <Text style={styles.filterLabel}>Department</Text>
-                <View style={styles.pickerContainer}>
-                    <Picker
-                        selectedValue={selectedDepartment}
-                        onValueChange={(value) => setSelectedDepartment(value)}
-                        style={styles.picker}
-                    >
-                        <Picker.Item label="All Departments" value="" />
-                        {departments.map((dept) => (
-                            <Picker.Item
-                                key={dept.name}
-                                label={dept.department_name || dept.name}
-                                value={dept.name}
-                            />
-                        ))}
-                    </Picker>
-                </View>
-            </View>
-
-            {/* Employee Filter */}
-            <View style={styles.filterItem}>
-                <Text style={styles.filterLabel}>Employee</Text>
-                <View style={styles.pickerContainer}>
-                    <Picker
-                        selectedValue={selectedEmployee}
-                        onValueChange={(value) => setSelectedEmployee(value)}
-                        style={styles.picker}
-                    >
-                        <Picker.Item label="All Employees" value="" />
-                        {employees.map((emp) => (
-                            <Picker.Item
-                                key={emp.name}
-                                label={emp.employee_name}
-                                value={emp.name}
-                            />
-                        ))}
-                    </Picker>
-                </View>
-            </View>
-
-            {/* Status Filter (for history tab only) */}
-            {activeTab === 'history' && (
-                <View style={styles.filterItem}>
-                    <Text style={styles.filterLabel}>Status</Text>
-                    <View style={styles.pickerContainer}>
-                        <Picker
-                            selectedValue={historyStatusFilter}
-                            onValueChange={(value) => setHistoryStatusFilter(value)}
-                            style={styles.picker}
-                        >
-                            <Picker.Item label="All Statuses" value="" />
-                            <Picker.Item label="Approved" value="Approved" />
-                            <Picker.Item label="Rejected" value="Rejected" />
-                            <Picker.Item label="Cancelled" value="Cancelled" />
-                        </Picker>
-                    </View>
-                </View>
-            )}
-
-            {/* Clear Filters Button */}
-            {(selectedDepartment || selectedEmployee || historyStatusFilter) && (
-                <TouchableOpacity
-                    style={styles.clearFiltersButton}
-                    onPress={() => {
-                        setSelectedDepartment('');
-                        setSelectedEmployee('');
-                        setHistoryStatusFilter('');
-                    }}
-                >
-                    <Text style={styles.clearFiltersText}>Clear Filters</Text>
-                </TouchableOpacity>
-            )}
+    const renderToolbar = () => (
+        <View style={styles.toolbar}>
+            <Segmented
+                value={activeTab}
+                onChange={setActiveTab}
+                style={styles.segmented}
+                options={[
+                    { value: 'pending', label: 'Pending', count: pendingLeaves.length },
+                    { value: 'history', label: 'History' },
+                    { value: 'statistics', label: 'Summary' },
+                ]}
+            />
+            <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={styles.filters}
+            >
+                <FilterChip
+                    label={selectedDepartment ? departmentName(selectedDepartment) : 'Department'}
+                    active={Boolean(selectedDepartment)}
+                    onPress={() => openPicker('department')}
+                />
+                {activeTab !== 'statistics' ? (
+                    <FilterChip
+                        label={selectedEmployee ? employeeName(selectedEmployee) : 'Employee'}
+                        active={Boolean(selectedEmployee)}
+                        onPress={() => openPicker('employee')}
+                    />
+                ) : null}
+                {activeTab === 'history' ? (
+                    <FilterChip
+                        label={historyStatusFilter || 'Status'}
+                        active={Boolean(historyStatusFilter)}
+                        onPress={() => openPicker('status')}
+                    />
+                ) : null}
+                {filtersActive ? (
+                    <Pressable onPress={clearFilters} hitSlop={8} style={styles.clear}>
+                        <Text style={styles.clearText}>Clear</Text>
+                    </Pressable>
+                ) : null}
+            </ScrollView>
         </View>
     );
 
-    const renderLeaveCard = (leave, showActions = false) => (
-        <View key={leave.name} style={styles.leaveCard}>
-            <View style={styles.leaveCardHeader}>
-                <View style={styles.leaveCardHeaderLeft}>
-                    <Text style={styles.employeeName}>{leave.employee_name}</Text>
-                    <Text style={styles.leaveType}>{leave.leave_type}</Text>
-                </View>
-                <View
-                    style={[
-                        styles.statusBadge,
-                        styles[`status${leave.status.replace(/\s/g, '')}`]
-                    ]}
-                >
-                    <Text style={styles.statusText}>{leave.status}</Text>
-                </View>
-            </View>
-
-            <View style={styles.leaveDetails}>
-                <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Date:</Text>
-                    <Text style={styles.detailValue}>
-                        {new Date(leave.from_date).toLocaleDateString()} -{' '}
-                        {new Date(leave.to_date).toLocaleDateString()}
-                    </Text>
-                </View>
-
-                <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Days:</Text>
-                    <Text style={styles.detailValue}>
-                        {leave.total_leave_days} day(s)
-                        {leave.half_day ? ' (Half Day)' : ''}
-                    </Text>
-                </View>
-
-                {leave.department && (
-                    <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>Department:</Text>
-                        <Text style={styles.detailValue}>{leave.department}</Text>
-                    </View>
-                )}
-
-                {leave.description && (
-                    <View style={styles.descriptionContainer}>
-                        <Text style={styles.detailLabel}>Reason:</Text>
-                        <Text style={styles.description}>{leave.description}</Text>
-                    </View>
-                )}
-
-                {leave.leave_approver_name && (
-                    <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>Approver:</Text>
-                        <Text style={styles.detailValue}>{leave.leave_approver_name}</Text>
-                    </View>
-                )}
-
-                <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Applied:</Text>
-                    <Text style={styles.detailValue}>
-                        {new Date(leave.creation).toLocaleDateString()}
-                    </Text>
-                </View>
-            </View>
-
-            {showActions && (
-                <View style={styles.actionButtons}>
-                    <TouchableOpacity
-                        style={[styles.actionButton, styles.approveButton]}
-                        onPress={() => openActionModal(leave, 'approve')}
-                    >
-                        <Text style={styles.actionButtonText}>Approve</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.actionButton, styles.rejectButton]}
-                        onPress={() => openActionModal(leave, 'reject')}
-                    >
-                        <Text style={styles.actionButtonText}>Reject</Text>
-                    </TouchableOpacity>
-                </View>
-            )}
-        </View>
+    const renderLeaveRow = (leave) => (
+        <Row
+            key={leave.name}
+            left={<Avatar name={leave.employee_name} />}
+            title={leave.employee_name}
+            subtitle={`${[leave.leave_type, leaveDays(leave)].filter(Boolean).join('  ·  ')}\n${dateRange(leave.from_date, leave.to_date)}`}
+            right={activeTab === 'history' ? <StatusText label={leave.status} /> : null}
+            onPress={() => openActionModal(leave, '')}
+        />
     );
 
     const renderPendingTab = () => (
-        <ScrollView
-            style={styles.tabContent}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        <Screen
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            footer={<Button title="Apply leave on behalf" onPress={() => setActiveTab('apply')} />}
         >
-            {renderFilters()}
-            
             {pendingLeaves.length === 0 ? (
-                <View style={styles.emptyState}>
-                    <Text style={styles.emptyText}>No pending leave applications</Text>
-                </View>
+                <EmptyState
+                    icon="check-circle"
+                    title="No pending requests"
+                    message={filtersActive ? 'Nothing matches these filters.' : 'New leave requests will appear here.'}
+                />
             ) : (
-                <View style={styles.leavesList}>
-                    {pendingLeaves.map(leave => renderLeaveCard(leave, true))}
-                </View>
+                <Group>{pendingLeaves.map(renderLeaveRow)}</Group>
             )}
-        </ScrollView>
+        </Screen>
     );
 
     const renderHistoryTab = () => (
-        <ScrollView
-            style={styles.tabContent}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        >
-            {renderFilters()}
-            
+        <Screen refreshing={refreshing} onRefresh={onRefresh}>
             {historyLeaves.length === 0 ? (
-                <View style={styles.emptyState}>
-                    <Text style={styles.emptyText}>No leave history found</Text>
-                </View>
+                <EmptyState
+                    icon="clock"
+                    title="No leave history"
+                    message={filtersActive ? 'Nothing matches these filters.' : 'Approved, rejected and cancelled leaves will appear here.'}
+                />
             ) : (
-                <View style={styles.leavesList}>
-                    {historyLeaves.map(leave => renderLeaveCard(leave, false))}
-                </View>
+                <Group>{historyLeaves.map(renderLeaveRow)}</Group>
             )}
-        </ScrollView>
+        </Screen>
     );
 
-    const renderStatisticsTab = () => {
-        if (!statistics) {
-            return (
-                <View style={styles.emptyState}>
-                    <Text style={styles.emptyText}>No statistics available</Text>
-                </View>
-            );
+    const renderBreakdown = (title, counts, labelOf = (label) => label) => {
+        if (!counts || Object.keys(counts).length === 0) {
+            return null;
         }
-
         return (
-            <ScrollView
-                style={styles.tabContent}
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-            >
-                <View style={styles.statsContainer}>
-                    {/* Overall Statistics */}
-                    <View style={styles.statsSection}>
-                        <Text style={styles.statsSectionTitle}>Overall Statistics</Text>
-                        <View style={styles.statsGrid}>
-                            <View style={styles.statCard}>
-                                <Text style={styles.statValue}>{statistics.total_applications}</Text>
-                                <Text style={styles.statLabel}>Total Applications</Text>
-                            </View>
-                            <View style={styles.statCard}>
-                                <Text style={styles.statValue}>{statistics.total_days || 0}</Text>
-                                <Text style={styles.statLabel}>Total Days</Text>
-                            </View>
-                        </View>
-                    </View>
-
-                    {/* By Status */}
-                    {statistics.by_status && Object.keys(statistics.by_status).length > 0 && (
-                        <View style={styles.statsSection}>
-                            <Text style={styles.statsSectionTitle}>By Status</Text>
-                            {Object.entries(statistics.by_status).map(([status, count]) => (
-                                <View key={status} style={styles.statsRow}>
-                                    <Text style={styles.statsRowLabel}>{status}</Text>
-                                    <Text style={styles.statsRowValue}>{count}</Text>
-                                </View>
-                            ))}
-                        </View>
-                    )}
-
-                    {/* By Leave Type */}
-                    {statistics.by_leave_type && Object.keys(statistics.by_leave_type).length > 0 && (
-                        <View style={styles.statsSection}>
-                            <Text style={styles.statsSectionTitle}>By Leave Type</Text>
-                            {Object.entries(statistics.by_leave_type).map(([type, count]) => (
-                                <View key={type} style={styles.statsRow}>
-                                    <Text style={styles.statsRowLabel}>{type}</Text>
-                                    <Text style={styles.statsRowValue}>{count}</Text>
-                                </View>
-                            ))}
-                        </View>
-                    )}
-
-                    {/* By Department */}
-                    {statistics.by_department && Object.keys(statistics.by_department).length > 0 && (
-                        <View style={styles.statsSection}>
-                            <Text style={styles.statsSectionTitle}>By Department</Text>
-                            {Object.entries(statistics.by_department).map(([dept, count]) => (
-                                <View key={dept} style={styles.statsRow}>
-                                    <Text style={styles.statsRowLabel}>{dept}</Text>
-                                    <Text style={styles.statsRowValue}>{count}</Text>
-                                </View>
-                            ))}
-                        </View>
-                    )}
-                </View>
-            </ScrollView>
+            <Group title={title}>
+                {Object.entries(counts).map(([label, count]) => (
+                    <Row key={label} title={labelOf(label)} value={String(count)} />
+                ))}
+            </Group>
         );
     };
 
-    // ===== RENDER APPLY LEAVE TAB =====
-    const renderApplyLeaveTab = () => (
-        <ScrollView
-            style={styles.tabContent}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        >
-            <View style={styles.applyFormContainer}>
-                <Text style={styles.applyFormTitle}>Apply Leave for Employee</Text>
-                
-                {/* Employee Selection */}
-                <View style={styles.applyInputGroup}>
-                    <Text style={styles.applyLabel}>Select Employee *</Text>
-                    <View style={styles.pickerContainer}>
-                        <Picker
-                            selectedValue={applyForEmployee}
-                            onValueChange={(value) => setApplyForEmployee(value)}
-                            style={styles.picker}
-                        >
-                            <Picker.Item label="Select Employee" value="" />
-                            {employees.map((emp) => (
-                                <Picker.Item
-                                    key={emp.name}
-                                    label={emp.employee_name}
-                                    value={emp.name}
-                                />
-                            ))}
-                        </Picker>
-                    </View>
-                </View>
-
-                {/* Leave Type Selection */}
-                <View style={styles.applyInputGroup}>
-                    <Text style={styles.applyLabel}>Leave Type *</Text>
-                    <View style={styles.pickerContainer}>
-                        <Picker
-                            selectedValue={applyLeaveType}
-                            onValueChange={(value) => setApplyLeaveType(value)}
-                            style={styles.picker}
-                            enabled={leaveTypes.length > 0}
-                        >
-                            <Picker.Item label={leaveTypes.length > 0 ? "Select Leave Type" : "Select Employee First"} value="" />
-                            {leaveTypes.map((type) => (
-                                <Picker.Item key={type} label={type} value={type} />
-                            ))}
-                        </Picker>
-                    </View>
-                </View>
-
-                {/* Leave Balance Card */}
-                {renderBalanceCard()}
-
-                {/* From Date */}
-                <View style={styles.applyInputGroup}>
-                    <Text style={styles.applyLabel}>From Date *</Text>
-                    <TouchableOpacity
-                        style={styles.applyDateButton}
-                        onPress={() => setShowApplyFromDatePicker(true)}
-                    >
-                        <Text style={styles.applyDateText}>{applyFromDate.toDateString()}</Text>
-                    </TouchableOpacity>
-                    {showApplyFromDatePicker && (
-                        <DateTimePicker
-                            value={applyFromDate}
-                            mode="date"
-                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                            onChange={(event, date) => {
-                                setShowApplyFromDatePicker(Platform.OS === 'ios');
-                                if (date) {
-                                    setApplyFromDate(date);
-                                    if (date > applyToDate) setApplyToDate(date);
-                                }
-                            }}
-                        />
-                    )}
-                </View>
-
-                {/* To Date */}
-                <View style={styles.applyInputGroup}>
-                    <Text style={styles.applyLabel}>To Date *</Text>
-                    <TouchableOpacity
-                        style={styles.applyDateButton}
-                        onPress={() => setShowApplyToDatePicker(true)}
-                    >
-                        <Text style={styles.applyDateText}>{applyToDate.toDateString()}</Text>
-                    </TouchableOpacity>
-                    {showApplyToDatePicker && (
-                        <DateTimePicker
-                            value={applyToDate}
-                            mode="date"
-                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                            minimumDate={applyFromDate}
-                            onChange={(event, date) => {
-                                setShowApplyToDatePicker(Platform.OS === 'ios');
-                                if (date) setApplyToDate(date);
-                            }}
-                        />
-                    )}
-                </View>
-
-                {/* Half Day Toggle */}
-                <TouchableOpacity
-                    style={styles.applyCheckboxContainer}
-                    onPress={() => setApplyIsHalfDay(!applyIsHalfDay)}
-                >
-                    <View style={[styles.applyCheckbox, applyIsHalfDay && styles.applyCheckboxChecked]}>
-                        {applyIsHalfDay && <Text style={styles.applyCheckmark}>✓</Text>}
-                    </View>
-                    <Text style={styles.applyCheckboxLabel}>Half Day Leave</Text>
-                </TouchableOpacity>
-
-                {/* Half Day Date (conditional) */}
-                {applyIsHalfDay && (
-                    <View style={styles.applyInputGroup}>
-                        <Text style={styles.applyLabel}>Half Day Date</Text>
-                        <TouchableOpacity
-                            style={styles.applyDateButton}
-                            onPress={() => setShowApplyHalfDayPicker(true)}
-                        >
-                            <Text style={styles.applyDateText}>{applyHalfDayDate.toDateString()}</Text>
-                        </TouchableOpacity>
-                        {showApplyHalfDayPicker && (
-                            <DateTimePicker
-                                value={applyHalfDayDate}
-                                mode="date"
-                                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                                minimumDate={applyFromDate}
-                                maximumDate={applyToDate}
-                                onChange={(event, date) => {
-                                    setShowApplyHalfDayPicker(Platform.OS === 'ios');
-                                    if (date) setApplyHalfDayDate(date);
-                                }}
-                            />
-                        )}
-                    </View>
-                )}
-
-                {/* Reason */}
-                <View style={styles.applyInputGroup}>
-                    <Text style={styles.applyLabel}>Reason *</Text>
-                    <TextInput
-                        style={styles.applyTextArea}
-                        placeholder="Enter reason for leave"
-                        value={applyReason}
-                        onChangeText={setApplyReason}
-                        multiline
-                        numberOfLines={4}
-                        textAlignVertical="top"
+    const renderStatisticsTab = () => (
+        <Screen refreshing={refreshing} onRefresh={onRefresh}>
+            {!statistics ? (
+                <EmptyState icon="bar-chart-2" title="No summary available" message="Pull down to try again." />
+            ) : (
+                <>
+                    <StatStrip
+                        style={styles.strip}
+                        items={[
+                            { label: 'Applications', value: statistics.total_applications ?? 0 },
+                            { label: 'Leave days', value: statistics.total_days || 0 },
+                        ]}
                     />
-                </View>
-
-                {/* Auto Approve Toggle */}
-                <TouchableOpacity
-                    style={styles.applyCheckboxContainer}
-                    onPress={() => setApplyAutoApprove(!applyAutoApprove)}
-                >
-                    <View style={[styles.applyCheckbox, applyAutoApprove && styles.applyCheckboxChecked]}>
-                        {applyAutoApprove && <Text style={styles.applyCheckmark}>✓</Text>}
-                    </View>
-                    <Text style={styles.applyCheckboxLabel}>Auto Approve Leave</Text>
-                </TouchableOpacity>
-                <Text style={styles.applyHint}>
-                    When enabled, leave will be automatically approved upon submission
-                </Text>
-
-                {/* Submit Button */}
-                <View style={styles.applySubmitContainer}>
-                    <Button
-                        title="Submit Leave Application"
-                        onPress={handleAdminSubmitLeave}
-                        disabled={loading || !applyForEmployee || !applyLeaveType}
-                    />
-                </View>
-            </View>
-        </ScrollView>
+                    {renderBreakdown('By status', statistics.by_status)}
+                    {renderBreakdown('By leave type', statistics.by_leave_type)}
+                    {renderBreakdown('By department', statistics.by_department, shortDept)}
+                </>
+            )}
+        </Screen>
     );
 
+    // ===== RENDER APPLY LEAVE FORM =====
+    const renderApplyLeaveTab = () => (
+        <>
+            <View style={styles.formBar}>
+                <Text style={styles.formTitle}>Apply leave on behalf</Text>
+                <IconButton name="x" label="Close" onPress={() => setActiveTab('pending')} />
+            </View>
+            <Screen
+                footer={(
+                    <Button
+                        title={applyAutoApprove ? 'Submit and approve' : 'Submit for approval'}
+                        onPress={handleAdminSubmitLeave}
+                        loading={loading}
+                        disabled={!applyForEmployee || !applyLeaveType}
+                    />
+                )}
+            >
+                <SelectField
+                    label="Employee"
+                    value={applyForEmployee ? employeeName(applyForEmployee) : ''}
+                    placeholder="Select employee"
+                    onPress={() => openPicker('applyEmployee')}
+                />
+                <SelectField
+                    label="Leave type"
+                    value={applyLeaveType}
+                    placeholder={leaveTypes.length > 0 ? 'Select leave type' : 'Select an employee first'}
+                    disabled={leaveTypes.length === 0}
+                    onPress={() => openPicker('leaveType')}
+                />
+
+                {renderBalanceCard()}
+
+                <View style={styles.dates}>
+                    <SelectField
+                        label="From"
+                        icon="calendar"
+                        value={formatShortDate(applyFromDate)}
+                        onPress={() => setShowApplyFromDatePicker(true)}
+                        style={styles.flex}
+                    />
+                    <SelectField
+                        label="To"
+                        icon="calendar"
+                        value={formatShortDate(applyToDate)}
+                        onPress={() => setShowApplyToDatePicker(true)}
+                        style={styles.flex}
+                    />
+                </View>
+                {showApplyFromDatePicker && (
+                    <DateTimePicker
+                        value={applyFromDate}
+                        mode="date"
+                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                        onChange={(event, date) => {
+                            setShowApplyFromDatePicker(Platform.OS === 'ios');
+                            if (date) {
+                                setApplyFromDate(date);
+                                if (date > applyToDate) {
+                                    setApplyToDate(date);
+                                }
+                            }
+                        }}
+                    />
+                )}
+                {showApplyToDatePicker && (
+                    <DateTimePicker
+                        value={applyToDate}
+                        mode="date"
+                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                        minimumDate={applyFromDate}
+                        onChange={(event, date) => {
+                            setShowApplyToDatePicker(Platform.OS === 'ios');
+                            if (date) {
+                                setApplyToDate(date);
+                            }
+                        }}
+                    />
+                )}
+
+                <Group>
+                    <Row
+                        title="Half day"
+                        right={<FormSwitch value={applyIsHalfDay} onValueChange={setApplyIsHalfDay} />}
+                    />
+                    {applyIsHalfDay ? (
+                        <Row
+                            title="Half day on"
+                            value={formatShortDate(applyHalfDayDate)}
+                            onPress={() => setShowApplyHalfDayPicker(true)}
+                        />
+                    ) : null}
+                </Group>
+                {applyIsHalfDay && showApplyHalfDayPicker && (
+                    <DateTimePicker
+                        value={applyHalfDayDate}
+                        mode="date"
+                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                        minimumDate={applyFromDate}
+                        maximumDate={applyToDate}
+                        onChange={(event, date) => {
+                            setShowApplyHalfDayPicker(Platform.OS === 'ios');
+                            if (date) {
+                                setApplyHalfDayDate(date);
+                            }
+                        }}
+                    />
+                )}
+
+                <TextField
+                    label="Reason"
+                    placeholder="Reason for leave"
+                    value={applyReason}
+                    onChangeText={setApplyReason}
+                    multiline
+                    numberOfLines={4}
+                />
+
+                <Group>
+                    <Row
+                        title="Approve immediately"
+                        right={<FormSwitch value={applyAutoApprove} onValueChange={setApplyAutoApprove} />}
+                    />
+                </Group>
+            </Screen>
+        </>
+    );
+
+    const renderLeaveDetails = (leave) => (
+        <InfoList>
+            {!canAct ? <InfoRow label="Status" value={<StatusText label={leave.status} size={15} />} /> : null}
+            <InfoRow label="Dates" value={dateRange(leave.from_date, leave.to_date)} />
+            <InfoRow label="Days" value={leaveDays(leave) || '–'} />
+            {leave.half_day && leave.half_day_date ? <InfoRow label="Half day" value={dayLabel(leave.half_day_date)} /> : null}
+            {formatDays(leave.leave_balance) ? <InfoRow label="Balance before leave" value={formatDays(leave.leave_balance)} /> : null}
+            <InfoRow label="Reason" value={leave.description || 'No reason given'} muted={!leave.description} stacked />
+            {leave.department ? <InfoRow label="Department" value={shortDept(leave.department)} /> : null}
+            {leave.leave_approver_name ? <InfoRow label="Approver" value={leave.leave_approver_name} /> : null}
+            <InfoRow label="Applied" value={shortDay(leave.creation)} />
+            <InfoRow label="Employee ID" value={leave.employee} />
+        </InfoList>
+    );
+
+    const renderActionSheetFooter = () => {
+        if (actionType === 'approve') {
+            return (
+                <>
+                    <Button title="Back" variant="secondary" onPress={() => setActionType('')} style={styles.flex} />
+                    <Button title="Approve" onPress={handleApprove} style={styles.flex} />
+                </>
+            );
+        }
+        if (actionType === 'reject') {
+            return (
+                <>
+                    <Button title="Back" variant="secondary" onPress={() => setActionType('')} style={styles.flex} />
+                    <Button title="Reject" variant="dangerSolid" onPress={handleReject} disabled={!rejectionReason.trim()} style={styles.flex} />
+                </>
+            );
+        }
+        if (canAct) {
+            return (
+                <>
+                    <Button title="Reject" variant="danger" onPress={() => setActionType('reject')} style={styles.flex} />
+                    <Button title="Approve" onPress={() => setActionType('approve')} style={styles.flex} />
+                </>
+            );
+        }
+        return <Button title="Close" variant="secondary" onPress={() => setShowActionModal(false)} style={styles.flex} />;
+    };
+
     const renderActionModal = () => (
-        <Modal
-            visible={showActionModal}
-            transparent
-            animationType="fade"
-            onRequestClose={() => setShowActionModal(false)}
+        <Sheet
+            visible={showActionModal && Boolean(selectedLeave)}
+            title={actionType === 'approve' ? 'Approve leave' : actionType === 'reject' ? 'Reject leave' : selectedLeave?.employee_name}
+            subtitle={actionType
+                ? [selectedLeave?.employee_name, selectedLeave?.leave_type].filter(Boolean).join('  ·  ')
+                : selectedLeave?.leave_type}
+            onClose={() => setShowActionModal(false)}
+            footer={renderActionSheetFooter()}
         >
-            <View style={styles.modalOverlay}>
-                <View style={styles.modalContent}>
-                    <Text style={styles.modalTitle}>
-                        {actionType === 'approve' ? 'Approve Leave' : 'Reject Leave'}
-                    </Text>
-
-                    {selectedLeave && (
-                        <View style={styles.modalLeaveInfo}>
-                            <Text style={styles.modalInfoText}>
-                                Employee: {selectedLeave.employee_name}
-                            </Text>
-                            <Text style={styles.modalInfoText}>
-                                Leave Type: {selectedLeave.leave_type}
-                            </Text>
-                            <Text style={styles.modalInfoText}>
-                                Days: {selectedLeave.total_leave_days}
-                            </Text>
-                        </View>
-                    )}
-
-                    {actionType === 'approve' ? (
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.inputLabel}>Remarks (Optional)</Text>
-                            <TextInput
-                                style={styles.textInput}
-                                placeholder="Enter approval remarks..."
+            {selectedLeave ? (
+                actionType ? (
+                    <>
+                        <InfoList>
+                            <InfoRow label="Dates" value={dateRange(selectedLeave.from_date, selectedLeave.to_date)} />
+                            <InfoRow label="Days" value={leaveDays(selectedLeave) || '–'} />
+                        </InfoList>
+                        {actionType === 'approve' ? (
+                            <TextField
+                                label="Remarks"
+                                placeholder="Optional"
+                                hint="Included in the employee's notification."
                                 value={remarks}
                                 onChangeText={setRemarks}
                                 multiline
                                 numberOfLines={3}
+                                style={styles.actionField}
                             />
-                        </View>
-                    ) : (
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.inputLabel}>Rejection Reason *</Text>
-                            <TextInput
-                                style={styles.textInput}
-                                placeholder="Enter rejection reason..."
+                        ) : (
+                            <TextField
+                                label="Reason for rejecting"
+                                placeholder="Required"
+                                hint="Included in the employee's notification."
                                 value={rejectionReason}
                                 onChangeText={setRejectionReason}
                                 multiline
                                 numberOfLines={3}
+                                style={styles.actionField}
                             />
-                        </View>
-                    )}
-
-                    <View style={styles.modalButtons}>
-                        <TouchableOpacity
-                            style={[styles.modalButton, styles.modalCancelButton]}
-                            onPress={() => setShowActionModal(false)}
-                        >
-                            <Text style={styles.modalCancelButtonText}>Cancel</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[
-                                styles.modalButton,
-                                actionType === 'approve' ? styles.modalApproveButton : styles.modalRejectButton
-                            ]}
-                            onPress={actionType === 'approve' ? handleApprove : handleReject}
-                        >
-                            <Text style={styles.modalActionButtonText}>
-                                {actionType === 'approve' ? 'Approve' : 'Reject'}
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            </View>
-        </Modal>
+                        )}
+                    </>
+                ) : (
+                    renderLeaveDetails(selectedLeave)
+                )
+            ) : null}
+        </Sheet>
     );
 
-    if (loading && !refreshing) {
-        return <Loading message="Loading leave approvals..." />;
-    }
+    const renderBody = () => {
+        if (activeTab === 'apply') {
+            return renderApplyLeaveTab();
+        }
+        if (busy) {
+            return <Loading />;
+        }
+        if (activeTab === 'history') {
+            return renderHistoryTab();
+        }
+        if (activeTab === 'statistics') {
+            return renderStatisticsTab();
+        }
+        return renderPendingTab();
+    };
 
     return (
         <View style={styles.container}>
@@ -1020,497 +971,186 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
                 stays focused on managing OTHER employees' leaves; admin self
                 service lives in one place (AdminDashboard → My Self-Service). */}
 
-            {/* Tab Navigation */}
-            <View style={styles.tabContainer}>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'pending' && styles.tabActive]}
-                    onPress={() => setActiveTab('pending')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'pending' && styles.tabTextActive]}>
-                        Pending ({pendingLeaves.length})
-                    </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'apply' && styles.tabActive]}
-                    onPress={() => setActiveTab('apply')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'apply' && styles.tabTextActive]}>
-                        Apply on Behalf
-                    </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'history' && styles.tabActive]}
-                    onPress={() => setActiveTab('history')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'history' && styles.tabTextActive]}>
-                        History
-                    </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'statistics' && styles.tabActive]}
-                    onPress={() => setActiveTab('statistics')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'statistics' && styles.tabTextActive]}>
-                        Stats
-                    </Text>
-                </TouchableOpacity>
-            </View>
+            {activeTab !== 'apply' ? renderToolbar() : null}
+            {renderBody()}
 
-            {/* Tab Content */}
-            {activeTab === 'pending' && renderPendingTab()}
-            {activeTab === 'apply' && renderApplyLeaveTab()}
-            {activeTab === 'history' && renderHistoryTab()}
-            {activeTab === 'statistics' && renderStatisticsTab()}
-
-            {/* Action Modal */}
             {renderActionModal()}
+
+            <PickerSheet
+                config={pickerConfig}
+                query={pickerQuery}
+                onQuery={setPickerQuery}
+                onSelect={(value) => {
+                    pickerConfig?.onSelect(value);
+                    setPicker(null);
+                }}
+                onClose={() => setPicker(null)}
+            />
+
+            <Sheet
+                visible={Boolean(lowBalance)}
+                title="Low leave balance"
+                onClose={() => setLowBalance(null)}
+                footer={(
+                    <>
+                        <Button title="Cancel" variant="secondary" onPress={() => setLowBalance(null)} style={styles.flex} />
+                        <Button
+                            title="Submit anyway"
+                            onPress={() => {
+                                setLowBalance(null);
+                                submitAdminLeave();
+                            }}
+                            style={styles.flex}
+                        />
+                    </>
+                )}
+            >
+                {lowBalance ? (
+                    <Text style={styles.sheetText}>
+                        {`${employeeName(applyForEmployee)} has ${formatDays(lowBalance.remaining) || lowBalance.remaining} of ${applyLeaveType} left. This request is for ${formatDays(lowBalance.requestedDays)}.`}
+                    </Text>
+                ) : null}
+            </Sheet>
         </View>
     );
 };
 
+// ------------------------------------------------------------------ local building blocks
+
+const FilterChip = ({ label, active, onPress }) => (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.chip, active && styles.chipActive, pressed && styles.chipPressed]}>
+        <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={1}>{label}</Text>
+        <Icon name="chevron-down" size={14} color={active ? color.accent : color.textSecondary} />
+    </Pressable>
+);
+
+const FormSwitch = ({ value, onValueChange }) => (
+    <Switch
+        value={value}
+        onValueChange={onValueChange}
+        trackColor={{ false: '#D0D5DD', true: color.accent }}
+        thumbColor={color.surface}
+        ios_backgroundColor="#D0D5DD"
+    />
+);
+
+// label / value pairs separated by hairlines (detail sheets)
+const InfoList = ({ children }) => {
+    const items = React.Children.toArray(children).filter(Boolean);
+    return (
+        <View style={styles.infoList}>
+            {items.map((child, i) => (
+                <React.Fragment key={child.key ?? i}>
+                    {i > 0 ? <View style={styles.infoDivider} /> : null}
+                    {child}
+                </React.Fragment>
+            ))}
+        </View>
+    );
+};
+
+const InfoRow = ({ label, value, stacked, muted }) => (
+    <View style={[styles.info, stacked && styles.infoStacked]}>
+        <Text style={styles.infoLabel}>{label}</Text>
+        {typeof value === 'string' || typeof value === 'number' ? (
+            <Text style={[styles.infoValue, stacked && styles.infoValueStacked, muted && styles.infoMuted]}>{value}</Text>
+        ) : (
+            value
+        )}
+    </View>
+);
+
+// Bottom sheet listing options as rows; the selected one has a check mark.
+const PickerSheet = ({ config, query, onQuery, onSelect, onClose }) => {
+    const options = config?.options || [];
+    const q = query.trim().toLowerCase();
+    const shown = q ? options.filter((o) => `${o.label} ${o.subtitle || ''}`.toLowerCase().includes(q)) : options;
+    return (
+        <Sheet visible={Boolean(config)} title={config?.title} onClose={onClose}>
+            {config?.searchable ? (
+                <SearchField value={query} onChangeText={onQuery} placeholder="Search" style={styles.sheetSearch} />
+            ) : null}
+            {shown.length === 0 ? (
+                <EmptyState icon="search" title="No matches" />
+            ) : (
+                <Group>
+                    {shown.map((o) => (
+                        <Row
+                            key={o.value || 'all'}
+                            title={o.label}
+                            subtitle={o.subtitle}
+                            value={o.detail}
+                            chevron={false}
+                            onPress={() => onSelect(o.value)}
+                            right={(
+                                <View style={styles.check}>
+                                    {o.value === config.value ? <Icon name="check" size={18} color={color.accent} /> : null}
+                                </View>
+                            )}
+                        />
+                    ))}
+                </Group>
+            )}
+        </Sheet>
+    );
+};
+
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.background,
-    },
-    // myLeaveButton / myLeaveButtonText removed — see comment near the
-    // render block above. Admin self-service is now centralized on the dashboard.
-    tabContainer: {
-        flexDirection: 'row',
-        backgroundColor: colors.white,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-        elevation: 1,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
-    },
-    tab: {
-        flex: 1,
-        paddingVertical: 12,
-        alignItems: 'center',
-        borderBottomWidth: 2,
-        borderBottomColor: 'transparent',
-    },
-    tabActive: {
-        borderBottomColor: colors.primary,
-    },
-    tabText: {
-        fontSize: 13,
-        fontWeight: '500',
-        color: colors.textSecondary,
-    },
-    tabTextActive: {
-        color: colors.primary,
-        fontWeight: '600',
-    },
-    tabContent: {
-        flex: 1,
-    },
-    filtersContainer: {
-        backgroundColor: colors.white,
-        padding: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    filterItem: {
-        marginBottom: 10,
-    },
-    filterLabel: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 5,
-    },
-    pickerContainer: {
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: 8,
-        backgroundColor: colors.white,
-    },
-    picker: {
-        height: 42,
-    },
-    clearFiltersButton: {
-        marginTop: 6,
-        padding: 8,
-        backgroundColor: colors.lightGray,
-        borderRadius: 8,
-        alignItems: 'center',
-    },
-    clearFiltersText: {
-        fontSize: 12,
-        color: colors.primary,
-        fontWeight: '600',
-    },
-    leavesList: {
-        padding: 12,
-    },
-    emptyState: {
-        padding: 30,
-        alignItems: 'center',
-    },
-    emptyText: {
-        fontSize: 14,
-        color: colors.textSecondary,
-    },
-    leaveCard: {
-        backgroundColor: colors.white,
-        borderRadius: 10,
-        padding: 12,
-        marginBottom: 10,
-        borderWidth: 1,
-        borderColor: colors.border,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.08,
-        shadowRadius: 4,
-        elevation: 2,
-    },
-    leaveCardHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start',
-        marginBottom: 10,
-    },
-    leaveCardHeaderLeft: {
-        flex: 1,
-        marginRight: 10,
-    },
-    employeeName: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 3,
-    },
-    leaveType: {
-        fontSize: 12,
-        color: colors.textSecondary,
-    },
-    statusBadge: {
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 8,
-    },
-    statusOpen: {
-        backgroundColor: '#FFF3CD',
-    },
-    statusApproved: {
-        backgroundColor: '#D4EDDA',
-    },
-    statusRejected: {
-        backgroundColor: '#F8D7DA',
-    },
-    statusCancelled: {
-        backgroundColor: '#E2E3E5',
-    },
-    statusText: {
-        fontSize: 10,
-        fontWeight: '600',
-    },
-    leaveDetails: {
-        marginBottom: 10,
-    },
-    detailRow: {
-        flexDirection: 'row',
-        marginBottom: 5,
-    },
-    detailLabel: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        fontWeight: '600',
-        width: 85,
-    },
-    detailValue: {
-        fontSize: 12,
-        color: colors.textPrimary,
-        flex: 1,
-    },
-    descriptionContainer: {
-        marginTop: 6,
-    },
-    description: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        fontStyle: 'italic',
-        marginTop: 3,
-    },
-    actionButtons: {
-        flexDirection: 'row',
-        gap: 8,
-        marginTop: 10,
-    },
-    actionButton: {
-        flex: 1,
-        padding: 10,
-        borderRadius: 8,
-        alignItems: 'center',
-    },
-    approveButton: {
-        backgroundColor: colors.success,
-    },
-    rejectButton: {
-        backgroundColor: colors.error,
-    },
-    actionButtonText: {
-        color: colors.white,
-        fontSize: 12,
-        fontWeight: '600',
-    },
-    statsContainer: {
-        padding: 12,
-    },
-    statsSection: {
-        backgroundColor: colors.white,
-        borderRadius: 10,
-        padding: 12,
-        marginBottom: 12,
-        borderWidth: 1,
-        borderColor: colors.border,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.08,
-        shadowRadius: 4,
-        elevation: 2,
-    },
-    statsSectionTitle: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 10,
-    },
-    statsGrid: {
-        flexDirection: 'row',
-        gap: 10,
-    },
-    statCard: {
-        flex: 1,
-        backgroundColor: colors.lightBlue,
-        padding: 12,
-        borderRadius: 8,
-        alignItems: 'center',
-    },
-    statValue: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: colors.primary,
-        marginBottom: 3,
-    },
-    statLabel: {
-        fontSize: 11,
-        color: colors.textSecondary,
-        textAlign: 'center',
-    },
-    statsRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        paddingVertical: 8,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    statsRowLabel: {
-        fontSize: 13,
-        color: colors.textPrimary,
-    },
-    statsRowValue: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: colors.primary,
-    },
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 16,
-    },
-    modalContent: {
-        backgroundColor: colors.white,
-        borderRadius: 14,
-        padding: 16,
-        width: '100%',
-        maxWidth: 400,
-    },
-    modalTitle: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 12,
-    },
-    modalLeaveInfo: {
-        backgroundColor: colors.lightGray,
-        padding: 10,
-        borderRadius: 8,
-        marginBottom: 12,
-    },
-    modalInfoText: {
-        fontSize: 12,
-        color: colors.textPrimary,
-        marginBottom: 3,
-    },
-    inputGroup: {
-        marginBottom: 12,
-    },
-    inputLabel: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 6,
-    },
-    textInput: {
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: 8,
-        padding: 10,
-        fontSize: 13,
-        color: colors.textPrimary,
-        backgroundColor: colors.white,
-        textAlignVertical: 'top',
-    },
-    modalButtons: {
-        flexDirection: 'row',
-        gap: 10,
-    },
-    modalButton: {
-        flex: 1,
-        padding: 12,
-        borderRadius: 8,
-        alignItems: 'center',
-    },
-    modalCancelButton: {
-        backgroundColor: colors.lightGray,
-    },
-    modalApproveButton: {
-        backgroundColor: colors.success,
-    },
-    modalRejectButton: {
-        backgroundColor: colors.error,
-    },
-    modalCancelButtonText: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: colors.textSecondary,
-    },
-    modalActionButtonText: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: colors.white,
-    },
-    // ===== APPLY LEAVE FORM STYLES =====
-    applyFormContainer: {
-        padding: 16,
-    },
-    applyFormTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 16,
-    },
-    applyInputGroup: {
-        marginBottom: 16,
-    },
-    applyLabel: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 8,
-    },
-    applyDateButton: {
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: 8,
-        padding: 14,
-        backgroundColor: colors.white,
-    },
-    applyDateText: {
-        fontSize: 15,
-        color: colors.textPrimary,
-    },
-    applyCheckboxContainer: {
+    container: { flex: 1, backgroundColor: color.bg },
+    flex: { flex: 1 },
+
+    toolbar: {
+        backgroundColor: color.surface,
+        paddingTop: space.md,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: color.border,
+    },
+    segmented: { marginHorizontal: space.lg },
+    filters: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingHorizontal: space.lg, paddingVertical: space.md },
+    chip: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 12,
-    },
-    applyCheckbox: {
-        width: 24,
-        height: 24,
-        borderWidth: 2,
-        borderColor: colors.border,
-        borderRadius: 6,
-        marginRight: 10,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: colors.white,
-    },
-    applyCheckboxChecked: {
-        backgroundColor: colors.primary,
-        borderColor: colors.primary,
-    },
-    applyCheckmark: {
-        color: colors.white,
-        fontSize: 14,
-        fontWeight: 'bold',
-    },
-    applyCheckboxLabel: {
-        fontSize: 14,
-        color: colors.textPrimary,
-    },
-    applyTextArea: {
-        borderWidth: 1,
-        borderColor: colors.border,
+        gap: 4,
+        height: 32,
+        maxWidth: 200,
+        paddingHorizontal: 10,
         borderRadius: 8,
-        padding: 12,
-        fontSize: 14,
-        color: colors.textPrimary,
-        backgroundColor: colors.white,
-        minHeight: 100,
-        textAlignVertical: 'top',
+        backgroundColor: color.neutralSoft,
     },
-    applyHint: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        fontStyle: 'italic',
-        marginBottom: 16,
-        marginLeft: 34,
-    },
-    applySubmitContainer: {
-        marginTop: 10,
-        marginBottom: 30,
-    },
-    applyBalanceCard: {
-        backgroundColor: colors.lightBlue,
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 16,
-    },
-    applyBalanceTitle: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        textAlign: 'center',
-        marginBottom: 12,
-    },
-    applyBalanceRow: {
+    chipActive: { backgroundColor: color.accentSoft },
+    chipPressed: { opacity: 0.7 },
+    chipText: { fontSize: 13, fontWeight: '500', color: color.textSecondary, flexShrink: 1 },
+    chipTextActive: { color: color.accent },
+    clear: { height: 32, justifyContent: 'center', paddingHorizontal: space.xs },
+    clearText: { fontSize: 13, fontWeight: '600', color: color.accent },
+
+    formBar: {
         flexDirection: 'row',
-        justifyContent: 'space-around',
-    },
-    applyBalanceItem: {
         alignItems: 'center',
+        backgroundColor: color.surface,
+        paddingLeft: space.lg,
+        paddingRight: space.sm,
+        paddingVertical: space.xs,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: color.border,
     },
-    applyBalanceValue: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-    },
-    applyBalanceRemaining: {
-        color: colors.success,
-    },
-    applyBalanceLabel: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginTop: 4,
-    },
+    formTitle: { ...type.title, flex: 1 },
+    dates: { flexDirection: 'row', gap: space.md },
+    strip: { marginBottom: space.xl },
+
+    infoList: { marginBottom: space.sm },
+    info: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.lg, paddingVertical: 11 },
+    infoStacked: { flexDirection: 'column', alignItems: 'stretch', gap: 4 },
+    infoDivider: { height: StyleSheet.hairlineWidth, backgroundColor: color.divider },
+    infoLabel: { ...type.secondary, lineHeight: 21 },
+    infoValue: { ...type.body, flex: 1, textAlign: 'right', lineHeight: 21 },
+    infoValueStacked: { flex: 0, textAlign: 'left' },
+    infoMuted: { color: color.textTertiary },
+    actionField: { marginTop: space.md },
+
+    sheetText: { ...type.body, lineHeight: 22, marginBottom: space.sm },
+    sheetSearch: { marginBottom: space.md },
+    check: { width: 24, alignItems: 'flex-end' },
 });
 
 export default LeaveApprovalsScreen;

@@ -1,36 +1,44 @@
+// src/screens/admin/CreateNotificationScreen.js
+//
+// Compose a notification and send it to all employees, one department or chosen
+// employees. The server creates one notification per recipient and sends the push.
 import React, { useState, useEffect } from 'react';
-import {
-    View,
-    Text,
-    StyleSheet,
-    ScrollView,
-    TouchableOpacity,
-    TextInput,
-    ActivityIndicator,
-    StatusBar,
-    Alert,
-} from 'react-native';
-import { Picker } from '@react-native-picker/picker';
-import Icon from 'react-native-vector-icons/FontAwesome5';
-import { colors } from '../../theme/colors';
+import { View, Text, StyleSheet, StatusBar } from 'react-native';
 import ApiService from '../../services/api.service';
 import showToast from '../../utils/Toast';
+import {
+    Screen,
+    Group,
+    Row,
+    Avatar,
+    Segmented,
+    SearchField,
+    Sheet,
+    Button,
+    Field,
+    TextField,
+    SelectField,
+    EmptyState,
+    Loading,
+    Icon,
+    color,
+    space,
+    radius,
+    type,
+} from '../../components/ds';
 
-// Safely import notification service
-let NotificationService = null;
-try {
-    NotificationService = require('../../services/notification.service').default || require('../../services/notification.service');
-} catch (e) {
-    console.warn('NotificationService not available in CreateNotificationScreen');
-}
+const TARGETS = [
+    { value: 'all', label: 'All employees' },
+    { value: 'department', label: 'Department' },
+    { value: 'specific', label: 'Employees' },
+];
 
 const CreateNotificationScreen = ({ navigation }) => {
     const [loading, setLoading] = useState(false);
     const [sending, setSending] = useState(false);
     const [departments, setDepartments] = useState([]);
     const [employees, setEmployees] = useState([]);
-    const [templates, setTemplates] = useState([]);
-    
+
     // Form states
     const [title, setTitle] = useState('');
     const [message, setMessage] = useState('');
@@ -40,18 +48,25 @@ const CreateNotificationScreen = ({ navigation }) => {
     const [targetType, setTargetType] = useState('all');
     const [selectedDepartment, setSelectedDepartment] = useState('');
     const [selectedEmployees, setSelectedEmployees] = useState([]);
-    
-    // Template states
+
+    // Templates and delivery options have no controls on this screen yet. The state is kept
+    // because the send path still reads it (useTemplate stays false, so templates are not used).
+    /* eslint-disable no-unused-vars */
+    const [templates, setTemplates] = useState([]);
     const [useTemplate, setUseTemplate] = useState(false);
     const [selectedTemplate, setSelectedTemplate] = useState('');
     const [templateVariables, setTemplateVariables] = useState({});
     const [templatePreview, setTemplatePreview] = useState(null);
-    
-    // Advanced options
     const [actionRequired, setActionRequired] = useState(false);
     const [expiresAfterDays, setExpiresAfterDays] = useState('');
     const [sendPushNotification, setSendPushNotification] = useState(true);
     const [sendEmail, setSendEmail] = useState(false);
+    /* eslint-enable no-unused-vars */
+
+    // Presentation only: which picker sheet is open, its search text, and the confirmation sheet
+    const [picker, setPicker] = useState(null); // 'department' | 'employees'
+    const [pickerQuery, setPickerQuery] = useState('');
+    const [confirmTarget, setConfirmTarget] = useState(null); // target description while confirming
 
     useEffect(() => {
         loadInitialData();
@@ -86,7 +101,7 @@ const CreateNotificationScreen = ({ navigation }) => {
                     setEmployees([]);
                 }
             }
-            
+
             if (templatesResponse.success) {
                 setTemplates(templatesResponse.templates || []);
             }
@@ -94,7 +109,7 @@ const CreateNotificationScreen = ({ navigation }) => {
             console.error('Error loading initial data:', error);
             showToast({
                 type: 'error',
-                text1: 'Error',
+                text1: 'Could not load recipients',
                 text2: 'Failed to load data',
             });
         } finally {
@@ -104,7 +119,7 @@ const CreateNotificationScreen = ({ navigation }) => {
 
     const handleTemplateSelection = async (templateName) => {
         setSelectedTemplate(templateName);
-        
+
         if (templateName) {
             // Load template preview
             try {
@@ -127,12 +142,14 @@ const CreateNotificationScreen = ({ navigation }) => {
         }
     };
 
+    // Kept for the template flow, which has no controls on this screen yet.
+    // eslint-disable-next-line no-unused-vars
     const updateTemplateVariable = (key, value) => {
         setTemplateVariables(prev => ({
             ...prev,
             [key]: value
         }));
-        
+
         // Update preview if template is selected
         if (selectedTemplate) {
             handleTemplateSelection(selectedTemplate);
@@ -143,8 +160,8 @@ const CreateNotificationScreen = ({ navigation }) => {
         if (!title.trim()) {
             showToast({
                 type: 'warning',
-                text1: 'Missing Title',
-                text2: 'Please enter a notification title',
+                text1: 'Missing title',
+                text2: 'Enter a notification title',
             });
             return;
         }
@@ -152,8 +169,8 @@ const CreateNotificationScreen = ({ navigation }) => {
         if (!message.trim()) {
             showToast({
                 type: 'warning',
-                text1: 'Missing Message',
-                text2: 'Please enter a notification message',
+                text1: 'Missing message',
+                text2: 'Enter a notification message',
             });
             return;
         }
@@ -161,8 +178,8 @@ const CreateNotificationScreen = ({ navigation }) => {
         if (targetType === 'department' && !selectedDepartment) {
             showToast({
                 type: 'warning',
-                text1: 'Select Department',
-                text2: 'Please select a department',
+                text1: 'Select a department',
+                text2: 'Choose who should receive this notification',
             });
             return;
         }
@@ -170,31 +187,34 @@ const CreateNotificationScreen = ({ navigation }) => {
         if (targetType === 'specific' && selectedEmployees.length === 0) {
             showToast({
                 type: 'warning',
-                text1: 'Select Employees',
-                text2: 'Please select at least one employee',
+                text1: 'Select employees',
+                text2: 'Choose at least one employee',
             });
             return;
         }
 
-        Alert.alert(
-            'Send Notification',
-            `Send notification to ${getTargetDescription()}?`,
-            [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Send', onPress: confirmSendNotification }
-            ]
-        );
+        if (getRecipientsList().length === 0) {
+            showToast({
+                type: 'warning',
+                text1: 'No recipients',
+                text2: 'No active employees match this selection',
+            });
+            return;
+        }
+
+        // confirmation sheet (replaces the former Alert); its Send button calls confirmSendNotification
+        setConfirmTarget(getTargetDescription());
     };
 
     const confirmSendNotification = async () => {
         setSending(true);
         try {
             let response;
-            
+
             if (useTemplate && selectedTemplate) {
                 // Send via template
                 const recipients = getRecipientsList();
-                
+
                 const templateData = {
                     template_name: selectedTemplate,
                     recipients: recipients,
@@ -205,7 +225,7 @@ const CreateNotificationScreen = ({ navigation }) => {
                         ...(expiresAfterDays && { expires_at: getExpiryDate() })
                     }
                 };
-                
+
                 response = await ApiService.createNotificationFromTemplate(templateData);
             } else {
                 // Send regular notification
@@ -217,22 +237,22 @@ const CreateNotificationScreen = ({ navigation }) => {
                     priority: priority,
                     action_required: actionRequired ? 1 : 0,
                     expires_at: expiresAfterDays ? getExpiryDate() : null,
-                    target_type: targetType,
-                    department: targetType === 'department' ? selectedDepartment : null,
-                    target_employees: targetType === 'specific' ? selectedEmployees : null,
+                    // the server takes a JSON list of employee IDs
+                    recipients: JSON.stringify(getRecipientsList()),
                 };
-                
+
                 response = await ApiService.createNotification(notificationData);
             }
 
             if (response.success) {
-                const count = response.notification_count || 0;
-                const pushCount = response.push_stats?.sent || response.fcm_sent || 0;
-                
+                const result = response.data?.message || {};
+                const count = result.notification_count || 0;
+                const pushCount = result.push_stats?.sent || 0;
+
                 showToast({
                     type: 'success',
-                    text1: 'Notification Sent',
-                    text2: `${count} notifications created${pushCount > 0 ? `, ${pushCount} push notifications sent` : ''}`,
+                    text1: 'Notification sent',
+                    text2: `Sent to ${count} employee${count === 1 ? '' : 's'}${pushCount > 0 ? ` · ${pushCount} by push` : ''}`,
                 });
 
                 // Reset form
@@ -249,7 +269,7 @@ const CreateNotificationScreen = ({ navigation }) => {
             console.error('Error sending notification:', error);
             showToast({
                 type: 'error',
-                text1: 'Send Failed',
+                text1: 'Not sent',
                 text2: error.message || 'Failed to send notification',
             });
         } finally {
@@ -287,10 +307,14 @@ const CreateNotificationScreen = ({ navigation }) => {
     };
 
     const getExpiryDate = () => {
-        if (!expiresAfterDays) return null;
-        const days = parseInt(expiresAfterDays);
-        if (isNaN(days) || days <= 0) return null;
-        
+        if (!expiresAfterDays) {
+            return null;
+        }
+        const days = parseInt(expiresAfterDays, 10);
+        if (isNaN(days) || days <= 0) {
+            return null;
+        }
+
         const expiryDate = new Date();
         expiryDate.setDate(expiryDate.getDate() + days);
         return expiryDate.toISOString();
@@ -325,377 +349,203 @@ const CreateNotificationScreen = ({ navigation }) => {
         });
     };
 
+    // ------------------------------------------------------------------ presentation helpers
+
+    const onConfirmSend = async () => {
+        await confirmSendNotification();
+        setConfirmTarget(null);
+    };
+
+    const openPicker = (which) => {
+        setPickerQuery('');
+        setPicker(which);
+    };
+
+    const departmentLabel = () => {
+        const dept = departments.find(d => d.name === selectedDepartment);
+        return selectedDepartment ? dept?.department_name || selectedDepartment : '';
+    };
+
+    const employeesLabel = () => {
+        const names = selectedEmployees.map(id => {
+            const emp = employees.find(e => e.name === id);
+            return emp?.employee_name || id;
+        });
+        return names.length <= 2 ? names.join(', ') : `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`;
+    };
+
+    const targetReady = targetType === 'all'
+        || (targetType === 'department' && Boolean(selectedDepartment))
+        || (targetType === 'specific' && selectedEmployees.length > 0);
+
+    const query = pickerQuery.trim().toLowerCase();
+    const pickerDepartments = departments.filter(d => !query || `${d.department_name || ''} ${d.name}`.toLowerCase().includes(query));
+    const pickerEmployees = employees.filter(e => !query || `${e.employee_name || ''} ${e.name} ${e.designation || ''}`.toLowerCase().includes(query));
+
     if (loading) {
         return (
-            <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color={colors.primary} />
-                <Text style={styles.loadingText}>Loading...</Text>
+            <View style={styles.container}>
+                <Loading />
             </View>
         );
     }
 
     return (
         <View style={styles.container}>
-            <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-            
-            {/* Header */}
-            {/* <View style={styles.headerSection}>
-                <View style={styles.headerTop}>
-                    <TouchableOpacity
-                        onPress={() => navigation.goBack()}
-                        style={styles.backButton}
-                    >
-                        <Icon name="arrow-left" size={20} color="#374151" />
-                    </TouchableOpacity>
-                    <View style={styles.headerTitleContainer}>
-                        <Text style={styles.headerTitle}>Create Notification</Text>
-                        <Text style={styles.headerSubtitle}>Send notifications to employees</Text>
-                    </View>
+            <StatusBar barStyle="dark-content" backgroundColor={color.surface} />
+
+            <Screen
+                footer={<Button title="Send notification" onPress={handleSendNotification} loading={sending} />}
+            >
+                <TextField
+                    label="Title"
+                    value={title}
+                    onChangeText={setTitle}
+                    placeholder="Short headline"
+                    maxLength={100}
+                    hint={`${title.length}/100`}
+                />
+                <TextField
+                    label="Message"
+                    value={message}
+                    onChangeText={setMessage}
+                    placeholder="What do employees need to know"
+                    multiline
+                    numberOfLines={4}
+                    maxLength={500}
+                    hint={`${message.length}/500`}
+                />
+
+                <Field label="Send to">
+                    <Segmented value={targetType} onChange={setTargetType} options={TARGETS} />
+                </Field>
+
+                {targetType === 'department' ? (
+                    <SelectField
+                        label="Department"
+                        value={departmentLabel()}
+                        placeholder="Select department"
+                        onPress={() => openPicker('department')}
+                    />
+                ) : null}
+
+                {targetType === 'specific' ? (
+                    <SelectField
+                        label="Employees"
+                        value={employeesLabel()}
+                        placeholder="Select employees"
+                        onPress={() => openPicker('employees')}
+                    />
+                ) : null}
+
+                {targetReady ? (
+                    <Text style={styles.audience}>{`Goes to ${getTargetDescription()}.`}</Text>
+                ) : null}
+            </Screen>
+
+            {/* Department picker */}
+            <Sheet visible={picker === 'department'} title="Department" onClose={() => setPicker(null)}>
+                {departments.length > 8 ? (
+                    <SearchField value={pickerQuery} onChangeText={setPickerQuery} placeholder="Search departments" style={styles.sheetSearch} />
+                ) : null}
+                {pickerDepartments.length === 0 ? (
+                    <EmptyState icon="search" title="No departments" />
+                ) : (
+                    <Group>
+                        {pickerDepartments.map((dept) => (
+                            <Row
+                                key={dept.name}
+                                title={dept.department_name || dept.name}
+                                chevron={false}
+                                onPress={() => {
+                                    setSelectedDepartment(dept.name);
+                                    setPicker(null);
+                                }}
+                                right={<CheckMark checked={dept.name === selectedDepartment} />}
+                            />
+                        ))}
+                    </Group>
+                )}
+            </Sheet>
+
+            {/* Employee multi-select */}
+            <Sheet
+                visible={picker === 'employees'}
+                title="Employees"
+                subtitle={selectedEmployees.length ? `${selectedEmployees.length} selected` : undefined}
+                onClose={() => setPicker(null)}
+                footer={<Button title="Done" onPress={() => setPicker(null)} style={styles.flex} />}
+            >
+                <SearchField value={pickerQuery} onChangeText={setPickerQuery} placeholder="Search employees" style={styles.sheetSearch} />
+                {pickerEmployees.length === 0 ? (
+                    <EmptyState icon="users" title="No employees" message={query ? `No one matches “${pickerQuery.trim()}”.` : undefined} />
+                ) : (
+                    <Group>
+                        {pickerEmployees.map((emp) => {
+                            const isSelected = selectedEmployees.includes(emp.name);
+                            return (
+                                <Row
+                                    key={emp.name}
+                                    left={<Avatar name={emp.employee_name || emp.name} size={32} />}
+                                    title={emp.employee_name || emp.name}
+                                    subtitle={emp.designation || undefined}
+                                    selected={isSelected}
+                                    chevron={false}
+                                    onPress={() => toggleEmployeeSelection(emp.name)}
+                                    right={<CheckMark checked={isSelected} />}
+                                />
+                            );
+                        })}
+                    </Group>
+                )}
+            </Sheet>
+
+            {/* Confirmation */}
+            <Sheet
+                visible={Boolean(confirmTarget)}
+                title="Send notification"
+                subtitle={confirmTarget ? `To ${confirmTarget}` : undefined}
+                onClose={() => !sending && setConfirmTarget(null)}
+                dismissable={!sending}
+                footer={(
+                    <>
+                        <Button title="Cancel" variant="secondary" onPress={() => setConfirmTarget(null)} disabled={sending} style={styles.flex} />
+                        <Button title="Send" onPress={onConfirmSend} loading={sending} style={styles.flex} />
+                    </>
+                )}
+            >
+                <View style={styles.preview}>
+                    <Text style={styles.previewTitle}>{title.trim()}</Text>
+                    <Text style={styles.previewMessage}>{message.trim()}</Text>
                 </View>
-            </View> */}
-
-            <ScrollView style={styles.scrollContainer} showsVerticalScrollIndicator={false}>
-                {/* Notification Details */}
-                <View style={styles.formCard}>
-                    <Text style={styles.sectionTitle}>Notification Details</Text>
-                    
-                    {/* Title */}
-                    <View style={styles.inputGroup}>
-                        <Text style={styles.inputLabel}>Title *</Text>
-                        <TextInput
-                            style={styles.textInput}
-                            value={title}
-                            onChangeText={setTitle}
-                            placeholder="Enter notification title..."
-                            maxLength={100}
-                        />
-                        <Text style={styles.characterCount}>{title.length}/100</Text>
-                    </View>
-
-                    {/* Message */}
-                    <View style={styles.inputGroup}>
-                        <Text style={styles.inputLabel}>Message *</Text>
-                        <TextInput
-                            style={[styles.textInput, styles.messageInput]}
-                            value={message}
-                            onChangeText={setMessage}
-                            placeholder="Enter notification message..."
-                            multiline
-                            numberOfLines={4}
-                            textAlignVertical="top"
-                            maxLength={500}
-                        />
-                        <Text style={styles.characterCount}>{message.length}/500</Text>
-                    </View>
-                </View>
-
-                {/* Target Selection */}
-                <View style={styles.formCard}>
-                    <Text style={styles.sectionTitle}>Send To</Text>
-                    
-                    {/* Target Type */}
-                    <View style={styles.inputGroup}>
-                        <Text style={styles.inputLabel}>Target Type</Text>
-                        <View style={styles.pickerContainer}>
-                            <Picker
-                                selectedValue={targetType}
-                                onValueChange={setTargetType}
-                                style={styles.picker}
-                            >
-                                <Picker.Item label="All Employees" value="all" />
-                                <Picker.Item label="Specific Department" value="department" />
-                                <Picker.Item label="Specific Employees" value="specific" />
-                            </Picker>
-                        </View>
-                    </View>
-
-                    {/* Department Selection */}
-                    {targetType === 'department' && (
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.inputLabel}>Department</Text>
-                            <View style={styles.pickerContainer}>
-                                <Picker
-                                    selectedValue={selectedDepartment}
-                                    onValueChange={setSelectedDepartment}
-                                    style={styles.picker}
-                                >
-                                    <Picker.Item label="-- Select Department --" value="" />
-                                    {departments.map((dept) => (
-                                        <Picker.Item
-                                            key={dept.name}
-                                            label={dept.department_name || dept.name}
-                                            value={dept.name}
-                                        />
-                                    ))}
-                                </Picker>
-                            </View>
-                        </View>
-                    )}
-
-                    {/* Employee Selection */}
-                    {targetType === 'specific' && (
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.inputLabel}>
-                                Employees ({selectedEmployees.length} selected)
-                            </Text>
-                            <View style={styles.employeeList}>
-                                {employees.map((emp) => (
-                                    <TouchableOpacity
-                                        key={emp.name}
-                                        style={[
-                                            styles.employeeItem,
-                                            selectedEmployees.includes(emp.name) && styles.employeeItemSelected
-                                        ]}
-                                        onPress={() => toggleEmployeeSelection(emp.name)}
-                                    >
-                                        <View style={styles.employeeInfo}>
-                                            <Text style={styles.employeeName}>
-                                                {emp.employee_name || emp.name}
-                                            </Text>
-                                            {emp.designation && (
-                                                <Text style={styles.employeeDesignation}>
-                                                    {emp.designation}
-                                                </Text>
-                                            )}
-                                        </View>
-                                        <View style={[
-                                            styles.checkbox,
-                                            selectedEmployees.includes(emp.name) && styles.checkboxSelected
-                                        ]}>
-                                            {selectedEmployees.includes(emp.name) && (
-                                                <Icon name="check" size={12} color="white" />
-                                            )}
-                                        </View>
-                                    </TouchableOpacity>
-                                ))}
-                            </View>
-                        </View>
-                    )}
-
-                    {/* Target Summary */}
-                    <View style={styles.targetSummary}>
-                        <Icon name="info-circle" size={16} color="#6366F1" />
-                        <Text style={styles.targetSummaryText}>
-                            This notification will be sent to {getTargetDescription()}
-                        </Text>
-                    </View>
-                </View>
-
-                {/* Send Button */}
-                <View style={styles.actionContainer}>
-                    <TouchableOpacity
-                        style={[styles.sendButton, sending && styles.sendButtonDisabled]}
-                        onPress={handleSendNotification}
-                        disabled={sending}
-                    >
-                        {sending ? (
-                            <ActivityIndicator size="small" color="white" />
-                        ) : (
-                            <>
-                                <Icon name="paper-plane" size={16} color="white" />
-                                <Text style={styles.sendButtonText}>Send Notification</Text>
-                            </>
-                        )}
-                    </TouchableOpacity>
-                </View>
-            </ScrollView>
+            </Sheet>
         </View>
     );
 };
 
+// check mark slot for picker rows (keeps row text aligned when unchecked)
+const CheckMark = ({ checked }) => (
+    <View style={styles.check}>
+        {checked ? <Icon name="check" size={18} color={color.accent} /> : null}
+    </View>
+);
+
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#F3F4F6',
+    container: { flex: 1, backgroundColor: color.bg },
+    flex: { flex: 1 },
+    audience: { ...type.secondary, paddingHorizontal: space.xs, marginTop: -space.xs },
+    sheetSearch: { marginBottom: space.lg },
+    check: { width: 24, alignItems: 'flex-end' },
+    preview: {
+        padding: space.md,
+        borderRadius: radius.md,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: color.border,
+        backgroundColor: color.surfaceMuted,
+        marginBottom: space.sm,
     },
-    loadingContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: '#F3F4F6',
-    },
-    loadingText: {
-        marginTop: 12,
-        fontSize: 14,
-        color: '#6B7280',
-    },
-    headerSection: {
-        backgroundColor: '#FFFFFF',
-        paddingVertical: 16,
-        paddingHorizontal: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 3,
-    },
-    headerTop: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    backButton: {
-        padding: 8,
-        marginRight: 12,
-    },
-    headerTitleContainer: {
-        flex: 1,
-    },
-    headerTitle: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: '#111827',
-    },
-    headerSubtitle: {
-        fontSize: 12,
-        color: '#6B7280',
-        marginTop: 2,
-    },
-    scrollContainer: {
-        flex: 1,
-    },
-    formCard: {
-        backgroundColor: '#FFFFFF',
-        margin: 16,
-        borderRadius: 12,
-        padding: 16,
-        elevation: 1,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
-    },
-    sectionTitle: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#374151',
-        marginBottom: 16,
-    },
-    inputGroup: {
-        marginBottom: 16,
-    },
-    inputLabel: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: '#374151',
-        marginBottom: 8,
-    },
-    textInput: {
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-        borderRadius: 8,
-        backgroundColor: '#F9FAFB',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        fontSize: 14,
-        color: '#374151',
-    },
-    messageInput: {
-        minHeight: 100,
-        textAlignVertical: 'top',
-    },
-    characterCount: {
-        fontSize: 12,
-        color: '#9CA3AF',
-        textAlign: 'right',
-        marginTop: 4,
-    },
-    pickerContainer: {
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-        borderRadius: 8,
-        backgroundColor: '#F9FAFB',
-        overflow: 'hidden',
-    },
-    picker: {
-        height: 50,
-    },
-    employeeList: {
-        maxHeight: 300,
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-        borderRadius: 8,
-        backgroundColor: '#F9FAFB',
-    },
-    employeeItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
-    },
-    employeeItemSelected: {
-        backgroundColor: '#EEF2FF',
-    },
-    employeeInfo: {
-        flex: 1,
-    },
-    employeeName: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: '#374151',
-    },
-    employeeDesignation: {
-        fontSize: 12,
-        color: '#6B7280',
-        marginTop: 2,
-    },
-    checkbox: {
-        width: 20,
-        height: 20,
-        borderRadius: 4,
-        borderWidth: 2,
-        borderColor: '#D1D5DB',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    checkboxSelected: {
-        backgroundColor: '#6366F1',
-        borderColor: '#6366F1',
-    },
-    targetSummary: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#EEF2FF',
-        padding: 12,
-        borderRadius: 8,
-        gap: 8,
-    },
-    targetSummaryText: {
-        flex: 1,
-        fontSize: 14,
-        color: '#6366F1',
-        fontWeight: '500',
-    },
-    actionContainer: {
-        padding: 16,
-        paddingTop: 0,
-    },
-    sendButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#6366F1',
-        paddingVertical: 16,
-        borderRadius: 12,
-        gap: 8,
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-    },
-    sendButtonDisabled: {
-        backgroundColor: '#9CA3AF',
-    },
-    sendButtonText: {
-        color: 'white',
-        fontSize: 16,
-        fontWeight: '700',
-    },
+    previewTitle: { ...type.bodyStrong },
+    previewMessage: { ...type.secondary, marginTop: 4, lineHeight: 19 },
 });
 
 export default CreateNotificationScreen;

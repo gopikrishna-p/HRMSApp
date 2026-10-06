@@ -16,13 +16,17 @@ export default function showToast({
     time = 4000,
     backgroundColor,
 }) {
-    Toast.show({
-        type: TYPE_FALLBACK[type] || type,
-        text1,
-        text2,
-        visibilityTime: time,
-        position: 'top',
-        topOffset: 50,
-        props: { backgroundColor },
-    });
+    // Shown a moment later so it lands on whichever toast host is on top by then: the one inside
+    // an open bottom sheet (ds Sheet), or the app root once a sheet that triggered it has closed.
+    setTimeout(() => {
+        Toast.show({
+            type: TYPE_FALLBACK[type] || type,
+            text1,
+            text2,
+            visibilityTime: time,
+            position: 'top',
+            topOffset: 50,
+            props: { backgroundColor },
+        });
+    }, 200);
 }

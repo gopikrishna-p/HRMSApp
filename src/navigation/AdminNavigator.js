@@ -1,7 +1,5 @@
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { TouchableOpacity, View, Image, StyleSheet, Text } from 'react-native';
-import Icon from 'react-native-vector-icons/FontAwesome5';
 
 // Import Admin Screens
 import AdminDashboard from '../screens/admin/AdminDashboard';
@@ -57,9 +55,11 @@ const AdminNavigator = () => {
             initialRouteName="AdminDashboard"
             screenOptions={{
                 headerStyle: { backgroundColor: '#FFFFFF' },
-                headerTintColor: '#111827',
+                headerTintColor: '#101828',
                 headerTitleAlign: 'center',
-                headerShadowVisible: true,
+                headerTitleStyle: { fontSize: 17, fontWeight: '600', color: '#101828' },
+                headerShadowVisible: false,
+                contentStyle: { backgroundColor: '#F4F5F7' },
             }}
         >
             {/* Dashboard renders its own <AppHeader/> */}
@@ -70,23 +70,23 @@ const AdminNavigator = () => {
             />
 
             {/* Keep RN header for the rest (or migrate gradually) */}
-            <Stack.Screen name="EmployeeManagement" component={EmployeeManagement} options={{ title: 'Employee Management' }} />
-            <Stack.Screen name="AdminCheckInOut" component={AdminCheckInOutScreen} options={{ title: 'Admin Check In/Out' }} />
-            <Stack.Screen name="AllAttendanceAnalyticsScreen" component={AllAttendanceAnalyticsScreen} options={{ title: 'All Attendance' }} />
+            <Stack.Screen name="EmployeeManagement" component={EmployeeManagement} options={{ title: 'Employees' }} />
+            <Stack.Screen name="AdminCheckInOut" component={AdminCheckInOutScreen} options={{ title: 'Check In / Out' }} />
+            <Stack.Screen name="AllAttendanceAnalyticsScreen" component={AllAttendanceAnalyticsScreen} options={{ title: 'Attendance Reports' }} />
             <Stack.Screen name="ManualCheckInOut" component={ManualCheckInOutScreen} options={{ title: 'Manual Attendance' }} />
             <Stack.Screen name="TodayAttendance" component={TodayAttendanceScreen} options={{ title: "Today's Attendance" }} />
             <Stack.Screen name="WFHSettings" component={WFHSettingsScreen} options={{ title: 'WFH Settings' }} />
-            <Stack.Screen name="WFHApprovals" component={WFHApprovalsScreen} options={{ title: 'WFH Approvals' }} />
-            <Stack.Screen name="OnSiteSettings" component={OnSiteSettingsScreen} options={{ title: 'On Site Settings' }} />
-            <Stack.Screen name="OnSiteApprovals" component={OnSiteApprovalsScreen} options={{ title: 'On Site Approvals' }} />
-            <Stack.Screen name="LeaveApprovals" component={LeaveApprovalsScreen} options={{ title: 'Leave Approvals' }} />
+            <Stack.Screen name="WFHApprovals" component={WFHApprovalsScreen} options={{ title: 'WFH Requests' }} />
+            <Stack.Screen name="OnSiteSettings" component={OnSiteSettingsScreen} options={{ title: 'On-Site Settings' }} />
+            <Stack.Screen name="OnSiteApprovals" component={OnSiteApprovalsScreen} options={{ title: 'On-Site Requests' }} />
+            <Stack.Screen name="LeaveApprovals" component={LeaveApprovalsScreen} options={{ title: 'Leave Requests' }} />
             <Stack.Screen name="MyLeaveApplication" component={LeaveApplicationScreen} options={{ title: 'My Leave Application' }} />
-            <Stack.Screen name="CompApprovals" component={CompApprovalScreen} options={{ title: 'Compensatory Leave Approvals' }} />
+            <Stack.Screen name="CompApprovals" component={CompApprovalScreen} options={{ title: 'Comp-Off Requests' }} />
             <Stack.Screen name="AdminSelfService" component={AdminSelfServiceScreen} options={{ title: 'My Self-Service' }} />
             <Stack.Screen name="MyCompensatoryLeave" component={CompensatoryLeaveScreen} options={{ title: 'My Comp-Off Request' }} />
-            <Stack.Screen name="ExpenseClaimApproval" component={ExpenseClaimApprovalScreen} options={{ title: 'Expense Claim Approvals' }} />
+            <Stack.Screen name="ExpenseClaimApproval" component={ExpenseClaimApprovalScreen} options={{ title: 'Expense Claims' }} />
             <Stack.Screen name="MyExpenseClaim" component={ExpenseClaimScreen} options={{ title: 'My Expense Claim' }} />
-            <Stack.Screen name="TravelRequestApproval" component={TravelRequestApproval} options={{ title: 'Travel Request Approvals' }} />
+            <Stack.Screen name="TravelRequestApproval" component={TravelRequestApproval} options={{ title: 'Travel Requests' }} />
             <Stack.Screen name="MyTravelRequest" component={TravelRequestScreen} options={{ title: 'My Travel Request' }} />
             <Stack.Screen name="MyWFHRequest" component={WFHRequestScreen} options={{ title: 'My WFH Request' }} />
             <Stack.Screen name="MyOnSiteRequest" component={OnSiteRequestScreen} options={{ title: 'My On-Site Request' }} />
@@ -96,9 +96,9 @@ const AdminNavigator = () => {
             <Stack.Screen name="MyTasks" component={MyTasksScreen} options={{ headerShown: false }} />
             <Stack.Screen name="MyProjects" component={MyProjectsScreen} options={{ headerShown: false }} />
             <Stack.Screen name="MyLogs" component={MyLogsScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="CreateNotification" component={CreateNotificationScreen} options={{ title: 'Create Notification' }} />
+            <Stack.Screen name="CreateNotification" component={CreateNotificationScreen} options={{ title: 'New Notification' }} />
 
-            <Stack.Screen name="ProjectsOverview" component={ProjectsOverviewScreen} options={{ title: 'Projects Overview' }} />
+            <Stack.Screen name="ProjectsOverview" component={ProjectsOverviewScreen} options={{ title: 'Projects' }} />
             <Stack.Screen name="ProjectLogsScreen" component={ProjectLogsScreen} options={{ title: 'Project Logs' }} />
             <Stack.Screen name="ProjectTasksScreen" component={ProjectTasksScreen} options={{ title: 'Project Tasks' }} />
 

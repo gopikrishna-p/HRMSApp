@@ -1,38 +1,76 @@
+// src/screens/admin/SalaryStructureAdminScreen.js
+//
+// Salary structure assignments of active employees. Department and structure are filtered
+// on the server; the search box filters the loaded list by name, ID, department or
+// designation. "CTC" from the server is the monthly gross (sum of the structure's
+// earnings). Tapping an employee loads their full monthly breakdown.
 import React, { useState, useEffect, useCallback } from 'react';
-import {
-    View,
-    Text,
-    StyleSheet,
-    ScrollView,
-    RefreshControl,
-    Alert,
-    TouchableOpacity,
-    Modal,
-    TextInput,
-    FlatList,
-} from 'react-native';
-import { Picker } from '@react-native-picker/picker';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { colors } from '../../theme/colors';
-import Loading from '../../components/common/Loading';
+import { View, Text, StyleSheet } from 'react-native';
 import apiService, { extractFrappeData, isApiSuccess } from '../../services/api.service';
+import showToast from '../../utils/Toast';
+import {
+    Screen,
+    Group,
+    Row,
+    Avatar,
+    Tag,
+    StatStrip,
+    SearchField,
+    SelectField,
+    Sheet,
+    Button,
+    EmptyState,
+    Loading,
+    Notice,
+    Icon,
+    color,
+    space,
+} from '../../components/ds';
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// ₹1,50,000: Indian grouping, whole rupees. Other currencies keep their code as prefix.
+const money = (value, currency) => {
+    const n = Math.round(parseFloat(value || 0) || 0);
+    const s = String(Math.abs(n));
+    const last3 = s.slice(-3);
+    const rest = s.slice(0, -3);
+    const grouped = rest ? `${rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${last3}` : last3;
+    const symbol = !currency || currency === 'INR' ? '₹' : `${currency} `;
+    return `${n < 0 ? '-' : ''}${symbol}${grouped}`;
+};
+
+// 'YYYY-MM-DD' -> '01 Apr 2025'
+const dateLabel = (value) => {
+    const [y, m, d] = String(value || '').slice(0, 10).split('-').map(Number);
+    return y && m && d ? `${String(d).padStart(2, '0')} ${MONTHS[m - 1]} ${y}` : String(value || '');
+};
+
+const deptLabel = (dept) => String(dept || '').replace(' - DG', '');
+
+const componentNote = (c) => [
+    c.abbr,
+    c.formula && c.amount_based_on_formula ? c.formula : null,
+].filter(Boolean).join('  ·  ');
 
 const SalaryStructureAdminScreen = ({ navigation }) => {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [assignments, setAssignments] = useState([]);
     const [statistics, setStatistics] = useState(null);
+    // eslint-disable-next-line no-unused-vars -- returned by the API, not shown on this screen
     const [structures, setStructures] = useState({});
     const [error, setError] = useState(null);
-    
+
     // Filters
     const [filterDepartment, setFilterDepartment] = useState('');
     const [filterStructure, setFilterStructure] = useState('');
     const [searchText, setSearchText] = useState('');
     const [departments, setDepartments] = useState([]);
     const [structureList, setStructureList] = useState([]);
-    
-    // Detail modal
+    const [picker, setPicker] = useState(null); // 'department' | 'structure'
+
+    // Detail sheet
     const [selectedEmployee, setSelectedEmployee] = useState(null);
     const [showDetailModal, setShowDetailModal] = useState(false);
     const [employeeSalaryData, setEmployeeSalaryData] = useState(null);
@@ -40,10 +78,12 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
 
     useEffect(() => {
         loadInitialData();
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
     }, []);
 
     useEffect(() => {
         loadSalaryStructures();
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- reload whenever a server-side filter changes
     }, [filterDepartment, filterStructure]);
 
     const loadInitialData = async () => {
@@ -55,7 +95,7 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
                 const deptData = extractFrappeData(deptResponse, {});
                 setDepartments(deptData.departments || deptData || []);
             }
-            
+
             // Load structure list
             const structResponse = await apiService.getSalaryStructureList();
             if (isApiSuccess(structResponse)) {
@@ -63,7 +103,7 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
                 // Handle both wrapped and unwrapped responses
                 setStructureList(structData.structures || structData.data?.structures || []);
             }
-            
+
             await loadSalaryStructures();
         } catch (err) {
             console.error('Load initial data error:', err);
@@ -77,17 +117,19 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
         try {
             setError(null);
             const filters = {};
-            if (filterDepartment) filters.department = filterDepartment;
-            if (filterStructure) filters.salary_structure = filterStructure;
-            
+            if (filterDepartment) {
+                filters.department = filterDepartment;
+            }
+            if (filterStructure) {
+                filters.salary_structure = filterStructure;
+            }
+
             const response = await apiService.getAllSalaryStructureAssignments(filters);
-            console.log('Salary Structure Assignments Response:', JSON.stringify(response, null, 2));
 
             if (isApiSuccess(response)) {
                 // extractFrappeData already unwraps {status: 'success', data: {...}} to just the data
                 const data = extractFrappeData(response, null);
-                console.log('Extracted Admin Salary Data:', JSON.stringify(data, null, 2));
-                
+
                 if (data && typeof data === 'object') {
                     // Check if we have the expected fields directly
                     if (data.assignments !== undefined) {
@@ -122,13 +164,15 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
         setRefreshing(true);
         await loadSalaryStructures();
         setRefreshing(false);
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- loadSalaryStructures only reads these filters
     }, [filterDepartment, filterStructure]);
 
     const handleViewDetail = async (employee) => {
         setSelectedEmployee(employee);
+        setEmployeeSalaryData(null);
         setShowDetailModal(true);
         setLoadingDetail(true);
-        
+
         try {
             const response = await apiService.getEmployeeSalaryStructure(employee.employee);
             if (isApiSuccess(response)) {
@@ -143,19 +187,16 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
             }
         } catch (err) {
             console.error('Load employee salary detail error:', err);
-            Alert.alert('Error', 'Failed to load employee salary details');
+            showToast({ type: 'error', text1: 'Could not load salary', text2: 'Failed to load employee salary details' });
         } finally {
             setLoadingDetail(false);
         }
     };
 
-    const formatCurrency = (amount, currency = 'INR') => {
-        const currencySymbol = currency === 'INR' ? '₹' : currency;
-        return `${currencySymbol} ${parseFloat(amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
-    };
-
     const filteredAssignments = assignments.filter(a => {
-        if (!searchText) return true;
+        if (!searchText) {
+            return true;
+        }
         const search = searchText.toLowerCase();
         return (
             (a.employee_name || '').toLowerCase().includes(search) ||
@@ -165,696 +206,195 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
         );
     });
 
-    const renderEmployeeCard = ({ item }) => (
-        <TouchableOpacity 
-            style={styles.employeeCard}
-            onPress={() => handleViewDetail(item)}
-        >
-            <View style={styles.cardHeader}>
-                <View style={styles.employeeInfo}>
-                    <Text style={styles.employeeName}>{item.employee_name}</Text>
-                    <Text style={styles.employeeId}>{item.employee}</Text>
-                </View>
-                <View style={styles.ctcBadge}>
-                    <Text style={styles.ctcLabel}>CTC</Text>
-                    <Text style={styles.ctcAmount}>{formatCurrency(item.total_ctc)}</Text>
-                </View>
-            </View>
-            
-            <View style={styles.cardDetails}>
-                <View style={styles.detailRow}>
-                    <Icon name="briefcase" size={14} color={colors.textSecondary} />
-                    <Text style={styles.detailText}>{item.designation || 'N/A'}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                    <Icon name="domain" size={14} color={colors.textSecondary} />
-                    <Text style={styles.detailText}>{item.department || 'N/A'}</Text>
-                </View>
-            </View>
-            
-            {/* Show monthly Earnings + Deductions (always computed from the
-                Salary Structure). Base/Variable are the raw Assignment fields
-                which are often 0 for structures that use fixed-amount earning
-                rows, so we only render them when non-zero to avoid showing
-                misleading ₹0 chips. */}
-            <View style={styles.cardFooter}>
-                <View style={styles.salaryRow}>
-                    <Text style={styles.salaryLabel}>Earnings:</Text>
-                    <Text style={styles.salaryValue}>{formatCurrency(item.total_earnings)}</Text>
-                </View>
-                <View style={styles.salaryRow}>
-                    <Text style={styles.salaryLabel}>Deductions:</Text>
-                    <Text style={styles.salaryValue}>{formatCurrency(item.total_deductions)}</Text>
-                </View>
-            </View>
+    const departmentOptions = [
+        { value: '', label: 'All departments' },
+        ...departments.map((dept) => ({ value: dept.name, label: dept.name })),
+    ];
+    const structureOptions = [
+        { value: '', label: 'All structures' },
+        ...structureList.map((s) => ({ value: s.name, label: s.name })),
+    ];
 
-            {(Number(item.base) > 0 || Number(item.variable) > 0) ? (
-                <View style={styles.cardFooter}>
-                    {Number(item.base) > 0 ? (
-                        <View style={styles.salaryRow}>
-                            <Text style={styles.salaryLabel}>Base:</Text>
-                            <Text style={styles.salaryValueMuted}>{formatCurrency(item.base)}</Text>
-                        </View>
+    const renderDetail = () => {
+        if (loadingDetail) {
+            return <Loading label="Loading salary" />;
+        }
+        const d = employeeSalaryData;
+        if (!d) {
+            return <EmptyState icon="file-text" title="No salary data" message="No salary structure is assigned yet." />;
+        }
+        const cur = d.currency;
+        const structureNote = [
+            d.payroll_frequency || 'Monthly',
+            d.from_date ? `from ${dateLabel(d.from_date)}` : null,
+        ].filter(Boolean).join('  ·  ');
+        return (
+            <>
+                <Group title="Structure">
+                    <Row title={d.salary_structure || 'No structure'} subtitle={structureNote} />
+                    <Row title="Base pay" value={money(d.base, cur)} />
+                    <Row title="Variable" value={money(d.variable, cur)} />
+                    {d.leave_encashment_per_day > 0 ? (
+                        <Row title="Leave encashment" value={`${money(d.leave_encashment_per_day, cur)} / day`} />
                     ) : null}
-                    {Number(item.variable) > 0 ? (
-                        <View style={styles.salaryRow}>
-                            <Text style={styles.salaryLabel}>Variable:</Text>
-                            <Text style={styles.salaryValueMuted}>{formatCurrency(item.variable)}</Text>
-                        </View>
-                    ) : null}
-                </View>
-            ) : null}
+                </Group>
 
-            {item.from_date ? (
-                <View style={styles.effectiveDateRow}>
-                    <Icon name="calendar" size={12} color={colors.textSecondary} />
-                    <Text style={styles.effectiveDateText}>From: {item.from_date}</Text>
-                </View>
-            ) : null}
-            
-            <View style={styles.structureBadge}>
-                <Text style={styles.structureText}>{item.salary_structure}</Text>
-            </View>
-            
-            <View style={styles.viewDetailHint}>
-                <Text style={styles.viewDetailText}>Tap to view full breakdown</Text>
-                <Icon name="chevron-right" size={14} color={colors.primary} />
-            </View>
-        </TouchableOpacity>
-    );
+                <Group title="Earnings">
+                    {(d.earnings || []).map((e, i) => (
+                        <Row
+                            key={`e-${i}`}
+                            title={e.salary_component}
+                            subtitle={componentNote(e) || undefined}
+                            value={money(e.calculated_amount || e.amount, cur)}
+                        />
+                    ))}
+                    <Row title="Total earnings" value={money(d.total_earnings, cur)} />
+                </Group>
 
-    const renderDetailModal = () => (
-        <Modal
-            visible={showDetailModal}
-            animationType="slide"
-            onRequestClose={() => setShowDetailModal(false)}
-        >
-            <View style={styles.modalContainer}>
-                <View style={styles.modalHeader}>
-                    <TouchableOpacity onPress={() => setShowDetailModal(false)}>
-                        <Icon name="close" size={24} color={colors.textPrimary} />
-                    </TouchableOpacity>
-                    <Text style={styles.modalTitle}>Salary Details</Text>
-                    <View style={{ width: 24 }} />
-                </View>
-                
-                {loadingDetail ? (
-                    <Loading message="Loading details..." />
-                ) : employeeSalaryData ? (
-                    <ScrollView style={styles.modalContent}>
-                        {/* Employee Info */}
-                        <View style={styles.detailSection}>
-                            <Text style={styles.detailName}>{employeeSalaryData.employee_name}</Text>
-                            <Text style={styles.detailDesignation}>
-                                {employeeSalaryData.designation} - {employeeSalaryData.department}
-                            </Text>
-                            <Text style={styles.detailStructure}>
-                                Structure: {employeeSalaryData.salary_structure}
-                            </Text>
-                            <Text style={styles.detailStructure}>
-                                Frequency: {employeeSalaryData.payroll_frequency || 'Monthly'}
-                            </Text>
-                            {employeeSalaryData.from_date ? (
-                                <Text style={styles.detailStructure}>
-                                    Effective from: {employeeSalaryData.from_date}
-                                </Text>
-                            ) : null}
-                        </View>
-                        
-                        {/* Base & Variable */}
-                        <View style={styles.baseVarSection}>
-                            <View style={styles.baseVarItem}>
-                                <Text style={styles.baseVarLabel}>Base Pay</Text>
-                                <Text style={styles.baseVarValue}>
-                                    {formatCurrency(employeeSalaryData.base, employeeSalaryData.currency)}
-                                </Text>
-                            </View>
-                            <View style={styles.baseVarItem}>
-                                <Text style={styles.baseVarLabel}>Variable</Text>
-                                <Text style={styles.baseVarValue}>
-                                    {formatCurrency(employeeSalaryData.variable, employeeSalaryData.currency)}
-                                </Text>
-                            </View>
-                        </View>
-                        
-                        {/* Earnings */}
-                        <View style={styles.componentSection}>
-                            <Text style={styles.sectionTitle}>
-                                <Icon name="plus-circle" size={16} color={colors.success} /> Earnings
-                            </Text>
-                            {employeeSalaryData.earnings?.map((e, i) => (
-                                <View key={i} style={styles.componentDetailRow}>
-                                    <View style={{ flex: 1 }}>
-                                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                            <Text style={styles.componentName}>{e.salary_component}</Text>
-                                            {e.abbr ? <Text style={styles.componentAbbr}>({e.abbr})</Text> : null}
-                                        </View>
-                                        {e.formula && e.amount_based_on_formula ? (
-                                            <Text style={styles.formulaText}>Formula: {e.formula}</Text>
-                                        ) : null}
-                                    </View>
-                                    <Text style={styles.componentAmountGreen}>
-                                        {formatCurrency(e.calculated_amount || e.amount, employeeSalaryData.currency)}
-                                    </Text>
-                                </View>
-                            ))}
-                            <View style={styles.totalRow}>
-                                <Text style={styles.totalLabel}>Total Earnings</Text>
-                                <Text style={styles.totalAmountGreen}>
-                                    {formatCurrency(employeeSalaryData.total_earnings, employeeSalaryData.currency)}
-                                </Text>
-                            </View>
-                        </View>
-                        
-                        {/* Deductions */}
-                        <View style={styles.componentSection}>
-                            <Text style={styles.sectionTitle}>
-                                <Icon name="minus-circle" size={16} color={colors.error} /> Deductions
-                            </Text>
-                            {employeeSalaryData.deductions?.map((d, i) => (
-                                <View key={i} style={styles.componentDetailRow}>
-                                    <View style={{ flex: 1 }}>
-                                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                            <Text style={styles.componentName}>{d.salary_component}</Text>
-                                            {d.abbr ? <Text style={styles.componentAbbr}>({d.abbr})</Text> : null}
-                                        </View>
-                                        {d.formula && d.amount_based_on_formula ? (
-                                            <Text style={styles.formulaText}>Formula: {d.formula}</Text>
-                                        ) : null}
-                                        {d.calculation_note ? (
-                                            <Text style={styles.calcNote}>{d.calculation_note}</Text>
-                                        ) : null}
-                                    </View>
-                                    <Text style={styles.componentAmountRed}>
-                                        -{formatCurrency(d.calculated_amount || d.amount, employeeSalaryData.currency)}
-                                    </Text>
-                                </View>
-                            ))}
-                            <View style={styles.totalRow}>
-                                <Text style={styles.totalLabel}>Total Deductions</Text>
-                                <Text style={styles.totalAmountRed}>
-                                    -{formatCurrency(employeeSalaryData.total_deductions, employeeSalaryData.currency)}
-                                </Text>
-                            </View>
-                        </View>
-                        
-                        {/* Net Pay */}
-                        <View style={styles.netPaySection}>
-                            <Text style={styles.netPayLabel}>Net Pay (Monthly)</Text>
-                            <Text style={styles.netPayValue}>
-                                {formatCurrency(employeeSalaryData.net_pay, employeeSalaryData.currency)}
-                            </Text>
-                        </View>
+                <Group title="Deductions">
+                    {(d.deductions || []).map((x, i) => (
+                        <Row
+                            key={`d-${i}`}
+                            title={x.salary_component}
+                            subtitle={[componentNote(x), x.calculation_note].filter(Boolean).join('\n') || undefined}
+                            subtitleLines={3}
+                            value={`−${money(x.calculated_amount || x.amount, cur)}`}
+                        />
+                    ))}
+                    <Row title="Total deductions" value={`−${money(d.total_deductions, cur)}`} />
+                </Group>
 
-                        {/* Leave Encashment */}
-                        {employeeSalaryData.leave_encashment_per_day > 0 && (
-                            <View style={styles.infoCard}>
-                                <Icon name="information-outline" size={16} color={colors.primary} />
-                                <Text style={styles.infoText}>
-                                    Leave Encashment: {formatCurrency(employeeSalaryData.leave_encashment_per_day, employeeSalaryData.currency)} / day
-                                </Text>
-                            </View>
-                        )}
-                        
-                        <View style={{ height: 30 }} />
-                    </ScrollView>
-                ) : (
-                    <View style={styles.noData}>
-                        <Text style={styles.noDataText}>No salary data available</Text>
-                    </View>
-                )}
-            </View>
-        </Modal>
+                <Group>
+                    <Row title="Net pay per month" right={<Text style={styles.netPay}>{money(d.net_pay, cur)}</Text>} />
+                </Group>
+            </>
+        );
+    };
+
+    const renderOptions = (options, value, onSelect) => (
+        <Group>
+            {options.map((o) => {
+                const active = o.value === value;
+                return (
+                    <Row
+                        key={`opt-${o.value}`}
+                        title={o.label}
+                        selected={active}
+                        right={active ? <Icon name="check" size={18} color={color.accent} /> : null}
+                        chevron={false}
+                        onPress={() => {
+                            onSelect(o.value);
+                            setPicker(null);
+                        }}
+                    />
+                );
+            })}
+        </Group>
     );
 
     if (loading) {
-        return <Loading message="Loading salary structures..." />;
+        return (
+            <View style={styles.screen}>
+                <Loading label="Loading salary structures" />
+            </View>
+        );
     }
 
+    const countLabel = filteredAssignments.length === assignments.length
+        ? `${assignments.length} ${assignments.length === 1 ? 'employee' : 'employees'}`
+        : `${filteredAssignments.length} of ${assignments.length} employees`;
+
     return (
-        <View style={styles.container}>
-            {/* Statistics Summary */}
-            {statistics && (
-                <View style={styles.statsContainer}>
-                    <View style={styles.statCard}>
-                        <Icon name="account-group" size={24} color={colors.primary} />
-                        <Text style={styles.statValue}>{statistics.total_employees}</Text>
-                        <Text style={styles.statLabel}>Employees</Text>
-                    </View>
-                    <View style={styles.statCard}>
-                        <Icon name="currency-inr" size={24} color={colors.success} />
-                        <Text style={styles.statValue}>{formatCurrency(statistics.total_ctc)}</Text>
-                        <Text style={styles.statLabel}>Total CTC</Text>
-                    </View>
-                </View>
-            )}
-            
-            {/* Filters */}
-            <View style={styles.filterContainer}>
-                <TextInput
-                    style={styles.searchInput}
-                    placeholder="Search by name, ID, department..."
-                    value={searchText}
-                    onChangeText={setSearchText}
-                    placeholderTextColor={colors.textSecondary}
-                />
-                
-                <View style={styles.filterRow}>
-                    <View style={styles.filterPicker}>
-                        <Picker
-                            selectedValue={filterDepartment}
-                            onValueChange={setFilterDepartment}
-                            style={styles.picker}
-                        >
-                            <Picker.Item label="All Departments" value="" />
-                            {departments.map((dept) => (
-                                <Picker.Item key={dept.name} label={dept.name} value={dept.name} />
-                            ))}
-                        </Picker>
-                    </View>
-                    
-                    <View style={styles.filterPicker}>
-                        <Picker
-                            selectedValue={filterStructure}
-                            onValueChange={setFilterStructure}
-                            style={styles.picker}
-                        >
-                            <Picker.Item label="All Structures" value="" />
-                            {structureList.map((s) => (
-                                <Picker.Item key={s.name} label={s.name} value={s.name} />
-                            ))}
-                        </Picker>
-                    </View>
+        <View style={styles.screen}>
+            <View style={styles.toolbar}>
+                <SearchField value={searchText} onChangeText={setSearchText} placeholder="Search name, ID, department" />
+                <View style={styles.filters}>
+                    <SelectField
+                        value={filterDepartment || 'All departments'}
+                        onPress={() => setPicker('department')}
+                        style={[styles.flex, styles.noMargin]}
+                    />
+                    <SelectField
+                        value={filterStructure || 'All structures'}
+                        onPress={() => setPicker('structure')}
+                        style={[styles.flex, styles.noMargin]}
+                    />
                 </View>
             </View>
-            
-            {/* Results Count */}
-            <View style={styles.resultCount}>
-                <Text style={styles.resultText}>
-                    Showing {filteredAssignments.length} of {assignments.length} employees
-                </Text>
-            </View>
-            
-            {/* Employee List */}
-            <FlatList
-                data={filteredAssignments}
-                renderItem={renderEmployeeCard}
-                keyExtractor={(item) => item.name}
-                contentContainerStyle={styles.listContent}
-                refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
-                }
-                ListEmptyComponent={
-                    <View style={styles.emptyContainer}>
-                        <Icon name="file-document-outline" size={64} color={colors.textSecondary} />
-                        <Text style={styles.emptyText}>No salary structures found</Text>
-                    </View>
-                }
-            />
-            
-            {renderDetailModal()}
+
+            <Screen refreshing={refreshing} onRefresh={onRefresh}>
+                {error ? <Notice tone="danger" icon="alert-circle">{error}</Notice> : null}
+
+                {statistics ? (
+                    <StatStrip
+                        style={styles.stats}
+                        items={[
+                            { label: 'Employees', value: statistics.total_employees },
+                            { label: 'Monthly CTC', value: money(statistics.total_ctc) },
+                        ]}
+                    />
+                ) : null}
+
+                {filteredAssignments.length > 0 ? (
+                    <Group title={`${countLabel}  ·  CTC per month`}>
+                        {filteredAssignments.map((item) => (
+                            <Row
+                                key={item.name}
+                                left={<Avatar name={item.employee_name} />}
+                                title={item.employee_name}
+                                subtitle={[item.employee, item.designation, deptLabel(item.department)].filter(Boolean).join('  ·  ')}
+                                meta={item.salary_structure ? <Tag label={item.salary_structure} /> : null}
+                                value={money(item.total_ctc)}
+                                onPress={() => handleViewDetail(item)}
+                            />
+                        ))}
+                    </Group>
+                ) : !error ? (
+                    <EmptyState
+                        icon="layers"
+                        title="No salary structures"
+                        message={searchText
+                            ? `No one matches “${searchText}”.`
+                            : filterDepartment || filterStructure ? 'No assignments match these filters.' : 'No employee has a salary structure yet.'}
+                    />
+                ) : null}
+            </Screen>
+
+            <Sheet visible={picker === 'department'} title="Department" onClose={() => setPicker(null)}>
+                {renderOptions(departmentOptions, filterDepartment, setFilterDepartment)}
+            </Sheet>
+
+            <Sheet visible={picker === 'structure'} title="Salary structure" onClose={() => setPicker(null)}>
+                {renderOptions(structureOptions, filterStructure, setFilterStructure)}
+            </Sheet>
+
+            <Sheet
+                visible={showDetailModal}
+                title={selectedEmployee?.employee_name || 'Salary'}
+                subtitle={[selectedEmployee?.designation, deptLabel(selectedEmployee?.department)].filter(Boolean).join('  ·  ') || undefined}
+                onClose={() => setShowDetailModal(false)}
+                footer={<Button title="Close" variant="secondary" onPress={() => setShowDetailModal(false)} style={styles.flex} />}
+            >
+                {renderDetail()}
+            </Sheet>
         </View>
     );
 };
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.background,
-    },
-    statsContainer: {
-        flexDirection: 'row',
-        padding: 12,
-        gap: 12,
-    },
-    statCard: {
-        flex: 1,
-        backgroundColor: colors.surface,
-        borderRadius: 12,
-        padding: 16,
-        alignItems: 'center',
-        elevation: 2,
-    },
-    statValue: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-        marginTop: 8,
-    },
-    statLabel: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginTop: 4,
-    },
-    filterContainer: {
-        paddingHorizontal: 12,
-        paddingBottom: 8,
-    },
-    searchInput: {
-        backgroundColor: colors.surface,
-        borderRadius: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        fontSize: 14,
-        color: colors.textPrimary,
-        marginBottom: 8,
-    },
-    filterRow: {
-        flexDirection: 'row',
-        gap: 8,
-    },
-    filterPicker: {
-        flex: 1,
-        backgroundColor: colors.surface,
-        borderRadius: 8,
-        overflow: 'hidden',
-    },
-    picker: {
-        height: 44,
-    },
-    resultCount: {
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-    },
-    resultText: {
-        fontSize: 12,
-        color: colors.textSecondary,
-    },
-    listContent: {
-        paddingHorizontal: 12,
-        paddingBottom: 20,
-    },
-    employeeCard: {
-        backgroundColor: colors.surface,
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 12,
-        elevation: 2,
-    },
-    cardHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start',
-        marginBottom: 12,
-    },
-    employeeInfo: {
-        flex: 1,
-    },
-    employeeName: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-    },
-    employeeId: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginTop: 2,
-    },
-    ctcBadge: {
-        alignItems: 'flex-end',
-    },
-    ctcLabel: {
-        fontSize: 10,
-        color: colors.textSecondary,
-    },
-    ctcAmount: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: colors.primary,
-    },
-    cardDetails: {
-        flexDirection: 'row',
-        marginBottom: 12,
-    },
-    detailRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginRight: 16,
-    },
-    detailText: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginLeft: 4,
-    },
-    cardFooter: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        borderTopWidth: 1,
-        borderTopColor: colors.border,
-        paddingTop: 12,
-    },
-    salaryRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    salaryLabel: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginRight: 4,
-    },
-    salaryValue: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
-    },
-    salaryValueMuted: {
-        fontSize: 13,
-        fontWeight: '500',
-        color: colors.textSecondary,
-    },
-    structureBadge: {
-        position: 'absolute',
-        top: 12,
-        right: 12,
-        backgroundColor: colors.primaryLight || '#E3F2FD',
-        paddingHorizontal: 8,
-        paddingVertical: 2,
-        borderRadius: 4,
-    },
-    structureText: {
-        fontSize: 10,
-        color: colors.primary,
-        fontWeight: '500',
-    },
-    effectiveDateRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginTop: 8,
-    },
-    effectiveDateText: {
-        fontSize: 11,
-        color: colors.textSecondary,
-        marginLeft: 4,
-    },
-    viewDetailHint: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        marginTop: 8,
-    },
-    viewDetailText: {
-        fontSize: 11,
-        color: colors.primary,
-        marginRight: 2,
-    },
-    infoCard: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: colors.primaryLight || '#E3F2FD',
-        borderRadius: 8,
-        padding: 12,
-        marginTop: 12,
-    },
-    infoText: {
-        fontSize: 12,
-        color: colors.primary,
-        marginLeft: 8,
-    },
-    emptyContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingVertical: 60,
-    },
-    emptyText: {
-        fontSize: 14,
-        color: colors.textSecondary,
-        marginTop: 16,
-    },
-    modalContainer: {
-        flex: 1,
-        backgroundColor: colors.background,
-    },
-    modalHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 16,
-        backgroundColor: colors.surface,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    modalTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: colors.textPrimary,
-    },
-    modalContent: {
-        flex: 1,
-        padding: 16,
-    },
-    detailSection: {
-        backgroundColor: colors.surface,
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 12,
-    },
-    detailName: {
-        fontSize: 20,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-    },
-    detailDesignation: {
-        fontSize: 14,
-        color: colors.primary,
-        marginTop: 4,
-    },
-    detailStructure: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginTop: 8,
-    },
-    baseVarSection: {
-        flexDirection: 'row',
-        gap: 12,
-        marginBottom: 12,
-    },
-    baseVarItem: {
-        flex: 1,
-        backgroundColor: colors.surface,
-        borderRadius: 12,
-        padding: 16,
-        alignItems: 'center',
-    },
-    baseVarLabel: {
-        fontSize: 12,
-        color: colors.textSecondary,
-    },
-    baseVarValue: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-        marginTop: 4,
-    },
-    componentSection: {
-        backgroundColor: colors.surface,
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 12,
-    },
-    sectionTitle: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 12,
-    },
-    componentRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        paddingVertical: 8,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border + '30',
-    },
-    componentDetailRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start',
-        paddingVertical: 8,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border + '30',
-    },
-    componentName: {
-        fontSize: 14,
-        color: colors.textPrimary,
-    },
-    componentAbbr: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginLeft: 4,
-    },
-    formulaText: {
-        fontSize: 11,
-        color: colors.primary,
-        marginTop: 2,
-        fontStyle: 'italic',
-    },
-    calcNote: {
-        fontSize: 10,
-        color: colors.textSecondary,
-        marginTop: 2,
-        fontStyle: 'italic',
-    },
-    componentAmountGreen: {
-        fontSize: 14,
-        fontWeight: '500',
-        color: colors.success,
-    },
-    componentAmountRed: {
-        fontSize: 14,
-        fontWeight: '500',
-        color: colors.error,
-    },
-    totalRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginTop: 12,
-        paddingTop: 12,
-        borderTopWidth: 2,
-        borderTopColor: colors.border,
-    },
-    totalLabel: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
-    },
-    totalAmountGreen: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: colors.success,
-    },
-    totalAmountRed: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: colors.error,
-    },
-    netPaySection: {
-        backgroundColor: colors.primary,
-        borderRadius: 12,
-        padding: 20,
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    netPayLabel: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#fff',
-    },
-    netPayValue: {
-        fontSize: 22,
-        fontWeight: 'bold',
-        color: '#fff',
-    },
-    noData: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    noDataText: {
-        fontSize: 14,
-        color: colors.textSecondary,
-    },
+    flex: { flex: 1 },
+    noMargin: { marginBottom: 0 },
+    screen: { flex: 1, backgroundColor: color.bg },
+    toolbar: {
+        backgroundColor: color.surface,
+        paddingHorizontal: space.lg,
+        paddingVertical: space.md,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: color.border,
+    },
+    filters: { flexDirection: 'row', gap: space.sm, marginTop: space.md },
+    stats: { marginBottom: space.xl },
+    netPay: { fontSize: 17, fontWeight: '600', color: color.text, fontVariant: ['tabular-nums'] },
 });
 
 export default SalaryStructureAdminScreen;

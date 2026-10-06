@@ -1,18 +1,73 @@
+// src/screens/admin/AdminSalaryTrackerScreen.js
+//
+// Monthly salary records (Employee Salary Tracker) with what has been paid and what is
+// still pending. "Pending review" holds records employees submitted themselves; approving
+// or rejecting one takes effect immediately. "Add salaries" creates a month's records for
+// every employee (optionally one department), or a pending-salary record for the admin's
+// own employee profile.
 import React, { useState, useEffect, useCallback } from 'react';
-import {
-    View, Text, StyleSheet, FlatList, TouchableOpacity,
-    ActivityIndicator, RefreshControl, Modal, Alert, TextInput, ScrollView,
-} from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import Icon from 'react-native-vector-icons/FontAwesome5';
-import { Picker } from '@react-native-picker/picker';
 import ApiService from '../../services/api.service';
 import showToast from '../../utils/Toast';
+import {
+    Screen,
+    Group,
+    Row,
+    Avatar,
+    StatusText,
+    Segmented,
+    Sheet,
+    Button,
+    TextField,
+    SelectField,
+    EmptyState,
+    Loading,
+    Icon,
+    color,
+    space,
+    type,
+} from '../../components/ds';
 
 const MONTHS = [
     'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December',
 ];
+
+const PAYMENT_STATUSES = ['Unpaid', 'Partially Paid', 'Fully Paid'];
+const PAY_TONE = { 'Fully Paid': 'success', 'Partially Paid': 'warning', 'Unpaid': 'danger' };
+
+// ₹1,50,000: Indian grouping, whole rupees
+const inr = (value) => {
+    const n = Math.round(Number(value) || 0);
+    const s = String(Math.abs(n));
+    const last3 = s.slice(-3);
+    const rest = s.slice(0, -3);
+    const grouped = rest ? `${rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${last3}` : last3;
+    return `${n < 0 ? '-' : ''}₹${grouped}`;
+};
+
+const monthOf = (item) => item?.salary_month || `${item?.month} ${item?.year}`;
+const deptLabel = (dept) => String(dept || '').replace(' - DG', '');
+
+// Options shown inside a sheet in place of a nested picker
+const OptionList = ({ options, value, onSelect }) => (
+    <Group>
+        {options.map((o) => {
+            const active = o.value === value;
+            return (
+                <Row
+                    key={`opt-${o.value}`}
+                    title={o.label}
+                    selected={active}
+                    right={active ? <Icon name="check" size={18} color={color.accent} /> : null}
+                    chevron={false}
+                    onPress={() => onSelect(o.value)}
+                />
+            );
+        })}
+    </Group>
+);
 
 function AdminSalaryTrackerScreen({ navigation, route }) {
     const [tab, setTab] = useState('all'); // 'all' | 'pending'
@@ -28,8 +83,9 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
     const [showFilterModal, setShowFilterModal] = useState(false);
     const [tempFilterMonth, setTempFilterMonth] = useState('');
     const [tempFilterStatus, setTempFilterStatus] = useState('');
+    const [filterPicker, setFilterPicker] = useState(null); // 'month' | 'status'
 
-    // Add month modal
+    // Add sheet
     const [showAddModal, setShowAddModal] = useState(false);
     const [addMode, setAddMode] = useState('bulk'); // 'bulk' | 'self'
     const [addMonth, setAddMonth] = useState(MONTHS[new Date().getMonth()]);
@@ -40,25 +96,36 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
     const [departments, setDepartments] = useState([]);
     const [addLoading, setAddLoading] = useState(false);
     const [adminEmployeeId, setAdminEmployeeId] = useState(null);
+    const [addPicker, setAddPicker] = useState(null); // 'month' | 'year' | 'department'
 
-    useEffect(() => { loadData(); loadDepartments(); loadAdminEmployee(); }, []);
+    // Review sheet for an employee-submitted record
+    const [reviewing, setReviewing] = useState(null);
+    const [processing, setProcessing] = useState(null); // 'approve' | 'reject'
+
+    useEffect(() => {
+        loadData();
+        loadDepartments();
+        loadAdminEmployee();
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
+    }, []);
 
     // When AdminDashboard's "My Salary Tracker" shortcut routes here with
     // `{ preselectEmployee: <admin's own id> }`, jump straight into the
-    // self-request Add modal so admin can submit their own pending-salary
+    // self-request Add sheet so admin can submit their own pending-salary
     // request without scrolling through everyone else's records.
     useEffect(() => {
         if (route?.params?.preselectEmployee) {
             setAddMode('self');
             setShowAddModal(true);
-            // Clear the param so a subsequent focus doesn't re-open the modal
+            // Clear the param so a subsequent focus doesn't re-open the sheet
             // after the user dismisses it. Safe because we already captured intent.
             navigation.setParams?.({ preselectEmployee: undefined });
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- react to the route param only
     }, [route?.params?.preselectEmployee]);
 
     useFocusEffect(
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- loadData reads these filters; reload when they change
         useCallback(() => { loadData(); }, [filterMonth, filterStatus])
     );
 
@@ -84,8 +151,12 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
         setLoading(true);
         try {
             const filters = {};
-            if (filterMonth) filters.month = filterMonth;
-            if (filterStatus) filters.payment_status = filterStatus;
+            if (filterMonth) {
+                filters.month = filterMonth;
+            }
+            if (filterStatus) {
+                filters.payment_status = filterStatus;
+            }
 
             const [listResp, pendingResp, summaryResp] = await Promise.all([
                 ApiService.getSalaryTrackerList(filters),
@@ -146,14 +217,14 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
             });
             const data = resp?.data?.message || resp?.data;
             if (data?.status === 'success') {
-                showToast({ type: 'success', text1: 'Success', text2: data.message });
+                showToast({ type: 'success', text1: 'Salaries added', text2: data.message });
                 setShowAddModal(false);
                 loadData();
             } else {
-                showToast({ type: 'error', text1: 'Error', text2: data?.message || 'Failed' });
+                showToast({ type: 'error', text1: 'Not added', text2: data?.message || 'Failed' });
             }
         } catch (err) {
-            showToast({ type: 'error', text1: 'Error', text2: err.message || 'Failed' });
+            showToast({ type: 'error', text1: 'Not added', text2: err.message || 'Failed' });
         } finally {
             setAddLoading(false);
         }
@@ -161,11 +232,11 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
 
     const handleAddSelf = async () => {
         if (!adminEmployeeId) {
-            showToast({ type: 'error', text1: 'Error', text2: 'No employee record found for your account' });
+            showToast({ type: 'error', text1: 'No employee profile', text2: 'No employee record found for your account' });
             return;
         }
         if (!selfAmount || isNaN(parseFloat(selfAmount)) || parseFloat(selfAmount) <= 0) {
-            showToast({ type: 'error', text1: 'Error', text2: 'Enter a valid salary amount' });
+            showToast({ type: 'error', text1: 'Check the amount', text2: 'Enter a valid salary amount' });
             return;
         }
         setAddLoading(true);
@@ -179,21 +250,22 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
             });
             const data = resp?.data?.message || resp?.data;
             if (data?.status === 'success') {
-                showToast({ type: 'success', text1: 'Success', text2: data.message });
+                showToast({ type: 'success', text1: 'Salary added', text2: data.message });
                 setShowAddModal(false);
                 setSelfAmount('');
                 setSelfRemarks('');
                 loadData();
             } else {
-                showToast({ type: 'error', text1: 'Error', text2: data?.message || 'Failed' });
+                showToast({ type: 'error', text1: 'Not added', text2: data?.message || 'Failed' });
             }
         } catch (err) {
-            showToast({ type: 'error', text1: 'Error', text2: err.message || 'Failed' });
+            showToast({ type: 'error', text1: 'Not added', text2: err.message || 'Failed' });
         } finally {
             setAddLoading(false);
         }
     };
 
+    // Returns true when the server accepted the decision (used to close the review sheet).
     const handleApprove = async (trackerId, action) => {
         try {
             const resp = await ApiService.approveSalaryTracker({
@@ -202,22 +274,41 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
             });
             const data = resp?.data?.message || resp?.data;
             if (data?.status === 'success') {
-                showToast({ type: 'success', text1: 'Success', text2: data.message });
+                showToast({ type: 'success', text1: action === 'approve' ? 'Approved' : 'Rejected', text2: data.message });
                 loadData();
-            } else {
-                showToast({ type: 'error', text1: 'Error', text2: data?.message || 'Failed' });
+                return true;
             }
+            showToast({ type: 'error', text1: 'Not updated', text2: data?.message || 'Failed' });
         } catch (err) {
-            showToast({ type: 'error', text1: 'Error', text2: err.message });
+            showToast({ type: 'error', text1: 'Not updated', text2: err.message });
         }
+        return false;
+    };
+
+    const decide = async (action) => {
+        if (!reviewing) {
+            return;
+        }
+        setProcessing(action);
+        const ok = await handleApprove(reviewing.name, action);
+        setProcessing(null);
+        if (ok) {
+            setReviewing(null);
+        }
+    };
+
+    const openFilters = () => {
+        setTempFilterMonth(filterMonth);
+        setTempFilterStatus(filterStatus);
+        setFilterPicker(null);
+        setShowFilterModal(true);
     };
 
     const applyFilters = () => {
         setFilterMonth(tempFilterMonth);
         setFilterStatus(tempFilterStatus);
         setShowFilterModal(false);
-        // loadData will be triggered by useFocusEffect deps
-        setTimeout(() => loadData(), 100);
+        // the focus effect reloads when the filters change
     };
 
     const clearFilters = () => {
@@ -226,18 +317,16 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
         setFilterMonth('');
         setFilterStatus('');
         setShowFilterModal(false);
-        setTimeout(() => loadData(), 100);
     };
 
-    const formatCurrency = (amt) => `₹${(amt || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+    const openAdd = () => {
+        setAddPicker(null);
+        setShowAddModal(true);
+    };
 
-    const getStatusColor = (status) => {
-        switch (status) {
-            case 'Fully Paid': return '#10B981';
-            case 'Partially Paid': return '#F59E0B';
-            case 'Unpaid': return '#EF4444';
-            default: return '#6B7280';
-        }
+    const closeAdd = () => {
+        setShowAddModal(false);
+        setAddPicker(null);
     };
 
     const totalPending = summary.reduce((sum, e) => sum + (e.total_pending || 0), 0);
@@ -245,440 +334,333 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
     const totalPaid = summary.reduce((sum, e) => sum + (e.total_paid || 0), 0);
     const hasFilters = filterMonth || filterStatus;
 
-    const renderRecordItem = ({ item }) => (
-        <TouchableOpacity
-            style={styles.card}
-            onPress={() => navigation.navigate('AdminSalaryTrackerDetail', { trackerId: item.name })}
-            activeOpacity={0.7}
-        >
-            <View style={styles.cardHeader}>
-                <View style={{ flex: 1 }}>
-                    <Text style={styles.cardEmpName}>{item.employee_name}</Text>
-                    <Text style={styles.cardMonth}>{item.salary_month || `${item.month} ${item.year}`}</Text>
-                </View>
-                <View style={[styles.badge, { backgroundColor: getStatusColor(item.payment_status) + '20' }]}>
-                    <Text style={[styles.badgeText, { color: getStatusColor(item.payment_status) }]}>
-                        {item.payment_status}
-                    </Text>
-                </View>
-            </View>
-            <View style={styles.cardAmounts}>
-                <View style={styles.amountCol}>
-                    <Text style={styles.amountLabel}>Salary</Text>
-                    <Text style={styles.amountValue}>{formatCurrency(item.salary_to_pay)}</Text>
-                </View>
-                <View style={styles.amountCol}>
-                    <Text style={styles.amountLabel}>Paid</Text>
-                    <Text style={[styles.amountValue, { color: '#10B981' }]}>{formatCurrency(item.total_paid)}</Text>
-                </View>
-                <View style={styles.amountCol}>
-                    <Text style={styles.amountLabel}>Pending</Text>
-                    <Text style={[styles.amountValue, { color: '#EF4444' }]}>{formatCurrency(item.pending_amount)}</Text>
-                </View>
-            </View>
-        </TouchableOpacity>
-    );
+    const monthOptions = MONTHS.map((m) => ({ value: m, label: m }));
+    const yearOptions = Array.from({ length: new Date().getFullYear() - 2023 }, (_, i) => 2024 + i).map((y) => ({ value: y, label: String(y) }));
+    const departmentOptions = [
+        { value: '', label: 'All departments' },
+        ...departments.map((d) => {
+            const name = typeof d === 'string' ? d : d.name;
+            return { value: name, label: name };
+        }),
+    ];
 
-    const renderPendingItem = ({ item }) => (
-        <View style={styles.pendingCard}>
-            <View style={styles.pendingInfo}>
-                <Text style={styles.cardEmpName}>{item.employee_name}</Text>
-                <Text style={styles.cardMonth}>{item.salary_month || `${item.month} ${item.year}`}</Text>
-                <Text style={styles.pendingSalary}>Salary: {formatCurrency(item.salary_to_pay)}</Text>
+    if (loading && records.length === 0) {
+        return (
+            <View style={styles.screen}>
+                <Loading label="Loading salary tracker" />
             </View>
-            <View style={styles.pendingActions}>
-                <TouchableOpacity
-                    style={[styles.actionBtn, { backgroundColor: '#10B981' }]}
-                    onPress={() => handleApprove(item.name, 'approve')}
+        );
+    }
+
+    // ------------------------------------------------------------------ rows
+    const renderRecordRow = (item) => {
+        const partlyPaid = Number(item.total_paid) > 0 && Number(item.pending_amount) > 0;
+        return (
+            <Row
+                key={item.name}
+                left={<Avatar name={item.employee_name} />}
+                title={item.employee_name}
+                subtitle={monthOf(item)}
+                meta={item.payment_status ? (
+                    <>
+                        <StatusText label={item.payment_status} tone={PAY_TONE[item.payment_status]} size={12} />
+                        {partlyPaid ? <Text style={styles.metaText}>{`${inr(item.pending_amount)} pending`}</Text> : null}
+                    </>
+                ) : null}
+                value={inr(item.salary_to_pay)}
+                onPress={() => navigation.navigate('AdminSalaryTrackerDetail', { trackerId: item.name })}
+            />
+        );
+    };
+
+    const renderAll = () => (
+        <>
+            <Group title="Outstanding">
+                <Row title="Salary" value={inr(totalSalary)} />
+                <Row title="Paid" value={inr(totalPaid)} />
+                <Row title="Pending" right={<Text style={styles.total}>{inr(totalPending)}</Text>} />
+            </Group>
+
+            {summary.length > 0 ? (
+                <Group
+                    title="Pending by employee"
+                    footer={summary.length > 5 ? `${summary.length - 5} more ${summary.length - 5 === 1 ? 'employee' : 'employees'} not shown` : undefined}
                 >
-                    <Icon name="check" size={14} color="#fff" />
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.actionBtn, { backgroundColor: '#EF4444' }]}
-                    onPress={() => handleApprove(item.name, 'reject')}
-                >
-                    <Icon name="times" size={14} color="#fff" />
-                </TouchableOpacity>
-            </View>
-        </View>
-    );
+                    {summary.slice(0, 5).map((emp, idx) => {
+                        const months = emp.tracker_count ?? emp.total_months;
+                        return (
+                            <Row
+                                key={emp.employee_id || emp.employee || idx}
+                                left={<Avatar name={emp.employee_name} />}
+                                title={emp.employee_name}
+                                subtitle={[
+                                    deptLabel(emp.department) || '-',
+                                    months != null ? `${months} ${Number(months) === 1 ? 'month' : 'months'}` : null,
+                                ].filter(Boolean).join('  ·  ')}
+                                value={inr(emp.total_pending)}
+                            />
+                        );
+                    })}
+                </Group>
+            ) : null}
 
-    const renderListHeader = () => (
-        <View>
-            {/* Summary Cards */}
-            <View style={styles.summaryContainer}>
-                <View style={[styles.summaryCard, { borderLeftColor: '#6366F1' }]}>
-                    <Text style={styles.summaryLabel}>Total Salary</Text>
-                    <Text style={[styles.summaryValue, { color: '#6366F1' }]}>{formatCurrency(totalSalary)}</Text>
-                </View>
-                <View style={[styles.summaryCard, { borderLeftColor: '#10B981' }]}>
-                    <Text style={styles.summaryLabel}>Total Paid</Text>
-                    <Text style={[styles.summaryValue, { color: '#10B981' }]}>{formatCurrency(totalPaid)}</Text>
-                </View>
-                <View style={[styles.summaryCard, { borderLeftColor: '#EF4444' }]}>
-                    <Text style={styles.summaryLabel}>Total Pending</Text>
-                    <Text style={[styles.summaryValue, { color: '#EF4444' }]}>{formatCurrency(totalPending)}</Text>
-                </View>
-            </View>
-
-            {/* Per Employee Summary */}
-            {summary.length > 0 && (
-                <View style={styles.empSummarySection}>
-                    <Text style={styles.empSummaryTitle}>Per Employee Pending</Text>
-                    {summary.slice(0, 5).map((emp, idx) => (
-                        <View key={idx} style={styles.empSummaryRow}>
-                            <View style={styles.empInfo}>
-                                <Text style={styles.empName}>{emp.employee_name}</Text>
-                                <Text style={styles.empDept}>{emp.department || '-'}</Text>
-                            </View>
-                            <View style={styles.empAmounts}>
-                                <Text style={[styles.empPending, { color: '#EF4444' }]}>{formatCurrency(emp.total_pending)}</Text>
-                                <Text style={styles.empTrackers}>{emp.tracker_count} months</Text>
-                            </View>
-                        </View>
-                    ))}
-                    {summary.length > 5 && (
-                        <Text style={styles.moreText}>+{summary.length - 5} more employees</Text>
-                    )}
-                </View>
+            {records.length > 0 ? (
+                <Group title={`${records.length} ${records.length === 1 ? 'record' : 'records'}`}>
+                    {records.map(renderRecordRow)}
+                </Group>
+            ) : (
+                <EmptyState
+                    icon="credit-card"
+                    title="No salary records"
+                    message={hasFilters ? 'Nothing matches these filters.' : 'Add a month of salaries to start tracking payments.'}
+                />
             )}
-
-            {/* Tabs */}
-            <View style={styles.tabRow}>
-                <TouchableOpacity
-                    style={[styles.tab, tab === 'all' && styles.tabActive]}
-                    onPress={() => setTab('all')}
-                >
-                    <Text style={[styles.tabText, tab === 'all' && styles.tabTextActive]}>All Records</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.tab, tab === 'pending' && styles.tabActive]}
-                    onPress={() => setTab('pending')}
-                >
-                    <Text style={[styles.tabText, tab === 'pending' && styles.tabTextActive]}>
-                        Pending Review {pendingReviews.length > 0 && `(${pendingReviews.length})`}
-                    </Text>
-                </TouchableOpacity>
-            </View>
-
-            {/* Filter bar (no Pickers here—just buttons) */}
-            {tab === 'all' && (
-                <View style={styles.filterBar}>
-                    <TouchableOpacity style={[styles.filterChip, hasFilters && styles.filterChipActive]}
-                        onPress={() => { setTempFilterMonth(filterMonth); setTempFilterStatus(filterStatus); setShowFilterModal(true); }}>
-                        <Icon name="filter" size={12} color={hasFilters ? '#fff' : '#6366F1'} />
-                        <Text style={[styles.filterChipText, hasFilters && { color: '#fff' }]}>
-                            {hasFilters ? `${filterMonth || 'All'} · ${filterStatus || 'All'}` : 'Filter'}
-                        </Text>
-                    </TouchableOpacity>
-                    {hasFilters && (
-                        <TouchableOpacity onPress={clearFilters} style={styles.clearBtn}>
-                            <Icon name="times" size={12} color="#6B7280" />
-                            <Text style={styles.clearBtnText}>Clear</Text>
-                        </TouchableOpacity>
-                    )}
-                </View>
-            )}
-        </View>
+        </>
     );
 
-    const currentData = tab === 'all' ? records : pendingReviews;
-    const renderFn = tab === 'all' ? renderRecordItem : renderPendingItem;
+    const renderPending = () => (pendingReviews.length > 0 ? (
+        <Group>
+            {pendingReviews.map((item) => (
+                <Row
+                    key={item.name}
+                    left={<Avatar name={item.employee_name} />}
+                    title={item.employee_name}
+                    subtitle={item.remarks ? `${monthOf(item)}\n${item.remarks}` : monthOf(item)}
+                    value={inr(item.salary_to_pay)}
+                    onPress={() => setReviewing(item)}
+                />
+            ))}
+        </Group>
+    ) : (
+        <EmptyState icon="check-circle" title="No pending reviews" message="Salary records submitted by employees appear here." />
+    ));
 
-    // Filter Modal (Pickers in a Modal to avoid addView crash)
-    const renderFilterModal = () => (
-        <Modal visible={showFilterModal} transparent animationType="slide" onRequestClose={() => setShowFilterModal(false)}>
-            <View style={styles.modalBackdrop}>
-                <View style={styles.modalContainer}>
-                    <Text style={styles.modalTitle}>Filter Records</Text>
+    // ------------------------------------------------------------------ main
+    const addTitle = {
+        month: 'Month',
+        year: 'Year',
+        department: 'Department',
+    }[addPicker] || (addMode === 'bulk' ? 'Add salaries' : 'Add my pending salary');
 
-                    <Text style={styles.inputLabel}>Month</Text>
-                    <View style={styles.pickerBox}>
-                        <Picker selectedValue={tempFilterMonth} onValueChange={setTempFilterMonth} style={styles.pickerInner}>
-                            <Picker.Item label="All Months" value="" />
-                            {MONTHS.map(m => <Picker.Item key={m} label={m} value={m} />)}
-                        </Picker>
+    return (
+        <View style={styles.screen}>
+            <View style={styles.toolbar}>
+                <Segmented
+                    value={tab}
+                    onChange={setTab}
+                    options={[
+                        { value: 'all', label: 'All records', count: records.length },
+                        { value: 'pending', label: 'Pending review', count: pendingReviews.length },
+                    ]}
+                />
+                {tab === 'all' ? (
+                    <View style={styles.filterBar}>
+                        <Pressable style={[styles.chip, hasFilters && styles.chipActive]} onPress={openFilters} hitSlop={6}>
+                            <Icon name="sliders" size={14} color={hasFilters ? color.accent : color.textSecondary} />
+                            <Text style={[styles.chipText, hasFilters && styles.chipTextActive]} numberOfLines={1}>
+                                {hasFilters ? [filterMonth, filterStatus].filter(Boolean).join('  ·  ') : 'Filter'}
+                            </Text>
+                        </Pressable>
+                        {hasFilters ? (
+                            <Pressable onPress={clearFilters} hitSlop={8}>
+                                <Text style={styles.clearText}>Clear</Text>
+                            </Pressable>
+                        ) : null}
                     </View>
-
-                    <Text style={styles.inputLabel}>Payment Status</Text>
-                    <View style={styles.pickerBox}>
-                        <Picker selectedValue={tempFilterStatus} onValueChange={setTempFilterStatus} style={styles.pickerInner}>
-                            <Picker.Item label="All Status" value="" />
-                            <Picker.Item label="Unpaid" value="Unpaid" />
-                            <Picker.Item label="Partially Paid" value="Partially Paid" />
-                            <Picker.Item label="Fully Paid" value="Fully Paid" />
-                        </Picker>
-                    </View>
-
-                    <View style={styles.modalButtons}>
-                        <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowFilterModal(false)}>
-                            <Text style={styles.cancelBtnText}>Cancel</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.submitBtn} onPress={applyFilters}>
-                            <Text style={styles.submitBtnText}>Apply</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
+                ) : null}
             </View>
-        </Modal>
-    );
 
-    // Add modal with bulk + self options
-    const renderAddModal = () => (
-        <Modal visible={showAddModal} transparent animationType="slide" onRequestClose={() => setShowAddModal(false)}>
-            <View style={styles.modalBackdrop}>
-                <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'flex-end' }}>
-                    <View style={styles.modalContainer}>
-                        {/* Mode toggle */}
-                        <View style={styles.modeToggle}>
-                            <TouchableOpacity
-                                style={[styles.modeBtn, addMode === 'bulk' && styles.modeBtnActive]}
-                                onPress={() => setAddMode('bulk')}
-                            >
-                                <Icon name="users" size={12} color={addMode === 'bulk' ? '#fff' : '#6366F1'} />
-                                <Text style={[styles.modeBtnText, addMode === 'bulk' && styles.modeBtnTextActive]}>All Employees</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.modeBtn, addMode === 'self' && styles.modeBtnActive]}
-                                onPress={() => setAddMode('self')}
-                            >
-                                <Icon name="user" size={12} color={addMode === 'self' ? '#fff' : '#6366F1'} />
-                                <Text style={[styles.modeBtnText, addMode === 'self' && styles.modeBtnTextActive]}>My Pending</Text>
-                            </TouchableOpacity>
+            <Screen
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                footer={<Button title="Add salaries" onPress={openAdd} />}
+            >
+                {tab === 'all' ? renderAll() : renderPending()}
+            </Screen>
+
+            {/* review an employee-submitted record */}
+            <Sheet
+                visible={Boolean(reviewing)}
+                title={reviewing?.employee_name}
+                subtitle="Submitted for review"
+                onClose={() => !processing && setReviewing(null)}
+                dismissable={!processing}
+                footer={(
+                    <>
+                        <Button title="Reject" variant="danger" onPress={() => decide('reject')} loading={processing === 'reject'} disabled={Boolean(processing)} style={styles.flex} />
+                        <Button title="Approve" onPress={() => decide('approve')} loading={processing === 'approve'} disabled={Boolean(processing)} style={styles.flex} />
+                    </>
+                )}
+            >
+                {reviewing ? (
+                    <>
+                        <Group>
+                            <Row title="Month" value={monthOf(reviewing)} />
+                            <Row title="Salary" value={inr(reviewing.salary_to_pay)} />
+                            <Row title="Employee ID" value={reviewing.employee} />
+                            {reviewing.department ? <Row title="Department" value={deptLabel(reviewing.department)} /> : null}
+                        </Group>
+                        {reviewing.remarks ? (
+                            <View style={styles.detail}>
+                                <Text style={styles.detailLabel}>Remarks</Text>
+                                <Text style={type.body}>{reviewing.remarks}</Text>
+                            </View>
+                        ) : null}
+                        <Group>
+                            <Row
+                                title="Open record"
+                                onPress={() => {
+                                    const trackerId = reviewing.name;
+                                    setReviewing(null);
+                                    navigation.navigate('AdminSalaryTrackerDetail', { trackerId });
+                                }}
+                                disabled={Boolean(processing)}
+                            />
+                        </Group>
+                    </>
+                ) : null}
+            </Sheet>
+
+            {/* filter */}
+            <Sheet
+                visible={showFilterModal}
+                title={filterPicker === 'month' ? 'Month' : filterPicker === 'status' ? 'Payment status' : 'Filter records'}
+                onClose={() => setShowFilterModal(false)}
+                footer={filterPicker ? (
+                    <Button title="Back" variant="secondary" onPress={() => setFilterPicker(null)} style={styles.flex} />
+                ) : (
+                    <>
+                        <Button title="Cancel" variant="secondary" onPress={() => setShowFilterModal(false)} style={styles.flex} />
+                        <Button title="Apply" onPress={applyFilters} style={styles.flex} />
+                    </>
+                )}
+            >
+                {filterPicker === 'month' ? (
+                    <OptionList
+                        options={[{ value: '', label: 'All months' }, ...monthOptions]}
+                        value={tempFilterMonth}
+                        onSelect={(v) => {
+                            setTempFilterMonth(v);
+                            setFilterPicker(null);
+                        }}
+                    />
+                ) : filterPicker === 'status' ? (
+                    <OptionList
+                        options={[{ value: '', label: 'All statuses' }, ...PAYMENT_STATUSES.map((st) => ({ value: st, label: st }))]}
+                        value={tempFilterStatus}
+                        onSelect={(v) => {
+                            setTempFilterStatus(v);
+                            setFilterPicker(null);
+                        }}
+                    />
+                ) : (
+                    <>
+                        <SelectField label="Month" value={tempFilterMonth || 'All months'} onPress={() => setFilterPicker('month')} />
+                        <SelectField label="Payment status" value={tempFilterStatus || 'All statuses'} onPress={() => setFilterPicker('status')} />
+                    </>
+                )}
+            </Sheet>
+
+            {/* add salaries (all employees) or the admin's own pending salary */}
+            <Sheet
+                visible={showAddModal}
+                title={addTitle}
+                subtitle={addPicker ? undefined : addMode === 'bulk' ? 'Creates a salary record for each employee' : 'Adds a pending salary record to your own profile'}
+                onClose={() => !addLoading && closeAdd()}
+                dismissable={!addLoading}
+                footer={addPicker ? (
+                    <Button title="Back" variant="secondary" onPress={() => setAddPicker(null)} style={styles.flex} />
+                ) : (
+                    <>
+                        <Button title="Cancel" variant="secondary" onPress={closeAdd} disabled={addLoading} style={styles.flex} />
+                        <Button
+                            title={addMode === 'bulk' ? 'Add salaries' : 'Submit'}
+                            onPress={addMode === 'bulk' ? handleAddMonth : handleAddSelf}
+                            loading={addLoading}
+                            style={styles.flex}
+                        />
+                    </>
+                )}
+            >
+                {addPicker === 'month' ? (
+                    <OptionList options={monthOptions} value={addMonth} onSelect={(v) => { setAddMonth(v); setAddPicker(null); }} />
+                ) : addPicker === 'year' ? (
+                    <OptionList options={yearOptions} value={addYear} onSelect={(v) => { setAddYear(v); setAddPicker(null); }} />
+                ) : addPicker === 'department' ? (
+                    <OptionList options={departmentOptions} value={addDept} onSelect={(v) => { setAddDept(v); setAddPicker(null); }} />
+                ) : (
+                    <>
+                        <Segmented
+                            value={addMode}
+                            onChange={setAddMode}
+                            options={[
+                                { value: 'bulk', label: 'All employees' },
+                                { value: 'self', label: 'My salary' },
+                            ]}
+                            style={styles.modeControl}
+                        />
+                        <View style={styles.fieldRow}>
+                            <SelectField label="Month" value={addMonth} onPress={() => setAddPicker('month')} style={styles.flex} />
+                            <SelectField label="Year" value={String(addYear)} onPress={() => setAddPicker('year')} style={styles.flex} />
                         </View>
-
-                        <Text style={styles.modalTitle}>
-                            {addMode === 'bulk' ? "Add This Month's Salary" : 'Add My Pending Salary'}
-                        </Text>
-                        <Text style={styles.modalSubtitle}>
-                            {addMode === 'bulk'
-                                ? 'Generate salary records for all employees'
-                                : 'Add your own pending salary record'}
-                        </Text>
-
-                        <Text style={styles.inputLabel}>Month</Text>
-                        <View style={styles.pickerBox}>
-                            <Picker selectedValue={addMonth} onValueChange={setAddMonth} style={styles.pickerInner}>
-                                {MONTHS.map(m => <Picker.Item key={m} label={m} value={m} />)}
-                            </Picker>
-                        </View>
-
-                        <Text style={styles.inputLabel}>Year</Text>
-                        <View style={styles.pickerBox}>
-                            <Picker selectedValue={addYear} onValueChange={setAddYear} style={styles.pickerInner}>
-                                {Array.from({ length: new Date().getFullYear() - 2023 }, (_, i) => 2024 + i).map(y => <Picker.Item key={y} label={String(y)} value={y} />)}
-                            </Picker>
-                        </View>
-
-                        {addMode === 'bulk' && (
+                        {addMode === 'bulk' ? (
+                            <SelectField label="Department" value={addDept || 'All departments'} onPress={() => setAddPicker('department')} />
+                        ) : (
                             <>
-                                <Text style={styles.inputLabel}>Department (optional)</Text>
-                                <View style={styles.pickerBox}>
-                                    <Picker selectedValue={addDept} onValueChange={setAddDept} style={styles.pickerInner}>
-                                        <Picker.Item label="All Departments" value="" />
-                                        {departments.map((d, i) => (
-                                            <Picker.Item key={i} label={typeof d === 'string' ? d : d.name} value={typeof d === 'string' ? d : d.name} />
-                                        ))}
-                                    </Picker>
-                                </View>
-                            </>
-                        )}
-
-                        {addMode === 'self' && (
-                            <>
-                                <Text style={styles.inputLabel}>Pending Salary Amount *</Text>
-                                <TextInput
-                                    style={styles.textInput}
-                                    placeholder="Enter pending amount (e.g. 30000)"
-                                    placeholderTextColor="#9CA3AF"
+                                <TextField
+                                    label="Pending amount"
+                                    placeholder="e.g. 30000"
                                     keyboardType="numeric"
                                     value={selfAmount}
                                     onChangeText={setSelfAmount}
                                 />
-                                <Text style={styles.inputLabel}>Remarks (Optional)</Text>
-                                <TextInput
-                                    style={[styles.textInput, { height: 60, textAlignVertical: 'top' }]}
+                                <TextField
+                                    label="Remarks (optional)"
                                     placeholder="e.g. Pending from last month"
-                                    placeholderTextColor="#9CA3AF"
                                     multiline
                                     value={selfRemarks}
                                     onChangeText={setSelfRemarks}
                                 />
                             </>
                         )}
-
-                        <View style={styles.modalButtons}>
-                            <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowAddModal(false)}>
-                                <Text style={styles.cancelBtnText}>Cancel</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={styles.submitBtn}
-                                onPress={addMode === 'bulk' ? handleAddMonth : handleAddSelf}
-                                disabled={addLoading}
-                            >
-                                {addLoading ? <ActivityIndicator color="#fff" size="small" /> :
-                                    <Text style={styles.submitBtnText}>
-                                        {addMode === 'bulk' ? 'Add Salaries' : 'Submit'}
-                                    </Text>}
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </ScrollView>
-            </View>
-        </Modal>
-    );
-
-    if (loading && records.length === 0) {
-        return (
-            <View style={styles.center}>
-                <ActivityIndicator size="large" color="#6366F1" />
-                <Text style={{ marginTop: 10, color: '#6B7280' }}>Loading salary tracker...</Text>
-            </View>
-        );
-    }
-
-    return (
-        <View style={styles.container}>
-            <FlatList
-                data={currentData}
-                keyExtractor={(item) => item.name}
-                renderItem={renderFn}
-                ListHeaderComponent={renderListHeader}
-                ListEmptyComponent={
-                    <View style={styles.empty}>
-                        <Icon name="wallet" size={48} color="#D1D5DB" />
-                        <Text style={styles.emptyText}>
-                            {tab === 'all' ? 'No salary records found' : 'No pending reviews'}
-                        </Text>
-                    </View>
-                }
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#6366F1']} />}
-                contentContainerStyle={{ paddingBottom: 20 }}
-            />
-
-            {/* FAB */}
-            <TouchableOpacity style={styles.fab} onPress={() => setShowAddModal(true)} activeOpacity={0.8}>
-                <Icon name="plus" size={18} color="#fff" />
-            </TouchableOpacity>
-
-            {renderAddModal()}
-            {renderFilterModal()}
+                    </>
+                )}
+            </Sheet>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#F3F4F6' },
-    center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    fab: {
-        position: 'absolute', bottom: 24, right: 20,
-        backgroundColor: '#6366F1', width: 52, height: 52, borderRadius: 26,
-        justifyContent: 'center', alignItems: 'center',
-        elevation: 6, shadowColor: '#6366F1', shadowOpacity: 0.4, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
+    flex: { flex: 1 },
+    screen: { flex: 1, backgroundColor: color.bg },
+    toolbar: {
+        backgroundColor: color.surface,
+        paddingHorizontal: space.lg,
+        paddingVertical: space.md,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: color.border,
     },
-    // Summary
-    summaryContainer: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 16, gap: 8 },
-    summaryCard: {
-        flex: 1, backgroundColor: '#fff', borderRadius: 12, padding: 12,
-        elevation: 2, borderLeftWidth: 3,
+    filterBar: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: space.sm },
+    chip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexShrink: 1,
+        gap: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        borderRadius: 14,
+        backgroundColor: color.neutralSoft,
     },
-    summaryLabel: { fontSize: 10, color: '#6B7280' },
-    summaryValue: { fontSize: 14, fontWeight: '700', marginTop: 4 },
-    // Employee summary
-    empSummarySection: {
-        backgroundColor: '#fff', margin: 16, marginBottom: 0, borderRadius: 12, padding: 14, elevation: 2,
-    },
-    empSummaryTitle: { fontSize: 14, fontWeight: '700', color: '#1F2937', marginBottom: 10 },
-    empSummaryRow: {
-        flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-        paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#E5E7EB',
-    },
-    empInfo: {},
-    empName: { fontSize: 13, fontWeight: '600', color: '#1F2937' },
-    empDept: { fontSize: 11, color: '#6B7280' },
-    empAmounts: { alignItems: 'flex-end' },
-    empPending: { fontSize: 14, fontWeight: '700' },
-    empTrackers: { fontSize: 10, color: '#6B7280' },
-    moreText: { fontSize: 12, color: '#6366F1', textAlign: 'center', marginTop: 8 },
-    // Tabs
-    tabRow: { flexDirection: 'row', marginHorizontal: 16, marginTop: 16, backgroundColor: '#E5E7EB', borderRadius: 12, padding: 3 },
-    tab: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
-    tabActive: { backgroundColor: '#fff', elevation: 1 },
-    tabText: { fontSize: 13, color: '#6B7280', fontWeight: '500' },
-    tabTextActive: { color: '#6366F1', fontWeight: '700' },
-    // Filter bar (buttons instead of Pickers to avoid AdapterView crash)
-    filterBar: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 12, alignItems: 'center', gap: 8 },
-    filterChip: {
-        flexDirection: 'row', alignItems: 'center', gap: 6,
-        paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
-        borderWidth: 1, borderColor: '#6366F1', backgroundColor: '#fff',
-    },
-    filterChipActive: { backgroundColor: '#6366F1', borderColor: '#6366F1' },
-    filterChipText: { fontSize: 12, fontWeight: '600', color: '#6366F1' },
-    clearBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8 },
-    clearBtnText: { fontSize: 12, color: '#6B7280' },
-    // Cards
-    card: {
-        backgroundColor: '#fff', marginHorizontal: 16, marginTop: 10, borderRadius: 12,
-        padding: 14, elevation: 2,
-    },
-    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-    cardEmpName: { fontSize: 14, fontWeight: '700', color: '#1F2937' },
-    cardMonth: { fontSize: 12, color: '#6B7280', marginTop: 2 },
-    badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
-    badgeText: { fontSize: 11, fontWeight: '600' },
-    cardAmounts: { flexDirection: 'row', justifyContent: 'space-between' },
-    amountCol: { alignItems: 'center', flex: 1 },
-    amountLabel: { fontSize: 10, color: '#9CA3AF' },
-    amountValue: { fontSize: 13, fontWeight: '600', color: '#1F2937', marginTop: 2 },
-    // Pending cards
-    pendingCard: {
-        backgroundColor: '#FFF7ED', marginHorizontal: 16, marginTop: 10, borderRadius: 12,
-        padding: 14, elevation: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-        borderLeftWidth: 3, borderLeftColor: '#F59E0B',
-    },
-    pendingInfo: { flex: 1 },
-    pendingSalary: { fontSize: 12, color: '#6366F1', marginTop: 4, fontWeight: '600' },
-    pendingActions: { flexDirection: 'row', gap: 8 },
-    actionBtn: {
-        width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center',
-    },
-    // Empty
-    empty: { alignItems: 'center', marginTop: 60 },
-    emptyText: { fontSize: 14, color: '#6B7280', marginTop: 12 },
-    // Modal
-    modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-    modalContainer: { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24 },
-    modalTitle: { fontSize: 18, fontWeight: '700', color: '#1F2937' },
-    modalSubtitle: { fontSize: 13, color: '#6B7280', marginTop: 4, marginBottom: 20 },
-    inputLabel: { fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 4, marginTop: 8 },
-    pickerBox: { borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10, overflow: 'hidden' },
-    pickerInner: { height: 50 },
-    textInput: {
-        borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10, paddingHorizontal: 14,
-        paddingVertical: 10, fontSize: 14, color: '#1F2937', backgroundColor: '#fff',
-    },
-    // Mode toggle in add modal
-    modeToggle: {
-        flexDirection: 'row', backgroundColor: '#E5E7EB', borderRadius: 12, padding: 3, marginBottom: 16,
-    },
-    modeBtn: {
-        flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-        paddingVertical: 10, borderRadius: 10, gap: 6,
-    },
-    modeBtnActive: { backgroundColor: '#6366F1' },
-    modeBtnText: { fontSize: 12, fontWeight: '600', color: '#6366F1' },
-    modeBtnTextActive: { color: '#fff' },
-    modalButtons: { flexDirection: 'row', gap: 12, marginTop: 24 },
-    cancelBtn: {
-        flex: 1, paddingVertical: 14, borderRadius: 12, borderWidth: 1,
-        borderColor: '#D1D5DB', alignItems: 'center',
-    },
-    cancelBtnText: { color: '#6B7280', fontWeight: '600' },
-    submitBtn: {
-        flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: '#6366F1', alignItems: 'center',
-    },
-    submitBtnText: { color: '#fff', fontWeight: '600' },
+    chipActive: { backgroundColor: color.accentSoft },
+    chipText: { fontSize: 13, fontWeight: '500', color: color.textSecondary, flexShrink: 1 },
+    chipTextActive: { color: color.accent },
+    clearText: { fontSize: 13, fontWeight: '600', color: color.accent },
+    metaText: { ...type.caption, color: color.textSecondary },
+    total: { fontSize: 17, fontWeight: '600', color: color.text, fontVariant: ['tabular-nums'] },
+    detail: { marginBottom: space.xl, paddingHorizontal: space.xs },
+    detailLabel: { ...type.caption, marginBottom: 4 },
+    modeControl: { marginBottom: space.lg },
+    fieldRow: { flexDirection: 'row', gap: space.sm },
 });
 
 export default AdminSalaryTrackerScreen;

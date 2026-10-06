@@ -8,6 +8,7 @@ const ENDPOINTS = {
     GET_USER_WFH_INFO: '/api/method/hrms.api.get_user_wfh_info',
     GET_EMPLOYEE_WFH_LIST: '/api/method/hrms.api.get_employee_wfh_list',
     TOGGLE_WFH_ELIGIBILITY: '/api/method/hrms.api.toggle_wfh_eligibility',
+    SET_WFH_MODE: '/api/method/hrms.api.set_wfh_mode',
     // OnSite endpoints
     GET_EMPLOYEE_ONSITE_LIST: '/api/method/hrms.api.get_employee_on_site_list',
     TOGGLE_ONSITE_ELIGIBILITY: '/api/method/hrms.api.toggle_on_site_eligibility',
@@ -103,6 +104,11 @@ class AttendanceService {
 
     async getEmployeeWFHList() {
         return ApiService.get(ENDPOINTS.GET_EMPLOYEE_WFH_LIST);
+    }
+
+    // mode: 'office' | 'allowed' | 'permanent' (see hrms.api.set_wfh_mode)
+    async setWFHMode(employee_id, mode) {
+        return ApiService.post(ENDPOINTS.SET_WFH_MODE, { employee_id, mode });
     }
 
     async toggleWFHEligibility(employee_id, wfh_eligible) {

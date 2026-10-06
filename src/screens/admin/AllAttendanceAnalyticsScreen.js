@@ -1,51 +1,63 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+// src/screens/admin/AllAttendanceAnalyticsScreen.js
+//
+// Attendance and salary are worked out on the server exactly like payroll
+// (hrms.api.attendance_report): only submitted attendance counts, Leave Without Pay
+// is absent, and today is never counted as absent. Salary is returned only when the
+// range is one full calendar month.
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
     View,
     Text,
     StyleSheet,
+    Pressable,
     ActivityIndicator,
-    TouchableOpacity,
-    StatusBar,
     Alert,
-    Modal,
-    ScrollView,
     Platform,
     BackHandler,
-    RefreshControl,
     PermissionsAndroid,
 } from 'react-native';
-import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFocusEffect } from '@react-navigation/native';
-import Icon from 'react-native-vector-icons/FontAwesome5';
 import RNFS from 'react-native-fs';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import ApiService from '../../services/api.service';
 import { formatLocalDate } from '../../utils/dateFormat';
 import showToast from '../../utils/Toast';
-import AttendanceList, { STATUS_COLORS } from '../../components/admin/AttendanceList';
-import { colors } from '../../theme/colors';
-import StatusBadge from '../../components/ui/StatusBadge';
-
-// Attendance and salary are worked out on the server exactly like payroll
-// (hrms.api.attendance_report): only submitted attendance counts, Leave Without Pay
-// is absent, and today is never counted as absent. Salary is returned only when the
-// range is one full calendar month.
+import { attendanceRow } from '../../components/admin/AttendanceList';
+import {
+    Screen,
+    Group,
+    Row,
+    Avatar,
+    Segmented,
+    SearchField,
+    SelectField,
+    StatStrip,
+    ProgressBar,
+    Sheet,
+    Button,
+    EmptyState,
+    Loading,
+    Notice,
+    Icon,
+    color,
+    space,
+    type,
+} from '../../components/ds';
 
 const PRESETS = [
-    { label: 'This Month', type: 'month' },
-    { label: 'Last Month', type: 'lastMonth' },
-    { label: '7 Days', type: 'week' },
-    { label: 'Yesterday', type: 'yesterday' },
-    { label: 'Today', type: 'today' },
+    { label: 'This month', value: 'month' },
+    { label: 'Last month', value: 'lastMonth' },
+    { label: '7 days', value: 'week' },
+    { label: 'Today', value: 'today' },
 ];
 
 const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 
-const presetRange = (type) => {
+const presetRange = (preset) => {
     const today = startOfDay(new Date());
     const day = 24 * 60 * 60 * 1000;
-    switch (type) {
+    switch (preset) {
         case 'today':
             return { startDate: today, endDate: today };
         case 'yesterday': {
@@ -228,9 +240,9 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
     };
 
     // ------------------------------------------------------------------ dates
-    const applyPreset = (type) => {
-        setActivePreset(type);
-        setDateRange(presetRange(type));
+    const applyPreset = (value) => {
+        setActivePreset(value);
+        setDateRange(presetRange(value));
     };
 
     const onStartDateChange = (event, date) => {
@@ -413,326 +425,233 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
         }
     };
 
-    // ------------------------------------------------------------------ render pieces
-    // Layout and styling follow the other admin screens (Today's Attendance in particular):
-    // white full-width filter bars, compact icon stat cards, an attendance-rate bar, then
-    // white shadowed cards on the light page background.
-    const renderFilters = () => (
-        <View style={styles.filterBar}>
-            <View style={styles.pickerContainer}>
-                {loadingEmployees && employees.length === 0 ? (
-                    <ActivityIndicator size="small" color={colors.primary} style={styles.pickerLoader} />
-                ) : (
-                    <Picker selectedValue={selectedEmployee} onValueChange={setSelectedEmployee} style={styles.picker}>
-                        <Picker.Item label="Select an employee" value="" />
-                        {employees.map((emp) => (
-                            <Picker.Item
-                                key={emp.name}
-                                label={`${emp.employee_name || emp.name} (${emp.name})`}
-                                value={emp.name}
-                            />
-                        ))}
-                    </Picker>
-                )}
-            </View>
+    // ------------------------------------------------------------------ pickers and header
+    const [pickEmployee, setPickEmployee] = useState(false);
+    const [employeeQuery, setEmployeeQuery] = useState('');
+    const [showDepartments, setShowDepartments] = useState(false);
 
-            {/* period: one row of tabs, like the tabs on Today's Attendance */}
-            <View style={styles.tabRow}>
-                {PRESETS.map((p) => {
-                    const active = activePreset === p.type;
-                    return (
-                        <TouchableOpacity
-                            key={p.type}
-                            style={[styles.tab, { flexGrow: p.label.length + 4 }, active && styles.tabActive]}
-                            onPress={() => applyPreset(p.type)}
-                            activeOpacity={0.8}
-                        >
-                            <Text
-                                style={[styles.tabText, active && styles.tabTextActive]}
-                                numberOfLines={1}
-                                adjustsFontSizeToFit
-                                minimumFontScale={0.75}
-                            >
-                                {p.label}
-                            </Text>
-                        </TouchableOpacity>
-                    );
-                })}
-            </View>
+    useLayoutEffect(() => {
+        navigation.setOptions({
+            // eslint-disable-next-line react/no-unstable-nested-components -- React Navigation header render prop
+            headerRight: () => (
+                <Pressable onPress={() => setShowExport(true)} hitSlop={10} style={styles.headerAction}>
+                    <Text style={styles.headerActionText}>Export</Text>
+                </Pressable>
+            ),
+        });
+    }, [navigation]);
 
-            <View style={styles.dateRow}>
-                <TouchableOpacity style={styles.dateButton} onPress={() => setShowStartPicker(true)} activeOpacity={0.8}>
-                    <Icon name="calendar-alt" size={13} color={colors.primary} />
-                    <Text style={styles.dateText}>{formatDisplayDate(dateRange.startDate)}</Text>
-                </TouchableOpacity>
-                <Icon name="arrow-right" size={12} color={colors.textMuted} />
-                <TouchableOpacity style={styles.dateButton} onPress={() => setShowEndPicker(true)} activeOpacity={0.8}>
-                    <Icon name="calendar-alt" size={13} color={colors.primary} />
-                    <Text style={styles.dateText}>{formatDisplayDate(dateRange.endDate)}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.exportButton} onPress={() => setShowExport(true)} activeOpacity={0.8}>
-                    <Icon name="file-download" size={13} color={colors.primary} />
-                    <Text style={styles.exportButtonText}>Export</Text>
-                </TouchableOpacity>
-            </View>
-        </View>
-    );
+    const employeeName = employees.find((e) => e.name === selectedEmployee)?.employee_name;
+    const pickerList = useMemo(() => {
+        const q = employeeQuery.trim().toLowerCase();
+        return q ? employees.filter((e) => e.employee_name?.toLowerCase().includes(q) || e.name?.toLowerCase().includes(q)) : employees;
+    }, [employees, employeeQuery]);
+    const departmentName = departments.find((d) => d.name === exportDepartment)?.department_name || exportDepartment;
+    const periodText = `${formatDisplayDate(dateRange.startDate)} \u2013 ${formatDisplayDate(dateRange.endDate)}`;
 
-    const renderStats = () => {
-        if (!summaryStats) {
-            return null;
-        }
+    // ------------------------------------------------------------------ sections
+    const renderAttendance = () => {
         const s = summaryStats;
-        const stats = [
-            { label: 'Present', value: s.present_days, icon: 'check-circle', color: STATUS_COLORS.present },
-            { label: 'WFH', value: s.wfh_days, icon: 'home', color: STATUS_COLORS.wfh },
-            { label: 'On Site', value: s.onsite_days, icon: 'building', color: STATUS_COLORS.onsite },
-            { label: 'Absent', value: s.absent_days, icon: 'times-circle', color: STATUS_COLORS.absent },
-            { label: 'Leave', value: s.leave_days ?? s.on_leave, icon: 'calendar-times', color: STATUS_COLORS.leave },
-            { label: 'Holidays', value: s.holiday_days ?? s.holidays, icon: 'calendar-day', color: STATUS_COLORS.holiday },
-            { label: 'Late', value: s.late_arrivals, icon: 'clock', color: STATUS_COLORS.late },
-            { label: 'Hours', value: s.total_working_hours, icon: 'hourglass-half', color: colors.primary },
-        ];
         const pct = s.attendance_percentage;
-        const rateColor = pct == null ? colors.textMuted
-            : pct >= 80 ? STATUS_COLORS.present : pct >= 60 ? STATUS_COLORS.late : STATUS_COLORS.absent;
         return (
-            <>
-                <View style={styles.summaryContainer}>
-                    {stats.map((st) => (
-                        <View key={st.label} style={styles.statCard}>
-                            <Icon name={st.icon} size={16} color={st.color} />
-                            <View style={styles.statContent}>
-                                <Text style={[styles.statNumber, { color: st.color }]}>{num(st.value)}</Text>
-                                <Text style={styles.statLabel}>{st.label}</Text>
-                            </View>
-                        </View>
-                    ))}
+            <Group title="Attendance">
+                <View style={styles.statsBlock}>
+                    <StatStrip
+                        style={styles.flatStrip}
+                        items={[
+                            { label: 'Working days', value: num(s.total_working_days) },
+                            { label: 'Present', value: num(s.present_days) },
+                            { label: 'WFH', value: num(s.wfh_days) },
+                            { label: 'On site', value: num(s.onsite_days) },
+                        ]}
+                    />
+                    <View style={styles.stripDivider} />
+                    <StatStrip
+                        style={styles.flatStrip}
+                        items={[
+                            { label: 'Leave', value: num(s.leave_days ?? s.on_leave) },
+                            { label: 'Absent', value: num(s.absent_days), tone: s.absent_days ? 'danger' : undefined },
+                            { label: 'Holidays', value: num(s.holiday_days ?? s.holidays) },
+                            { label: 'Late', value: num(s.late_arrivals), tone: s.late_arrivals ? 'warning' : undefined },
+                        ]}
+                    />
                 </View>
-
-                <View style={styles.rateContainer}>
+                <View style={styles.rate}>
                     <View style={styles.rateHeader}>
-                        <Text style={styles.rateLabel}>Attendance Rate</Text>
-                        <Text style={[styles.ratePercentage, { color: rateColor }]}>
-                            {pct == null ? '-' : `${num(pct)}%`}
+                        <Text style={type.secondary}>
+                            {`${s.attended_days_so_far ?? 0} of ${s.working_days_so_far ?? 0} working days attended${rangeIncludesToday() ? ', today not counted yet' : ''}`}
                         </Text>
+                        <Text style={styles.rateValue}>{pct == null ? '\u2013' : `${num(pct)}%`}</Text>
                     </View>
-                    <View style={styles.progressBarContainer}>
-                        <View style={[styles.progressBarFill, { width: `${Math.min(pct || 0, 100)}%`, backgroundColor: rateColor }]} />
-                    </View>
-                    <Text style={styles.rateSubtext}>
-                        {s.attended_days_so_far ?? 0} of {s.working_days_so_far ?? 0} working days attended
-                        {rangeIncludesToday() ? ' \u00B7 today not counted yet' : ''}
-                    </Text>
+                    <ProgressBar value={pct || 0} tone={pct == null ? 'neutral' : pct >= 90 ? 'success' : pct >= 75 ? 'warning' : 'danger'} />
                 </View>
-            </>
+                <Row title="Hours worked" value={`${num(s.total_working_hours)} h`} subtitle={`${num(s.avg_working_hours)} h per day on average`} />
+            </Group>
         );
     };
 
     const renderSalary = () => {
-        if (!summaryStats) {
-            return null;
-        }
         if (!isFullMonth) {
             return (
-                <View style={styles.infoCard}>
-                    <Icon name="info-circle" size={13} color={colors.info} />
-                    <Text style={styles.infoText}>Salary is shown for a full month. Choose This Month or Last Month.</Text>
-                </View>
+                <Notice tone="neutral" icon="info">
+                    Salary is shown for a full calendar month. Choose This month or Last month.
+                </Notice>
             );
         }
         if (!salary) {
             return null;
         }
-        const hasRows = (salary.earnings || []).length > 0;
+        if (!(salary.earnings || []).length) {
+            return <Notice tone="neutral" icon="info" title="No salary data">{salary.source_label}</Notice>;
+        }
         const isSlip = salary.source === 'slip';
+        const footer = `${salary.source_label}${!isSlip && !salary.month_complete ? '. Month in progress: absent and WFH days so far.' : ''}`;
         return (
-            <View style={[styles.card, styles.cardAccent]}>
-                <View style={styles.cardHeader}>
-                    <View style={styles.cardTitleRow}>
-                        <Icon name="wallet" size={14} color={colors.primary} />
-                        <Text style={styles.cardTitle}>Salary</Text>
-                    </View>
-                    {hasRows ? (
-                        <StatusBadge label={isSlip ? 'Payslip' : 'Estimate'} tone={isSlip ? 'success' : 'warning'} icon={isSlip ? 'file-invoice' : 'calculator'} />
-                    ) : null}
-                </View>
-                {hasRows ? (
-                    <>
-                        <Text style={styles.groupTitle}>Earnings</Text>
-                        {salary.earnings.map((r) => (
-                            <View key={`e-${r.component}`} style={styles.moneyRow}>
-                                <Text style={styles.moneyLabel}>{r.component}</Text>
-                                <Text style={styles.moneyValue}>{inr(r.amount)}</Text>
-                            </View>
-                        ))}
-                        <View style={[styles.moneyRow, styles.moneyTotalRow]}>
-                            <Text style={styles.moneyTotalLabel}>Gross pay</Text>
-                            <Text style={styles.moneyTotalLabel}>{inr(salary.gross_pay)}</Text>
-                        </View>
-                        <Text style={styles.groupTitle}>Deductions</Text>
-                        {salary.deductions.length ? (
-                            salary.deductions.map((r) => (
-                                <View key={`d-${r.component}`} style={styles.moneyRow}>
-                                    <Text style={styles.moneyLabel}>{r.component}</Text>
-                                    <Text style={[styles.moneyValue, styles.moneyNegative]}>-{inr(r.amount)}</Text>
-                                </View>
-                            ))
-                        ) : (
-                            <Text style={styles.smallText}>No deductions</Text>
-                        )}
-                        <View style={styles.netRow}>
-                            <Text style={styles.netLabel}>Net Pay</Text>
-                            <Text style={styles.netValue}>{inr(salary.net_pay)}</Text>
-                        </View>
-                        <Text style={styles.smallText}>
-                            {salary.source_label}
-                            {!isSlip && !salary.month_complete ? '. Month in progress: absent and WFH days so far.' : ''}
-                        </Text>
-                    </>
-                ) : (
-                    <Text style={styles.smallText}>{salary.source_label}</Text>
-                )}
-            </View>
+            <>
+                <Group title="Earnings" action={isSlip ? 'From payslip' : 'Estimate'}>
+                    {salary.earnings.map((r) => <Row key={`e-${r.component}`} title={r.component} value={inr(r.amount)} />)}
+                    <Row title="Gross pay" value={inr(salary.gross_pay)} right={null} />
+                </Group>
+                <Group title="Deductions">
+                    {salary.deductions.length
+                        ? salary.deductions.map((r) => <Row key={`d-${r.component}`} title={r.component} value={`\u2212${inr(r.amount)}`} />)
+                        : <Row title="No deductions" />}
+                    <Row title="Total deductions" value={`\u2212${inr(salary.total_deduction)}`} />
+                </Group>
+                <Group footer={footer}>
+                    <Row title="Net pay" right={<Text style={styles.netPay}>{inr(salary.net_pay)}</Text>} />
+                </Group>
+            </>
         );
     };
 
-    const renderExportOption = (scope, format) => {
+    const exportRow = (scope, format) => {
         const busy = exporting === `${scope}-${format}`;
-        const isPdf = format === 'pdf';
         const blocked = scope === 'employee' && !selectedEmployee;
         return (
-            <TouchableOpacity
+            <Row
                 key={`${scope}-${format}`}
-                style={[styles.option, (blocked || (exporting && !busy)) && styles.disabled]}
+                icon={format === 'pdf' ? 'file-text' : 'grid'}
+                title={format === 'pdf' ? 'PDF report' : 'Excel sheet'}
+                subtitle={scope === 'employee'
+                    ? (blocked ? 'Choose an employee first' : `Summary${isFullMonth ? ', salary' : ''} and daily records`)
+                    : `One row per employee${isFullMonth ? ' with salary' : ''}`}
+                right={busy ? <ActivityIndicator size="small" color={color.accent} /> : <Icon name="download" size={18} color={color.textTertiary} />}
+                chevron={false}
+                disabled={blocked || Boolean(exporting)}
                 onPress={() => runExport(scope, format)}
-                disabled={Boolean(exporting) || blocked}
-                activeOpacity={0.8}
-            >
-                <Icon name={isPdf ? 'file-pdf' : 'file-excel'} size={18} color={isPdf ? STATUS_COLORS.absent : STATUS_COLORS.present} />
-                <View style={styles.optionTextBox}>
-                    <Text style={styles.optionText}>{isPdf ? 'PDF report' : 'Excel sheet'}</Text>
-                    <Text style={styles.optionSub}>
-                        {scope === 'employee'
-                            ? `Summary${isFullMonth ? ', salary' : ''} and daily records`
-                            : `One row per employee${isFullMonth ? ' with salary' : ''}`}
-                    </Text>
-                </View>
-                {busy ? (
-                    <ActivityIndicator size="small" color={colors.primary} />
-                ) : (
-                    <Icon name="download" size={13} color={colors.textMuted} />
-                )}
-            </TouchableOpacity>
+            />
         );
     };
 
-    const renderExportModal = () => (
-        <Modal
-            visible={showExport}
-            transparent
-            animationType="fade"
-            onRequestClose={() => !exporting && setShowExport(false)}
-        >
-            <TouchableOpacity
-                style={styles.modalOverlay}
-                activeOpacity={1}
-                onPress={() => !exporting && setShowExport(false)}
-            >
-                <TouchableOpacity activeOpacity={1} style={styles.modalContent}>
-                    <Text style={styles.modalTitle}>Export Reports</Text>
-                    <Text style={styles.modalSubtitle}>
-                        {formatDisplayDate(dateRange.startDate)} - {formatDisplayDate(dateRange.endDate)}
-                    </Text>
-
-                    <Text style={styles.modalSection}>
-                        {selectedEmployee ? employees.find((e) => e.name === selectedEmployee)?.employee_name || selectedEmployee : 'This employee'}
-                    </Text>
-                    {selectedEmployee ? null : <Text style={styles.optionHint}>Select an employee first</Text>}
-                    {renderExportOption('employee', 'pdf')}
-                    {renderExportOption('employee', 'excel')}
-
-                    <Text style={styles.modalSection}>All employees</Text>
-                    {departments.length > 0 ? (
-                        <View style={[styles.pickerContainer, styles.modalPicker]}>
-                            <Picker selectedValue={exportDepartment} onValueChange={setExportDepartment} style={styles.picker}>
-                                <Picker.Item label="All departments" value="" />
-                                {departments.map((d) => (
-                                    <Picker.Item key={d.name} label={d.department_name || d.name} value={d.name} />
-                                ))}
-                            </Picker>
-                        </View>
-                    ) : null}
-                    {renderExportOption('all', 'pdf')}
-                    {renderExportOption('all', 'excel')}
-
-                    <Text style={styles.modalNote}>Files are saved to your phone's Downloads folder.</Text>
-                    <TouchableOpacity
-                        style={[styles.closeButton, exporting && styles.disabled]}
-                        onPress={() => setShowExport(false)}
-                        disabled={Boolean(exporting)}
-                    >
-                        <Text style={styles.closeButtonText}>Close</Text>
-                    </TouchableOpacity>
-                </TouchableOpacity>
-            </TouchableOpacity>
-        </Modal>
-    );
-
     // ------------------------------------------------------------------ main
-    const employeeName = employees.find((e) => e.name === selectedEmployee)?.employee_name;
-
     return (
-        <View style={styles.container}>
-            <StatusBar barStyle="dark-content" backgroundColor={colors.surface} />
-            <ScrollView
-                showsVerticalScrollIndicator={false}
-                contentContainerStyle={styles.scrollBottom}
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />}
-            >
-                {renderFilters()}
+        <View style={styles.flex}>
+            <View style={styles.controls}>
+                <SelectField
+                    value={employeeName ? `${employeeName}  (${selectedEmployee})` : null}
+                    placeholder="Choose an employee"
+                    onPress={() => setPickEmployee(true)}
+                    style={styles.noMargin}
+                />
+                <Segmented options={PRESETS} value={activePreset} onChange={applyPreset} style={styles.presets} />
+                <View style={styles.dateRow}>
+                    <SelectField value={formatDisplayDate(dateRange.startDate)} icon="calendar" onPress={() => setShowStartPicker(true)} style={[styles.flex, styles.noMargin]} />
+                    <Text style={styles.dateDash}>{'\u2013'}</Text>
+                    <SelectField value={formatDisplayDate(dateRange.endDate)} icon="calendar" onPress={() => setShowEndPicker(true)} style={[styles.flex, styles.noMargin]} />
+                </View>
+            </View>
 
+            <Screen refreshing={refreshing} onRefresh={onRefresh}>
                 {!selectedEmployee ? (
-                    <View style={styles.scrollContent}>
-                        <View style={styles.emptyContainer}>
-                            <Icon name="user-friends" size={48} color={colors.textMuted} />
-                            <Text style={styles.emptyTitle}>Select an Employee</Text>
-                            <Text style={styles.emptyText}>Attendance, salary and daily records will appear here.</Text>
-                        </View>
-                    </View>
+                    <EmptyState
+                        icon="user"
+                        title="Choose an employee"
+                        message="Their attendance, salary and daily records appear here. Export for everyone is under Export."
+                        action="Choose employee"
+                        onAction={() => setPickEmployee(true)}
+                    />
                 ) : loadingAttendance && !summaryStats ? (
-                    <View style={styles.loadingContainer}>
-                        <ActivityIndicator color={colors.primary} size="large" />
-                        <Text style={styles.loadingText}>Loading attendance data...</Text>
-                    </View>
-                ) : (
+                    <Loading label="Loading attendance" />
+                ) : summaryStats ? (
                     <>
-                        {renderStats()}
-                        <View style={styles.scrollContent}>
-                            {renderSalary()}
-
-                            <View style={styles.sectionHeader}>
-                                <Text style={styles.sectionTitle}>Daily Records</Text>
-                                <Text style={styles.sectionCount} numberOfLines={1}>
-                                    {employeeName ? `${employeeName} · ` : ''}{attendance.length} days
-                                </Text>
-                            </View>
-                            {loadingAttendance ? <ActivityIndicator size="small" color={colors.primary} style={styles.inlineLoader} /> : null}
-                            {attendance.length === 0 ? (
-                                <View style={styles.emptyContainer}>
-                                    <Icon name="inbox" size={48} color={colors.textMuted} />
-                                    <Text style={styles.emptyTitle}>No Records</Text>
-                                    <Text style={styles.emptyText}>Nothing to show for this period.</Text>
-                                </View>
-                            ) : (
-                                <AttendanceList attendance={attendance} />
-                            )}
-                        </View>
+                        {renderAttendance()}
+                        {renderSalary()}
+                        {attendance.length ? (
+                            <Group title={`Daily records  \u00B7  ${attendance.length} days`}>{attendance.map(attendanceRow)}</Group>
+                        ) : (
+                            <EmptyState icon="calendar" title="No records" message="Nothing to show for this period." />
+                        )}
                     </>
-                )}
-            </ScrollView>
+                ) : null}
+            </Screen>
 
-            {renderExportModal()}
+            {/* employee picker */}
+            <Sheet visible={pickEmployee} title="Choose employee" onClose={() => setPickEmployee(false)}>
+                <SearchField value={employeeQuery} onChangeText={setEmployeeQuery} placeholder="Search by name or ID" style={styles.sheetSearch} />
+                {loadingEmployees && employees.length === 0 ? (
+                    <Loading />
+                ) : (
+                    <Group>
+                        {pickerList.map((e) => (
+                            <Row
+                                key={e.name}
+                                left={<Avatar name={e.employee_name} />}
+                                title={e.employee_name || e.name}
+                                subtitle={e.name}
+                                selected={e.name === selectedEmployee}
+                                right={e.name === selectedEmployee ? <Icon name="check" size={18} color={color.accent} /> : null}
+                                chevron={false}
+                                onPress={() => {
+                                    setSelectedEmployee(e.name);
+                                    setPickEmployee(false);
+                                    setEmployeeQuery('');
+                                }}
+                            />
+                        ))}
+                    </Group>
+                )}
+            </Sheet>
+
+            {/* export */}
+            <Sheet
+                visible={showExport}
+                title="Export"
+                subtitle={periodText}
+                onClose={() => !exporting && setShowExport(false)}
+                dismissable={!exporting}
+                footer={<Button title="Close" variant="secondary" onPress={() => setShowExport(false)} disabled={Boolean(exporting)} style={styles.flex} />}
+            >
+                <Group title={employeeName || 'This employee'}>
+                    {exportRow('employee', 'pdf')}
+                    {exportRow('employee', 'excel')}
+                </Group>
+                <Group title="All employees" footer="Files are saved to your phone's Downloads folder.">
+                    {departments.length ? (
+                        <Row
+                            icon="layers"
+                            title="Department"
+                            value={exportDepartment ? departmentName : 'All departments'}
+                            onPress={() => setShowDepartments((v) => !v)}
+                        />
+                    ) : null}
+                    {showDepartments ? [{ name: '', department_name: 'All departments' }, ...departments].map((d) => (
+                        <Row
+                            key={d.name || 'all'}
+                            title={d.department_name || d.name}
+                            right={exportDepartment === d.name ? <Icon name="check" size={18} color={color.accent} /> : null}
+                            chevron={false}
+                            onPress={() => {
+                                setExportDepartment(d.name);
+                                setShowDepartments(false);
+                            }}
+                        />
+                    )) : null}
+                    {exportRow('all', 'pdf')}
+                    {exportRow('all', 'excel')}
+                </Group>
+            </Sheet>
+
             {showStartPicker && (
                 <DateTimePicker
                     value={dateRange.startDate || new Date()}
@@ -756,230 +675,30 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
     );
 }
 
-const SHADOW = {
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-};
-
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: colors.background },
-    scrollBottom: { paddingBottom: 20 },
-    scrollContent: { padding: 12 },
-
-    // filter bar (white, full width)
-    filterBar: {
-        backgroundColor: colors.surface,
-        paddingHorizontal: 12,
-        paddingTop: 10,
-        paddingBottom: 10,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-        gap: 8,
+    flex: { flex: 1 },
+    noMargin: { marginBottom: 0 },
+    headerAction: { paddingHorizontal: 4, paddingVertical: 4 },
+    headerActionText: { fontSize: 16, fontWeight: '600', color: color.accent },
+    controls: {
+        backgroundColor: color.surface,
+        paddingHorizontal: space.lg,
+        paddingTop: space.md,
+        paddingBottom: space.md,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: color.border,
     },
-    pickerContainer: {
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: 8,
-        backgroundColor: '#F9FAFB',
-        overflow: 'hidden',
-        justifyContent: 'center',
-    },
-    picker: { height: 50, color: colors.textPrimary },
-    pickerLoader: { paddingVertical: 15 },
-    tabRow: { flexDirection: 'row', gap: 6 },
-    tab: {
-        flexBasis: 0,
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 8,
-        paddingHorizontal: 4,
-        backgroundColor: colors.background,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    tabActive: {
-        backgroundColor: colors.primary,
-        borderColor: colors.primary,
-        elevation: 1,
-        shadowColor: colors.primary,
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.3,
-        shadowRadius: 2,
-    },
-    tabText: { fontSize: 11, fontWeight: '700', color: colors.textPrimary },
-    tabTextActive: { color: colors.white },
-    dateRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    dateButton: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
-        paddingVertical: 8,
-        backgroundColor: colors.background,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    dateText: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
-
-    // stat cards (same as Today's Attendance)
-    summaryContainer: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        justifyContent: 'space-between',
-        rowGap: 6,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        backgroundColor: colors.surface,
-    },
-    statCard: {
-        width: '23.8%',
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: colors.background,
-        padding: 8,
-        borderRadius: 8,
-        gap: 6,
-    },
-    statContent: { flex: 1 },
-    statNumber: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
-    statLabel: { fontSize: 9, color: colors.textSecondary, marginTop: 1, fontWeight: '500' },
-
-    // attendance rate bar (same as Today's Attendance)
-    rateContainer: {
-        backgroundColor: colors.surface,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    rateHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-    rateLabel: { fontSize: 12, fontWeight: '600', color: colors.textPrimary },
-    ratePercentage: { fontSize: 16, fontWeight: '700', color: colors.primary },
-    progressBarContainer: { height: 6, backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden', marginBottom: 4 },
-    progressBarFill: { height: '100%', borderRadius: 3 },
-    rateSubtext: { fontSize: 10, color: colors.textSecondary, textAlign: 'center' },
-
-    // cards
-    card: {
-        backgroundColor: colors.surface,
-        borderRadius: 10,
-        padding: 12,
-        marginBottom: 10,
-        borderWidth: 1,
-        borderColor: colors.borderLight,
-        ...SHADOW,
-    },
-    cardAccent: { borderLeftWidth: 3, borderLeftColor: colors.primary },
-    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-    cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    cardTitle: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
-    infoCard: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        backgroundColor: '#F0F9FF',
-        padding: 10,
-        borderRadius: 8,
-        marginBottom: 10,
-        borderWidth: 1,
-        borderColor: '#BFDBFE',
-    },
-    infoText: { flex: 1, fontSize: 11, fontWeight: '600', color: '#1E40AF' },
-
-    groupTitle: { fontSize: 11, fontWeight: '700', color: colors.textSecondary, marginTop: 6, marginBottom: 2 },
-    moneyRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },
-    moneyLabel: { fontSize: 13, color: '#374151', flex: 1, paddingRight: 8 },
-    moneyValue: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
-    moneyNegative: { color: STATUS_COLORS.absent },
-    moneyTotalRow: { borderTopWidth: 1, borderTopColor: colors.border, marginTop: 2 },
-    moneyTotalLabel: { fontSize: 13, fontWeight: '700', color: colors.textPrimary },
-    netRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        backgroundColor: colors.primaryLight,
-        borderRadius: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        marginTop: 10,
-    },
-    netLabel: { fontSize: 13, fontWeight: '700', color: colors.primary },
-    netValue: { fontSize: 17, fontWeight: '800', color: colors.primary },
-    smallText: { fontSize: 11, color: colors.textSecondary, marginTop: 8 },
-
-    exportButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 5,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        backgroundColor: colors.background,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: colors.primary,
-    },
-    exportButtonText: { fontSize: 12, color: colors.primary, fontWeight: '600' },
-    disabled: { opacity: 0.5 },
-
-    // export pop-up (same look as the filter pop-ups on the approval screens)
-    modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center', padding: 16 },
-    modalContent: {
-        backgroundColor: colors.surface,
-        borderRadius: 14,
-        padding: 16,
-        width: '100%',
-        maxWidth: 400,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
-        elevation: 10,
-    },
-    modalTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, textAlign: 'center' },
-    modalSubtitle: { fontSize: 12, color: colors.textSecondary, textAlign: 'center', marginTop: 2, marginBottom: 8 },
-    modalSection: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginTop: 8, marginBottom: 6 },
-    modalPicker: { marginBottom: 6 },
-    modalNote: { fontSize: 11, color: colors.textMuted, textAlign: 'center', marginTop: 6 },
-    option: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 10,
-        paddingHorizontal: 14,
-        borderRadius: 8,
-        marginBottom: 6,
-        backgroundColor: colors.background,
-        gap: 12,
-    },
-    optionTextBox: { flex: 1 },
-    optionText: { fontSize: 14, color: colors.textPrimary, fontWeight: '500' },
-    optionSub: { fontSize: 11, color: colors.textSecondary, marginTop: 1 },
-    optionHint: { fontSize: 11, color: STATUS_COLORS.late, marginBottom: 6 },
-    closeButton: {
-        marginTop: 12,
-        paddingVertical: 10,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: colors.border,
-        alignItems: 'center',
-    },
-    closeButtonText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
-
-    sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, marginBottom: 8 },
-    sectionTitle: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
-    sectionCount: { fontSize: 11, color: colors.textSecondary, flexShrink: 1, marginLeft: 8, textAlign: 'right' },
-    inlineLoader: { marginBottom: 8 },
-
-    loadingContainer: { justifyContent: 'center', alignItems: 'center', paddingVertical: 30 },
-    loadingText: { marginTop: 10, fontSize: 14, color: colors.textSecondary },
-    emptyContainer: { justifyContent: 'center', alignItems: 'center', paddingVertical: 40 },
-    emptyTitle: { fontSize: 18, fontWeight: '600', color: colors.textSecondary, marginTop: 12 },
-    emptyText: { fontSize: 13, color: colors.textMuted, textAlign: 'center', marginTop: 6, paddingHorizontal: 32 },
+    presets: { marginTop: space.md },
+    dateRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.md },
+    dateDash: { color: color.textTertiary },
+    statsBlock: { backgroundColor: color.surface },
+    flatStrip: { borderWidth: 0, borderRadius: 0 },
+    stripDivider: { height: StyleSheet.hairlineWidth, backgroundColor: color.divider, marginHorizontal: space.lg },
+    rate: { paddingHorizontal: space.lg, paddingVertical: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.divider },
+    rateHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: space.sm, marginBottom: 6 },
+    rateValue: { fontSize: 15, fontWeight: '600', color: color.text, fontVariant: ['tabular-nums'] },
+    netPay: { fontSize: 17, fontWeight: '700', color: color.text, fontVariant: ['tabular-nums'] },
+    sheetSearch: { marginBottom: space.md },
 });
 
 export default AllAttendanceAnalyticsScreen;

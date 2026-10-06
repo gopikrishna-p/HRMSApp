@@ -1,29 +1,30 @@
 // src/screens/admin/AdminDashboard.js
-import React, { useState, useEffect } from 'react';
-import {
-    View,
-    ScrollView,
-    StyleSheet,
-    RefreshControl,
-    Modal,
-    FlatList,
-    ActivityIndicator,
-} from 'react-native';
-import Icon from 'react-native-vector-icons/FontAwesome5';
-import { Text, useTheme } from 'react-native-paper';
+import React, { useEffect, useState } from 'react';
+import { View, Text, Image, StyleSheet } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
-import AppHeader from '../../components/ui/AppHeader';
-import Section from '../../components/ui/Section';
-import ListItem from '../../components/ui/ListItem';
-import StatCard from '../../components/ui/StatCard';
-import Button from '../../components/common/Button';
 import ApiService, { isApiSuccess, extractFrappeData, getApiErrorMessage } from '../../services/api.service';
 import FCMService from '../../services/fcm.service';
-import showToast from '../../utils/Toast';
+import {
+    Screen,
+    Group,
+    Row,
+    StatStrip,
+    Count,
+    IconButton,
+    Loading,
+    color,
+    space,
+    type,
+    formatLongDate,
+} from '../../components/ds';
+
+const greeting = () => {
+    const h = new Date().getHours();
+    return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+};
 
 const AdminDashboard = ({ navigation }) => {
     const { logout, user, employee } = useAuth();
-    const { custom } = useTheme();
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [stats, setStats] = useState({
@@ -35,144 +36,30 @@ const AdminDashboard = ({ navigation }) => {
         onLeave: 0,
         lateArrivals: 0,
         employeesOnHoliday: 0,
-        workingEmployees: 0,
         attendanceRate: 0,
     });
-
-    const [pendingData, setPendingData] = useState({
-        wfhApprovals: 0,
-        onsiteApprovals: 0,
-        leaveApprovals: 0,
-        expenseApprovals: 0,
-        travelApprovals: 0,
-        compLeaveApprovals: 0,
-        notifications: 0,
+    const [pending, setPending] = useState({
+        wfh: 0, onsite: 0, leave: 0, expense: 0, travel: 0, compLeave: 0, total: 0,
     });
     const [pendingOnboarding, setPendingOnboarding] = useState(0);
+    const [leaveLeft, setLeaveLeft] = useState(null);
 
-    // Leave balance state for admin (if they are also an employee)
-    const [leaveBalance, setLeaveBalance] = useState({
-        balances: {},
-        total_allocated: 0,
-        total_used: 0,
-        total_balance: 0
-    });
-
-    const handleLogout = async () => {
-        await logout();
-    };
-
-    const fetchPendingOnboarding = async () => {
-        try {
-            const response = await ApiService.getOnboardingRequests({ status: 'Submitted', limit: 50 });
-            if (!isApiSuccess(response)) {
-                setPendingOnboarding(0);
-                return;
-            }
-            const data = extractFrappeData(response, {});
-            const list = Array.isArray(data?.requests) ? data.requests : [];
-            setPendingOnboarding(list.length);
-        } catch (e) {
-            setPendingOnboarding(0);
-        }
-    };
-
-    useEffect(() => {
-        fetchDashboardData();
-        
-        // Initialize FCM for push notifications
-        initializeFCM();
-
-        // Cleanup on unmount to prevent memory leaks
-        return () => {
-            setLoading(false);
-            setRefreshing(false);
-            
-            // Cleanup FCM listeners
-            FCMService.cleanup();
-        };
-    }, []);
-
-    const fetchDashboardData = async () => {
-        try {
-            setLoading(true);
-            await Promise.all([
-                fetchDashboardStats(),
-                fetchPendingApprovals(),
-                fetchLeaveBalance(),
-                fetchPendingOnboarding(),
-            ]);
-        } catch (error) {
-            console.error('Dashboard load error:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const fetchLeaveBalance = async () => {
-        try {
-            const empId = employee?.name;
-            if (!empId) {
-                console.log('⚠️ No employee ID for admin, skipping leave balance fetch');
-                return;
-            }
-
-            const response = await ApiService.getLeaveBalances(empId);
-            console.log('📋 Leave balance response:', response);
-            
-            if (response && response.data?.message) {
-                const balanceData = response.data.message;
-                
-                // Process leave balances
-                const processedBalances = {};
-                let totalAllocated = 0;
-                let totalBalance = 0;
-                
-                Object.keys(balanceData).forEach(leaveType => {
-                    const leave = balanceData[leaveType];
-                    const allocated = leave.allocated_leaves || 0;
-                    const balance = leave.balance_leaves || 0;
-                    processedBalances[leaveType] = {
-                        allocated: allocated,
-                        balance: balance,
-                        used: allocated - balance
-                    };
-                    totalAllocated += allocated;
-                    totalBalance += balance;
-                });
-                
-                setLeaveBalance({
-                    balances: processedBalances,
-                    total_allocated: totalAllocated,
-                    total_used: totalAllocated - totalBalance,
-                    total_balance: totalBalance
-                });
-                
-                console.log('✅ Leave balance loaded:', { totalAllocated, totalBalance });
-            }
-        } catch (error) {
-            console.error('❌ Error fetching leave balance:', error?.message);
-        }
-    };
-
-    const fetchDashboardStats = async () => {
+    const fetchStats = async () => {
         try {
             const response = await ApiService.get('/api/method/hrms.api.get_employee_statistics');
             if (response.success && response.data?.message) {
-                const data = response.data.message;
-                setStats(prev => ({
-                    ...prev,
-                    totalEmployees: data.totalEmployees || 0,
-                    presentToday: data.presentToday || 0,
-                    absentToday: data.absentToday || 0,
-                    wfhToday: data.wfhToday || 0,
-                    onsiteToday: data.onsiteToday || 0,
-                    onLeave: data.onLeave || 0,
-                    lateArrivals: data.lateArrivals || 0,
-                    employeesOnHoliday: data.employeesOnHoliday || 0,
-                    workingEmployees: data.workingEmployees || 0,
-                    attendanceRate: data.attendanceRate || 0,
-                }));
+                const d = response.data.message;
+                setStats({
+                    totalEmployees: d.totalEmployees || 0,
+                    presentToday: d.presentToday || 0,
+                    absentToday: d.absentToday || 0,
+                    wfhToday: d.wfhToday || 0,
+                    onsiteToday: d.onsiteToday || 0,
+                    onLeave: d.onLeave || 0,
+                    lateArrivals: d.lateArrivals || 0,
+                    employeesOnHoliday: d.employeesOnHoliday || 0,
+                    attendanceRate: d.attendanceRate || 0,
+                });
             }
         } catch (error) {
             console.error('Dashboard stats error:', error);
@@ -180,343 +67,219 @@ const AdminDashboard = ({ navigation }) => {
     };
 
     const fetchPendingApprovals = async () => {
+        const empId = employee?.name;
+        if (!empId) {
+            return;
+        }
         try {
-            const empId = employee?.name;
-            console.log('📋 Fetching admin pending approvals for:', empId);
-
-            // Skip if employee ID is missing
-            if (!empId) {
-                console.log('⚠️ No employee ID, skipping approval fetch');
-                return;
-            }
-
-            // Use new comprehensive admin approval API
             const response = await ApiService.get(`/api/method/hrms.api.get_admin_pending_approvals?employee=${empId}&limit_page_length=500`);
-            console.log('📋 Raw response from get_admin_pending_approvals:', response);
-            
             if (isApiSuccess(response)) {
-                const approvals = extractFrappeData(response, {});
-                console.log('✅ Raw approvals data:', {
-                    leave: approvals.leave_applications?.length || 0,
-                    expense: approvals.expense_claims?.length || 0,
-                    wfh: approvals.wfh_requests?.length || 0,
-                    onsite: approvals.on_site_requests?.length || 0,
-                    travel: approvals.travel_requests?.length || 0,
-                    compLeave: approvals.comp_leave_requests?.length || 0,
-                });
-                
-                const data = {
-                    wfhApprovals: approvals.wfh_requests?.length || 0,
-                    onsiteApprovals: approvals.on_site_requests?.length || 0,
-                    leaveApprovals: approvals.leave_applications?.length || 0,
-                    expenseApprovals: approvals.expense_claims?.length || 0,
-                    travelApprovals: approvals.travel_requests?.length || 0,
-                    compLeaveApprovals: approvals.comp_leave_requests?.length || 0,
+                const a = extractFrappeData(response, {});
+                const counts = {
+                    wfh: a.wfh_requests?.length || 0,
+                    onsite: a.on_site_requests?.length || 0,
+                    leave: a.leave_applications?.length || 0,
+                    expense: a.expense_claims?.length || 0,
+                    travel: a.travel_requests?.length || 0,
+                    compLeave: a.comp_leave_requests?.length || 0,
                 };
-                
-                data.notifications = data.wfhApprovals + data.onsiteApprovals + data.leaveApprovals + data.expenseApprovals + 
-                                    data.travelApprovals + data.compLeaveApprovals;
-                
-                console.log('✅ Admin pending approvals fetched:', {
-                    leave: data.leaveApprovals,
-                    expense: data.expenseApprovals,
-                    wfh: data.wfhApprovals,
-                    onsite: data.onsiteApprovals,
-                    travel: data.travelApprovals,
-                    compLeave: data.compLeaveApprovals,
-                    total: data.notifications
-                });
-                
-                setPendingData(data);
+                counts.total = Object.values(counts).reduce((x, y) => x + y, 0);
+                setPending(counts);
             } else {
-                console.error('❌ Failed to fetch approvals:', getApiErrorMessage(response, 'Unknown error'));
+                console.error('Pending approvals failed:', getApiErrorMessage(response, 'Unknown error'));
             }
         } catch (error) {
-            console.error('❌ Error fetching pending approvals:', error?.message);
-            // Silently fail - don't show error to user
+            console.error('Pending approvals error:', error?.message);
         }
     };
 
-    // Initialize FCM for push notifications
-    const initializeFCM = async () => {
+    const fetchPendingOnboarding = async () => {
         try {
-            console.log('📱 Initializing FCM for admin:', employee?.name || user?.name);
-            
-            // FCM Service handles initialization and token registration automatically
-            // The token will be registered with the backend if permission is granted
-            
-            // Get current FCM token to verify registration
-            const token = FCMService.getToken();
-            if (token) {
-                console.log('FCM token available:', token.substring(0, 20) + '...');
-            }
-        } catch (error) {
-            console.error('FCM initialization error:', error);
+            const response = await ApiService.getOnboardingRequests({ status: 'Submitted', limit: 50 });
+            const data = isApiSuccess(response) ? extractFrappeData(response, {}) : {};
+            setPendingOnboarding(Array.isArray(data?.requests) ? data.requests.length : 0);
+        } catch (e) {
+            setPendingOnboarding(0);
         }
     };
+
+    const fetchLeaveBalance = async () => {
+        const empId = employee?.name;
+        if (!empId) {
+            return;
+        }
+        try {
+            const response = await ApiService.getLeaveBalances(empId);
+            const balances = response?.data?.message;
+            if (balances && typeof balances === 'object') {
+                setLeaveLeft(Object.values(balances).reduce((sum, b) => sum + (b.balance_leaves || 0), 0));
+            }
+        } catch (error) {
+            console.error('Leave balance error:', error?.message);
+        }
+    };
+
+    const fetchAll = async () => {
+        await Promise.all([fetchStats(), fetchPendingApprovals(), fetchPendingOnboarding(), fetchLeaveBalance()]);
+    };
+
+    useEffect(() => {
+        (async () => {
+            setLoading(true);
+            await fetchAll();
+            setLoading(false);
+        })();
+        // FCMService registers the push token on its own; just release listeners on unmount
+        return () => FCMService.cleanup();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const onRefresh = async () => {
         setRefreshing(true);
-        await fetchDashboardData();
+        await fetchAll();
         setRefreshing(false);
     };
 
-    // Quick stats: rendered as a 3-per-row grid. Backend `get_employee_statistics`
-    // already returns `employeesOnHoliday` (and `workingEmployees`); we surface the
-    // former here so the grid is a clean 3×3 and "On Holiday" gets its own tile —
-    // a distinct attendance status from On Leave (Holiday = no work expected per
-    // the employee's holiday list; Leave = approved absence from a working day).
-    const quickStats = [
-        { id: 1, icon: 'users', tint: custom.palette.primary, value: String(stats.totalEmployees), label: 'Total Employees' },
-        { id: 2, icon: 'user-check', tint: custom.palette.success, value: String(stats.presentToday), label: 'Present Today' },
-        { id: 3, icon: 'user-times', tint: custom.palette.danger, value: String(stats.absentToday), label: 'Absent' },
-        { id: 4, icon: 'home', tint: custom.palette.warning, value: String(stats.wfhToday), label: 'WFH' },
-        { id: 5, icon: 'map-marker-alt', tint: '#2196F3', value: String(stats.onsiteToday), label: 'On Site', iconSize: 20 },
-        { id: 6, icon: 'umbrella-beach', tint: '#8B5CF6', value: String(stats.onLeave), label: 'On Leave' },
-        { id: 7, icon: 'clock', tint: '#F59E0B', value: String(stats.lateArrivals), label: 'Late Arrivals' },
-        { id: 8, icon: 'gift', tint: '#14B8A6', value: String(stats.employeesOnHoliday), label: 'On Holiday' },
-        { id: 9, icon: 'chart-pie', tint: '#EC4899', value: `${stats.attendanceRate}%`, label: 'Attendance Rate' },
-    ];
+    const go = (route) => () => navigation.navigate(route);
+    const firstName = (employee?.employee_name || user?.full_name || '').split(' ')[0];
+
+    const attention = [
+        { key: 'leave', title: 'Leave requests', icon: 'calendar', route: 'LeaveApprovals', count: pending.leave },
+        { key: 'wfh', title: 'WFH requests', icon: 'home', route: 'WFHApprovals', count: pending.wfh },
+        { key: 'onsite', title: 'On-site requests', icon: 'map-pin', route: 'OnSiteApprovals', count: pending.onsite },
+        { key: 'comp', title: 'Comp-off requests', icon: 'repeat', route: 'CompApprovals', count: pending.compLeave },
+        { key: 'expense', title: 'Expense claims', icon: 'file-text', route: 'ExpenseClaimApproval', count: pending.expense },
+        { key: 'travel', title: 'Travel requests', icon: 'navigation', route: 'TravelRequestApproval', count: pending.travel },
+        { key: 'onboarding', title: 'Onboarding submissions', icon: 'user-plus', route: 'EmployeeOnboardingList', count: pendingOnboarding },
+    ].filter((a) => a.count > 0);
 
     return (
-        <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
-            <AppHeader 
-                title="logo" 
-                canGoBack={false} 
-                rightIcon="bell" 
-                badge={pendingData.notifications > 0 ? pendingData.notifications : null}
-                onRightPress={() => navigation.navigate('AdminNotifications')} 
-            />
+        <View style={styles.container}>
+            <View style={styles.topBar}>
+                <Image source={require('../../assets/images/mainLogo.jpg')} style={styles.logo} />
+                <View>
+                    <IconButton name="bell" onPress={go('AdminNotifications')} color={color.text} label="Notifications" />
+                    {pending.total > 0 ? <View style={styles.bellDot} /> : null}
+                </View>
+            </View>
 
             {loading ? (
-                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                    <ActivityIndicator size="large" color={custom.palette.primary} />
-                    <Text style={{ marginTop: 12, color: custom.palette.textSecondary }}>Loading dashboard...</Text>
-                </View>
+                <Loading label="Loading dashboard" />
             ) : (
-                <ScrollView 
-                    contentContainerStyle={{ padding: 16, paddingBottom: 36 }} 
-                    showsVerticalScrollIndicator={false}
-                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-                >
-                {/* Welcome */}
-                <View style={{
-                    backgroundColor: '#FFF', padding: 20, borderRadius: 16, marginBottom: 14,
-                    elevation: 2, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }
-                }}>
-                    <Text style={{ fontSize: 14, color: custom.palette.textSecondary }}>Welcome back!</Text>
-                    <Text style={{ fontSize: 22, fontWeight: '800', marginTop: 6 }}>
-                        {user?.full_name || 'Admin'}
-                    </Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
-                        <Icon name="shield-alt" size={13} color={custom.palette.primary} />
-                        <Text style={{ fontSize: 13, color: custom.palette.primary, marginLeft: 6, fontWeight: '600' }}>
-                            {user?.roles?.join(', ') || 'Administrator'}
-                        </Text>
+                <Screen refreshing={refreshing} onRefresh={onRefresh}>
+                    <View style={styles.greeting}>
+                        <Text style={type.display}>{greeting()}{firstName ? `, ${firstName}` : ''}</Text>
+                        <Text style={styles.date}>{formatLongDate(new Date())}</Text>
                     </View>
-                    {employee?.name ? (
-                        <Text style={{ fontSize: 11, color: custom.palette.textSecondary, marginTop: 4 }}>ID: {employee.name}</Text>
+
+                    <Group title="Today" action="View attendance" onAction={go('TodayAttendance')}>
+                        <View style={styles.statsBlock}>
+                            <StatStrip
+                                style={styles.flatStrip}
+                                items={[
+                                    { label: 'Present', value: stats.presentToday },
+                                    { label: 'Absent', value: stats.absentToday, tone: stats.absentToday ? 'danger' : undefined },
+                                    { label: 'On leave', value: stats.onLeave },
+                                    { label: 'WFH', value: stats.wfhToday },
+                                ]}
+                            />
+                            <View style={styles.stripDivider} />
+                            <StatStrip
+                                style={styles.flatStrip}
+                                items={[
+                                    { label: 'On site', value: stats.onsiteToday },
+                                    { label: 'Late', value: stats.lateArrivals, tone: stats.lateArrivals ? 'warning' : undefined },
+                                    { label: 'Holiday', value: stats.employeesOnHoliday },
+                                    { label: 'Rate', value: `${stats.attendanceRate}%` },
+                                ]}
+                            />
+                        </View>
+                    </Group>
+
+                    {attention.length > 0 ? (
+                        <Group title="Needs your attention">
+                            {attention.map((a) => (
+                                <Row key={a.key} icon={a.icon} title={a.title} right={<Count value={a.count} />} onPress={go(a.route)} />
+                            ))}
+                        </Group>
                     ) : null}
-                </View>
 
-                {/* Stats - Compact Minimal Layout */}
-                <View style={{
-                    backgroundColor: '#FFF',
-                    borderRadius: 12,
-                    padding: 16,
-                    marginBottom: 14,
-                    elevation: 2,
-                    shadowColor: '#000',
-                    shadowOpacity: 0.08,
-                    shadowRadius: 3,
-                    shadowOffset: { width: 0, height: 1 }
-                }}>
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
-                        {quickStats.map(s => (
-                            <View key={s.id} style={{ 
-                                width: '32%', 
-                                marginBottom: 12,
-                                alignItems: 'center',
-                                paddingVertical: 8
-                            }}>
-                                <View style={{
-                                    backgroundColor: s.tint,
-                                    borderRadius: 8,
-                                    padding: 8,
-                                    marginBottom: 6
-                                }}>
-                                    <Icon name={s.icon} size={s.iconSize || 16} color="#FFF" />
-                                </View>
-                                <Text style={{
-                                    fontSize: 18,
-                                    fontWeight: '700',
-                                    color: '#000',
-                                    marginBottom: 2
-                                }}>
-                                    {s.value}
-                                </Text>
-                                <Text style={{
-                                    fontSize: 10,
-                                    color: custom.palette.textSecondary,
-                                    textAlign: 'center'
-                                }}>
-                                    {s.label}
-                                </Text>
-                            </View>
-                        ))}
-                    </View>
-                </View>
+                    <Group title="Attendance">
+                        <Row icon="users" title="Today's attendance" subtitle="Who is in, on leave or absent" onPress={go('TodayAttendance')} />
+                        <Row icon="edit-3" title="Manual attendance" subtitle="Fix times, submit drafts, add missing days" onPress={go('ManualCheckInOut')} />
+                        <Row icon="log-in" title="Check in / out" subtitle="Your attendance and kiosk mode" onPress={go('AdminCheckInOut')} />
+                        <Row icon="bar-chart-2" title="Attendance reports" subtitle="Monthly summary, salary and exports" onPress={go('AllAttendanceAnalyticsScreen')} />
+                    </Group>
 
-                {/* Leave Balance Card - Only show if admin is also an employee */}
-                {employee?.name && Object.keys(leaveBalance.balances).length > 0 && (
-                    <View style={{
-                        backgroundColor: '#FFF',
-                        borderRadius: 12,
-                        padding: 16,
-                        marginBottom: 14,
-                        elevation: 2,
-                        shadowColor: '#000',
-                        shadowOpacity: 0.08,
-                        shadowRadius: 3,
-                        shadowOffset: { width: 0, height: 1 }
-                    }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <View style={{ backgroundColor: '#8B5CF6', borderRadius: 8, padding: 8, marginRight: 10 }}>
-                                    <Icon name="umbrella-beach" size={16} color="#FFF" />
-                                </View>
-                                <Text style={{ fontSize: 16, fontWeight: '700', color: '#000' }}>My Leave Balance</Text>
-                            </View>
-                            <View style={{ backgroundColor: '#F0F9FF', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
-                                <Text style={{ fontSize: 12, fontWeight: '600', color: '#8B5CF6' }}>
-                                    {leaveBalance.total_balance} left
-                                </Text>
-                            </View>
-                        </View>
-                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
-                            {Object.keys(leaveBalance.balances).map((leaveType, index) => {
-                                const leave = leaveBalance.balances[leaveType];
-                                const colors = ['#10B981', '#3B82F6', '#F59E0B', '#EC4899', '#8B5CF6'];
-                                const color = colors[index % colors.length];
-                                return (
-                                    <View key={leaveType} style={{ 
-                                        width: '48%', 
-                                        backgroundColor: '#F8FAFC',
-                                        borderRadius: 8,
-                                        padding: 10,
-                                        marginBottom: 8
-                                    }}>
-                                        <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 4 }} numberOfLines={1}>
-                                            {leaveType}
-                                        </Text>
-                                        <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
-                                            <Text style={{ fontSize: 18, fontWeight: '700', color: color }}>
-                                                {leave.balance}
-                                            </Text>
-                                            <Text style={{ fontSize: 11, color: '#9CA3AF', marginLeft: 4 }}>
-                                                / {leave.allocated}
-                                            </Text>
-                                        </View>
-                                    </View>
-                                );
-                            })}
-                        </View>
-                    </View>
-                )}
+                    <Group title="Work arrangements">
+                        <Row icon="home" title="WFH settings" onPress={go('WFHSettings')} />
+                        <Row icon="inbox" title="WFH requests" right={<Count value={pending.wfh} />} onPress={go('WFHApprovals')} />
+                        <Row icon="map-pin" title="On-site settings" onPress={go('OnSiteSettings')} />
+                        <Row icon="inbox" title="On-site requests" right={<Count value={pending.onsite} />} onPress={go('OnSiteApprovals')} />
+                    </Group>
 
+                    <Group title="Leave">
+                        <Row icon="calendar" title="Leave requests" right={<Count value={pending.leave} />} onPress={go('LeaveApprovals')} />
+                        <Row icon="repeat" title="Comp-off requests" right={<Count value={pending.compLeave} />} onPress={go('CompApprovals')} />
+                    </Group>
 
-                {/* Sections */}
-                <Section title="Attendance Control" icon="clipboard-check" tint={custom.palette.primary}>
-                    <ListItem title="Admin Check In/Out" subtitle="Kiosk/Supervisor mode" leftIcon="user-clock"
-                        tint={custom.palette.primary} onPress={() => navigation.navigate('AdminCheckInOut')} />
-                    <ListItem title="Manual Check In/Out" subtitle="Attendance regularization" leftIcon="edit"
-                        tint={custom.palette.primary} onPress={() => navigation.navigate('ManualCheckInOut')} />
-                    <ListItem title="Today's Attendance" subtitle="Live attendance view" leftIcon="calendar-day"
-                        tint={custom.palette.primary} onPress={() => navigation.navigate('TodayAttendance')} />
-                    <ListItem title="All Attendance Analytics List" subtitle="View all employee records" leftIcon="list-alt"
-                        tint={custom.palette.primary} onPress={() => navigation.navigate('AllAttendanceAnalyticsScreen')} />
-                </Section>
+                    <Group title="Expenses and travel">
+                        <Row icon="file-text" title="Expense claims" right={<Count value={pending.expense} />} onPress={go('ExpenseClaimApproval')} />
+                        <Row icon="navigation" title="Travel requests" right={<Count value={pending.travel} />} onPress={go('TravelRequestApproval')} />
+                    </Group>
 
-                <Section title="WFH Policy & Settings" icon="home" tint={custom.palette.success}>
-                    <ListItem title="Manage WFH Settings" subtitle="Configure rules & eligibility" leftIcon="cog"
-                        tint={custom.palette.success} onPress={() => navigation.navigate('WFHSettings')} />
-                    <ListItem title="WFH Approvals" subtitle="Approve/reject requests" leftIcon="check-circle" badge={pendingData.wfhApprovals || null}
-                        tint={custom.palette.success} onPress={() => navigation.navigate('WFHApprovals')} />
-                </Section>
+                    <Group title="People">
+                        <Row icon="users" title="Employees" value={stats.totalEmployees || undefined} onPress={go('EmployeeManagement')} />
+                        <Row icon="user-plus" title="Onboarding" right={<Count value={pendingOnboarding} />} onPress={go('EmployeeOnboardingList')} />
+                    </Group>
 
-                <Section title="On Site Policy & Settings" icon="map-marker-alt" tint="#2196F3">
-                    <ListItem title="Manage On Site Settings" subtitle="Configure rules & eligibility" leftIcon="cog"
-                        tint="#2196F3" onPress={() => navigation.navigate('OnSiteSettings')} />
-                    <ListItem title="On Site Approvals" subtitle="Approve/reject requests" leftIcon="check-circle" badge={pendingData.onsiteApprovals || null}
-                        tint="#2196F3" onPress={() => navigation.navigate('OnSiteApprovals')} />
-                </Section>
+                    <Group title="Payroll">
+                        <Row icon="layers" title="Salary structures" onPress={go('SalaryStructureAdmin')} />
+                        <Row icon="credit-card" title="Salary tracker" onPress={go('AdminSalaryTracker')} />
+                    </Group>
 
-                <Section title="Leave Management" icon="umbrella-beach" tint="#8B5CF6">
-                    <ListItem title="Leave Approvals" subtitle="Approve/reject leave requests" leftIcon="clipboard-list" badge={pendingData.leaveApprovals || null}
-                        tint="#8B5CF6" onPress={() => navigation.navigate('LeaveApprovals')} />
-                    <ListItem title="Compensatory Leave Approvals" subtitle="Approve comp leave for holidays" leftIcon="calendar-plus" badge={pendingData.compLeaveApprovals || null}
-                        tint="#8B5CF6" onPress={() => navigation.navigate('CompApprovals')} />
-                </Section>
+                    <Group title="Projects">
+                        <Row icon="folder" title="Projects" onPress={go('ProjectsOverview')} />
+                        <Row icon="check-square" title="Daily tasks" onPress={go('AdminDailyTasksScreen')} />
+                    </Group>
 
-                {/* Admin is also an employee. The 15-item self-service list (Apply Leave,
-                    WFH/OnSite, expense, travel, profile, payroll, work) was getting long and
-                    duplicated the "Apply on Behalf" tabs in the management screens, so it now
-                    lives on a dedicated AdminSelfServiceScreen — surfaced here as one hero
-                    card. */}
-                <Section title="My Self-Service" icon="user-circle" tint="#06B6D4">
-                    <ListItem
-                        title="Open My Self-Service"
-                        subtitle="Leaves, attendance, payroll, profile, work — everything for yourself"
-                        leftIcon="user-circle"
-                        tint="#06B6D4"
-                        onPress={() => navigation.navigate('AdminSelfService')}
-                    />
-                </Section>
+                    <Group title="Communication">
+                        <Row icon="send" title="Send a notification" onPress={go('CreateNotification')} />
+                    </Group>
 
-                <Section title="Expense & Travel Management" icon="money-bill-wave" tint="#10B981">
-                    <ListItem title="Expense Claim Approvals" subtitle="Review & approve expense claims" leftIcon="receipt" badge={pendingData.expenseApprovals || null}
-                        tint="#10B981" onPress={() => navigation.navigate('ExpenseClaimApproval')} />
-                    <ListItem title="Travel Request Approvals" subtitle="Approve/reject travel requests" leftIcon="plane" badge={pendingData.travelApprovals || null}
-                        tint="#10B981" onPress={() => navigation.navigate('TravelRequestApproval')} />
-                </Section>
-
-                <Section title="Employee Management" icon="users-cog" tint="#EC4899">
-                    <ListItem title="Employee Management" subtitle="Manage employee records" leftIcon="users"
-                        tint="#EC4899" onPress={() => navigation.navigate('EmployeeManagement')} />
-                    <ListItem
-                        title="Employee Onboarding"
-                        subtitle="Invite new hires & approve onboarding submissions"
-                        leftIcon="user-plus"
-                        badge={pendingOnboarding || null}
-                        tint="#EC4899"
-                        onPress={() => navigation.navigate('EmployeeOnboardingList')}
-                    />
-                </Section>
-
-                <Section title="Payroll & Salary" icon="money-check-alt" tint="#8E44AD">
-                    <ListItem title="Salary Structures" subtitle="View all employee salary structures" leftIcon="file-invoice-dollar"
-                        tint="#8E44AD" onPress={() => navigation.navigate('SalaryStructureAdmin')} />
-                    <ListItem title="Salary Tracker" subtitle="Track pending salaries & payments" leftIcon="search-dollar"
-                        tint="#8E44AD" onPress={() => navigation.navigate('AdminSalaryTracker')} />
-                </Section>
-
-                <Section title="Projects Oversight" icon="project-diagram" tint="#14B8A6">
-                    <ListItem title="View Projects" subtitle="Portfolio & status" leftIcon="folder-open"
-                        tint="#14B8A6" onPress={() => navigation.navigate('ProjectsOverview')} />
-                    <ListItem title="Daily Tasks" subtitle="View & assign employee tasks" leftIcon="clipboard-list"
-                        tint="#14B8A6" onPress={() => navigation.navigate('AdminDailyTasksScreen')} />
-                </Section>
-
-                <Section title="Notifications & Announcements" icon="bullhorn" tint="#F43F5E">
-                    <ListItem title="Create Notification" subtitle="Target by dept/location" leftIcon="plus-circle"
-                        tint="#F43F5E" onPress={() => navigation.navigate('CreateNotification')} />
-                </Section>
-
-                <Button onPress={handleLogout} style={{ marginTop: 8 }}>Logout</Button>
-                </ScrollView>
+                    <Group title="My account" footer={employee?.name ? `${user?.full_name || ''}  ·  ${employee.name}` : undefined}>
+                        <Row icon="user" title="My self-service" subtitle="Leave, attendance, payslips and profile" onPress={go('AdminSelfService')} />
+                        {leaveLeft !== null ? (
+                            <Row icon="sun" title="My leave balance" value={`${leaveLeft} ${leaveLeft === 1 ? 'day' : 'days'}`} onPress={go('MyLeaveApplication')} />
+                        ) : null}
+                        <Row icon="log-out" title="Log out" destructive chevron={false} onPress={logout} />
+                    </Group>
+                </Screen>
             )}
         </View>
     );
 };
+
+const styles = StyleSheet.create({
+    container: { flex: 1, backgroundColor: color.bg },
+    topBar: {
+        height: 60,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingLeft: space.lg,
+        paddingRight: space.sm,
+        backgroundColor: color.surface,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: color.border,
+    },
+    logo: { width: 116, height: 34, resizeMode: 'contain' },
+    bellDot: { position: 'absolute', top: 9, right: 10, width: 8, height: 8, borderRadius: 4, backgroundColor: '#F04438', borderWidth: 1.5, borderColor: color.surface },
+    greeting: { marginBottom: space.xl, paddingHorizontal: space.xs },
+    date: { ...type.secondary, marginTop: 2 },
+    statsBlock: { backgroundColor: color.surface },
+    flatStrip: { borderWidth: 0, borderRadius: 0 },
+    stripDivider: { height: StyleSheet.hairlineWidth, backgroundColor: color.divider, marginHorizontal: space.lg },
+});
 
 export default AdminDashboard;

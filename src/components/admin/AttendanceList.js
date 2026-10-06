@@ -1,44 +1,30 @@
+// src/components/admin/AttendanceList.js
+//
+// Day-by-day attendance rows (Attendance Reports screen): real records plus generated rows for
+// holidays, leave and absent days, as returned by hrms.api.get_employee_attendance_history.
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import Icon from 'react-native-vector-icons/FontAwesome5';
-import { colors } from '../../theme/colors';
-import StatusBadge from '../ui/StatusBadge';
+import { Group, Row, StatusText, Tag, color, space } from '../ds';
+import { formatTimeOfDay } from '../../utils/dateFormat';
 
-// Same status colours as Today's Attendance, so a status looks the same on every screen
+// Kept for screens that still colour attendance icons (same palette as the design tokens)
 export const STATUS_COLORS = {
-    present: '#10B981',
-    wfh: '#8B5CF6',
-    onsite: '#3B82F6',
-    absent: '#EF4444',
-    leave: '#F59E0B',
-    holiday: '#6366F1',
-    late: '#F59E0B',
-    muted: '#9CA3AF',
+    present: '#17B26A',
+    wfh: '#7A5AF8',
+    onsite: '#2E90FA',
+    absent: '#F04438',
+    leave: '#F79009',
+    holiday: '#4F46E5',
+    late: '#F79009',
+    muted: '#98A2B3',
 };
-
-const STATUS = {
-    'Present': { color: STATUS_COLORS.present, tone: 'success' },
-    'Half Day': { color: STATUS_COLORS.present, tone: 'success' },
-    'Work From Home': { color: STATUS_COLORS.wfh, tone: 'purple', label: 'WFH' },
-    'On Site': { color: STATUS_COLORS.onsite, tone: 'info' },
-    'Absent': { color: STATUS_COLORS.absent, tone: 'danger' },
-    'On Leave': { color: STATUS_COLORS.leave, tone: 'warning' },
-    'Holiday': { color: STATUS_COLORS.holiday, tone: 'indigo' },
-    'Not Marked': { color: STATUS_COLORS.muted, tone: 'neutral' },
-};
-const DEFAULT_STATUS = { color: STATUS_COLORS.muted, tone: 'neutral' };
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const LABELS = { 'Work From Home': 'WFH', 'Not Marked': 'Not marked' };
 
-// 'YYYY-MM-DD' read as a local date, so the day never shifts with the timezone
-const formatDay = (value) => {
+const parseDay = (value) => {
     const [y, m, d] = String(value || '').slice(0, 10).split('-').map(Number);
-    if (!y) {
-        return { date: '-', weekday: '' };
-    }
-    const date = new Date(y, m - 1, d);
-    return { date: `${String(d).padStart(2, '0')} ${MONTHS[m - 1]} ${y}`, weekday: WEEKDAYS[date.getDay()] };
+    return y ? new Date(y, m - 1, d) : null;
 };
 
 const formatHours = (hours) => {
@@ -48,113 +34,50 @@ const formatHours = (hours) => {
     }
     const whole = Math.floor(h);
     const minutes = Math.round((h - whole) * 60);
-    if (!whole) {
-        return `${minutes}m`;
-    }
-    return minutes ? `${whole}h ${minutes}m` : `${whole}h`;
+    return whole ? `${whole}h${minutes ? ` ${minutes}m` : ''}` : `${minutes}m`;
 };
 
-// One card per day (real attendance plus generated holiday / leave / absent days),
-// styled like the employee cards on Today's Attendance.
-const DayCard = ({ item }) => {
-    const status = STATUS[item.status] || DEFAULT_STATUS;
-    const day = formatDay(item.attendance_date);
-    const hours = formatHours(item.working_hours);
-    const hasTimes = Boolean(item.in_time || item.out_time);
-
+const DayBlock = ({ value, muted }) => {
+    const d = parseDay(value);
     return (
-        <View style={styles.attendanceItem}>
-            <View style={styles.itemHeader}>
-                <View style={styles.dateInfo}>
-                    <Text style={styles.dateText}>{day.date}</Text>
-                    <Text style={styles.weekdayText}>{day.weekday}</Text>
-                </View>
-                <StatusBadge label={status.label || item.status} tone={status.tone} />
-            </View>
-
-            {hasTimes ? (
-                <>
-                    <View style={styles.divider} />
-                    <View style={styles.timeContainer}>
-                        <View style={styles.timeInfo}>
-                            <Icon name="sign-in-alt" size={12} color={STATUS_COLORS.present} />
-                            <Text style={styles.timeText}>In: {item.in_time || '--:--'}</Text>
-                        </View>
-                        <View style={styles.timeInfo}>
-                            <Icon name="sign-out-alt" size={12} color={item.out_time ? STATUS_COLORS.absent : STATUS_COLORS.late} />
-                            <Text style={[styles.timeText, !item.out_time && styles.timePending]}>
-                                Out: {item.out_time || 'Not recorded'}
-                            </Text>
-                        </View>
-                        {hours ? (
-                            <View style={styles.timeInfo}>
-                                <Icon name="hourglass-half" size={11} color={colors.primary} />
-                                <Text style={styles.timeText}>{hours}</Text>
-                            </View>
-                        ) : null}
-                    </View>
-                </>
-            ) : null}
-
-            {item.late_arrival === 'Yes' || item.is_draft ? (
-                <View style={styles.tagRow}>
-                    {item.is_draft ? <StatusBadge small label="Draft" icon="pen" /> : null}
-                    {item.late_arrival === 'Yes' ? <StatusBadge small label="Late" icon="clock" /> : null}
-                </View>
-            ) : null}
-
-            {item.note ? (
-                <View style={styles.noteInfo}>
-                    <Icon name="info-circle" size={11} color={status.color} />
-                    <Text style={[styles.noteText, { color: status.color }]} numberOfLines={2}>{item.note}</Text>
-                </View>
-            ) : null}
+        <View style={styles.day}>
+            <Text style={[styles.dayNumber, muted && styles.muted]}>{d ? d.getDate() : '-'}</Text>
+            <Text style={styles.dayName}>{d ? WEEKDAYS[d.getDay()] : ''}</Text>
         </View>
     );
 };
 
-const AttendanceList = ({ attendance = [] }) => (
-    <View>
-        {attendance.map((item, index) => (
-            <DayCard key={item.name || `${item.attendance_date}-${index}`} item={item} />
-        ))}
-    </View>
+export const attendanceRow = (item, index = 0) => {
+    const inTime = formatTimeOfDay(item.in_time);
+    const outTime = formatTimeOfDay(item.out_time);
+    const hasTimes = Boolean(inTime || outTime);
+    const title = hasTimes ? `In ${inTime || '–'}  ·  Out ${outTime || '–'}` : (item.note || item.status);
+    const subtitle = hasTimes ? [formatHours(item.working_hours), item.note].filter(Boolean).join('  ·  ') : null;
+    const tags = [
+        item.late_arrival === 'Yes' && <Tag key="l" label="Late" tone="warning" />,
+        item.is_draft ? <Tag key="d" label="Not submitted" tone="warning" /> : null,
+    ].filter(Boolean);
+    return (
+        <Row
+            key={item.name || `${item.attendance_date}-${index}`}
+            left={<DayBlock value={item.attendance_date} muted={item.status === 'Holiday'} />}
+            title={title}
+            subtitle={subtitle || null}
+            meta={tags.length ? tags : null}
+            right={<StatusText label={LABELS[item.status] || item.status} tone={item.status === 'Work From Home' ? 'purple' : undefined} />}
+        />
+    );
+};
+
+const AttendanceList = ({ attendance = [], title }) => (
+    <Group title={title}>{attendance.map(attendanceRow)}</Group>
 );
 
 const styles = StyleSheet.create({
-    attendanceItem: {
-        backgroundColor: colors.surface,
-        marginBottom: 10,
-        padding: 12,
-        borderRadius: 10,
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.08,
-        shadowRadius: 4,
-        borderWidth: 1,
-        borderColor: colors.borderLight,
-    },
-    itemHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    dateInfo: { flex: 1 },
-    dateText: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
-    weekdayText: { fontSize: 11, color: colors.textSecondary, marginTop: 1 },
-    tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
-    divider: { height: 1, backgroundColor: colors.border, marginVertical: 8 },
-    timeContainer: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16, rowGap: 4 },
-    timeInfo: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    timeText: { fontSize: 12, color: '#374151', fontWeight: '500' },
-    timePending: { color: STATUS_COLORS.late },
-    noteInfo: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 5,
-        marginTop: 8,
-        paddingTop: 6,
-        borderTopWidth: 1,
-        borderTopColor: colors.border,
-    },
-    noteText: { flex: 1, fontSize: 12, fontWeight: '500' },
+    day: { width: 36, alignItems: 'center', marginRight: space.md },
+    dayNumber: { fontSize: 17, fontWeight: '600', color: color.text, fontVariant: ['tabular-nums'] },
+    dayName: { fontSize: 11, color: color.textTertiary, marginTop: 1 },
+    muted: { color: color.textTertiary },
 });
 
 export default AttendanceList;
