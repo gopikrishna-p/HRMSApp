@@ -485,6 +485,10 @@ class ApiService {
         });
     }
 
+    submitAttendance({ attendance_id }) {
+        return this.post(m('submit_attendance'), { attendance_id });
+    }
+
     bulkManualCheckout({ attendance_ids, default_checkout_time }) {
         return this.post(m('bulk_manual_checkout'), {
             attendance_ids,

@@ -1,18 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     View,
     Text,
     StyleSheet,
     ActivityIndicator,
     TouchableOpacity,
-    TextInput,
     StatusBar,
-    Modal,
     Alert,
+    Modal,
     ScrollView,
     Platform,
-    Switch,
-
     BackHandler,
     RefreshControl,
     PermissionsAndroid,
@@ -26,316 +23,239 @@ import ReactNativeBlobUtil from 'react-native-blob-util';
 import ApiService from '../../services/api.service';
 import { formatLocalDate } from '../../utils/dateFormat';
 import showToast from '../../utils/Toast';
-import AttendanceList from '../../components/admin/AttendanceList';
+import AttendanceList, { STATUS_COLORS } from '../../components/admin/AttendanceList';
+import { colors } from '../../theme/colors';
+
+// Attendance and salary are worked out on the server exactly like payroll
+// (hrms.api.attendance_report): only submitted attendance counts, Leave Without Pay
+// is absent, and today is never counted as absent. Salary is returned only when the
+// range is one full calendar month.
+
+const PRESETS = [
+    { label: 'This Month', type: 'month' },
+    { label: 'Last Month', type: 'lastMonth' },
+    { label: '7 Days', type: 'week' },
+    { label: 'Yesterday', type: 'yesterday' },
+    { label: 'Today', type: 'today' },
+];
+
+const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+const presetRange = (type) => {
+    const today = startOfDay(new Date());
+    const day = 24 * 60 * 60 * 1000;
+    switch (type) {
+        case 'today':
+            return { startDate: today, endDate: today };
+        case 'yesterday': {
+            const y = new Date(today.getTime() - day);
+            return { startDate: y, endDate: y };
+        }
+        case 'week':
+            return { startDate: new Date(today.getTime() - 6 * day), endDate: today };
+        case 'lastMonth':
+            return {
+                startDate: new Date(today.getFullYear(), today.getMonth() - 1, 1),
+                endDate: new Date(today.getFullYear(), today.getMonth(), 0),
+            };
+        case 'month':
+        default:
+            return {
+                startDate: new Date(today.getFullYear(), today.getMonth(), 1),
+                endDate: new Date(today.getFullYear(), today.getMonth() + 1, 0),
+            };
+    }
+};
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const formatDisplayDate = (date) =>
+    date ? `${String(date.getDate()).padStart(2, '0')} ${MONTHS[date.getMonth()]} ${date.getFullYear()}` : 'Select';
+
+// Indian grouping: 1,50,000
+const inr = (value) => {
+    const n = Math.round(Number(value) || 0);
+    const s = String(Math.abs(n));
+    const last3 = s.slice(-3);
+    const rest = s.slice(0, -3);
+    const grouped = rest ? `${rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${last3}` : last3;
+    return `${n < 0 ? '-' : ''}₹${grouped}`;
+};
+
+const num = (value) => {
+    const n = Number(value) || 0;
+    return Number.isInteger(n) ? String(n) : n.toFixed(1);
+};
 
 function AllAttendanceAnalyticsScreen({ navigation, route }) {
-    // ===========================================
-    // STATE MANAGEMENT
-    // ===========================================
     const [employees, setEmployees] = useState([]);
-    const [filteredEmployees, setFilteredEmployees] = useState([]);
     const [departments, setDepartments] = useState([]);
     const [selectedEmployee, setSelectedEmployee] = useState('');
-    const [selectedDepartment, setSelectedDepartment] = useState('');
-    const [attendance, setAttendance] = useState([]);
-    const [summaryStats, setSummaryStats] = useState({});
+    const [exportDepartment, setExportDepartment] = useState('');
+    const [dateRange, setDateRange] = useState(() => presetRange('month'));
+    const [activePreset, setActivePreset] = useState('month');
 
-    // Loading states
-    const [loading, setLoading] = useState(false);
+    const [attendance, setAttendance] = useState([]);
+    const [summaryStats, setSummaryStats] = useState(null);
+    const [salary, setSalary] = useState(null);
+    const [isFullMonth, setIsFullMonth] = useState(false);
+
+    const [loadingEmployees, setLoadingEmployees] = useState(false);
     const [loadingAttendance, setLoadingAttendance] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
-    const [exportLoading, setExportLoading] = useState(false);
-
-    // UI states
-    const [searchQuery, setSearchQuery] = useState('');
-    const [dateRange, setDateRange] = useState({ startDate: null, endDate: null });
+    const [exporting, setExporting] = useState(null); // e.g. 'employee-pdf'
     const [showStartPicker, setShowStartPicker] = useState(false);
     const [showEndPicker, setShowEndPicker] = useState(false);
-    const [showExportModal, setShowExportModal] = useState(false);
+    const [showExport, setShowExport] = useState(false);
 
-    // Export options
-    const [exportOptions, setExportOptions] = useState({
-        includeWorkingHours: true,
-        includeLateArrivals: true,
-        includeHolidays: false,
-        includeSummaryStats: true,
-        splitByDepartment: false
-    });
+    const requestId = useRef(0);
 
-    // ===========================================
-    // LIFECYCLE METHODS
-    // ===========================================
+    // ------------------------------------------------------------------ lifecycle
     useEffect(() => {
-        console.log('AllAttendanceAnalyticsScreen mounted');
-        initializeComponent();
+        loadEmployees();
+        loadDepartments();
     }, []);
 
-    // Pre-select an employee when AdminDashboard's "My Attendance" shortcut routes here
-    // with `{ preselectEmployee: <admin's own employee id> }`. We wait until the employee
-    // list is loaded so the picker's options render correctly.
+    // AdminDashboard's "My Attendance" shortcut opens this screen with { preselectEmployee }
     useEffect(() => {
         const target = route?.params?.preselectEmployee;
-        if (target && employees.length > 0 && selectedEmployee !== target) {
+        if (target && employees.some((e) => e.name === target)) {
             setSelectedEmployee(target);
         }
     }, [route?.params?.preselectEmployee, employees]);
 
-    useEffect(() => {
-        if (selectedEmployee) {
-            loadAttendance();
-        }
-    }, [selectedEmployee, dateRange]);
-
-    useEffect(() => {
-        filterEmployees();
-    }, [employees, searchQuery]);
-
-    // Handle Android back button
-    useFocusEffect(
-        React.useCallback(() => {
-            const onBackPress = () => {
-                console.log('Android back button pressed');
-                handleGoBack();
-                return true; // Prevent default behavior
-            };
-
-            const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
-            return () => subscription.remove();
-        }, [])
-    );
-
-    // ===========================================
-    // INITIALIZATION
-    // ===========================================
-    const handleGoBack = () => {
-        try {
-            console.log('AllAttendanceAnalyticsScreen - handleGoBack called');
-            
-            if (navigation && navigation.canGoBack()) {
-                navigation.goBack();
-            } else {
-                navigation.navigate('AdminDashboard');
-            }
-        } catch (error) {
-            console.error('Navigation error:', error);
-            // Simple fallback
+    const handleGoBack = useCallback(() => {
+        if (navigation?.canGoBack()) {
+            navigation.goBack();
+        } else {
             navigation.navigate('AdminDashboard');
         }
-    };
+    }, [navigation]);
 
-    const initializeComponent = async () => {
-        try {
-            await Promise.all([
-                loadEmployees(),
-                loadDepartments(),
-            ]);
-        } catch (error) {
-            console.error('Initialization error:', error);
-        }
-    };
+    useFocusEffect(
+        useCallback(() => {
+            const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+                handleGoBack();
+                return true;
+            });
+            return () => subscription.remove();
+        }, [handleGoBack])
+    );
 
-    // formatLocalDate now lives in src/utils/dateFormat.js (imported above).
-
-    // ===========================================
-    // DATA LOADING FUNCTIONS
-    // ===========================================
+    // ------------------------------------------------------------------ data
     const loadEmployees = async () => {
-        setLoading(true);
+        setLoadingEmployees(true);
         try {
             const response = await ApiService.getAllEmployees();
-
             if (response.success && response.data?.message) {
-                const rawData = response.data.message;
-                const data = Array.isArray(rawData) ? rawData : (rawData.employees || []);
-                const activeEmployees = data.filter(emp => emp.status === 'Active');
-                // Sort by the trailing numeric segment of the Employee ID
-                // (e.g. HR-EMP-00001) — gives ascending order 00001 → 00037
-                // regardless of department or name. Falls back to a plain
-                // localeCompare on `name` if no number is present.
-                const empIdNum = (s) => {
+                const raw = response.data.message;
+                const list = (Array.isArray(raw) ? raw : raw.employees || []).filter((e) => e.status === 'Active');
+                // ascending by the number at the end of the Employee ID (HR-EMP-00001, ...)
+                const idNum = (s) => {
                     const m = String(s || '').match(/(\d+)\s*$/);
                     return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
                 };
-                activeEmployees.sort((a, b) => {
-                    const na = empIdNum(a.name);
-                    const nb = empIdNum(b.name);
-                    if (na !== nb) return na - nb;
-                    return String(a.name || '').localeCompare(String(b.name || ''));
-                });
-
-                setEmployees(activeEmployees);
-                setFilteredEmployees(activeEmployees);
-                setSelectedEmployee('');
-
-                if (activeEmployees.length === 0) {
-                    showToast({
-                        type: 'warning',
-                        text1: 'No Active Employees',
-                        text2: 'No active employees found in the system',
-                    });
+                list.sort((a, b) => idNum(a.name) - idNum(b.name) || String(a.name).localeCompare(String(b.name)));
+                setEmployees(list);
+                if (list.length === 0) {
+                    showToast({ type: 'warning', text1: 'No Active Employees', text2: 'No active employees found' });
                 }
             }
         } catch (error) {
-            console.error('Error loading employees:', error);
-            showToast({
-                type: 'error',
-                text1: 'Error',
-                text2: 'Failed to load employees',
-            });
+            showToast({ type: 'error', text1: 'Error', text2: 'Failed to load employees' });
         } finally {
-            setLoading(false);
+            setLoadingEmployees(false);
         }
     };
 
     const loadDepartments = async () => {
         try {
             const response = await ApiService.getDepartments();
-            if (response.success && response.data?.message) {
-                setDepartments(response.data.message);
+            if (response.success && Array.isArray(response.data?.message)) {
+                setDepartments(response.data.message.filter((d) => !d.is_group));
             }
         } catch (error) {
-            console.error('Error loading departments:', error);
+            // the department filter is optional; exports still work without it
         }
     };
 
-    const loadAttendance = async () => {
-        if (!selectedEmployee || selectedEmployee === '') {
+    const loadAttendance = useCallback(async () => {
+        const id = ++requestId.current; // ignore answers to older requests
+        if (!selectedEmployee || !dateRange.startDate || !dateRange.endDate) {
             setAttendance([]);
-            setSummaryStats({});
+            setSummaryStats(null);
+            setSalary(null);
             return;
         }
-
         setLoadingAttendance(true);
         try {
-            const params = {
+            const response = await ApiService.getEmployeeAttendanceHistory({
                 employee_id: selectedEmployee,
                 start_date: formatLocalDate(dateRange.startDate),
-                end_date: formatLocalDate(dateRange.endDate)
-            };
-
-            const response = await ApiService.getEmployeeAttendanceHistory(params);
-
-            if (response.success && response.data?.message) {
-                const responseData = response.data.message;
-                setAttendance(responseData.attendance_records || responseData || []);
-                setSummaryStats(responseData.summary_stats || {});
+                end_date: formatLocalDate(dateRange.endDate),
+            });
+            if (id !== requestId.current) {return;}
+            const data = response.data?.message;
+            if (response.success && data?.status === 'success') {
+                setAttendance(data.attendance_records || []);
+                setSummaryStats(data.summary_stats || null);
+                setSalary(data.salary || null);
+                setIsFullMonth(Boolean(data.is_full_month));
+            } else {
+                throw new Error(data?.message || response.message || 'Failed to load attendance');
             }
         } catch (error) {
-            console.error('Error loading attendance:', error);
-            showToast({
-                type: 'error',
-                text1: 'Error',
-                text2: 'Failed to load attendance records',
-            });
+            if (id !== requestId.current) {return;}
             setAttendance([]);
-            setSummaryStats({});
+            setSummaryStats(null);
+            setSalary(null);
+            showToast({ type: 'error', text1: 'Error', text2: error.message || 'Failed to load attendance records' });
         } finally {
-            setLoadingAttendance(false);
+            if (id === requestId.current) {
+                setLoadingAttendance(false);
+            }
         }
-    };
+    }, [selectedEmployee, dateRange]);
+
+    useEffect(() => {
+        loadAttendance();
+    }, [loadAttendance]);
 
     const onRefresh = async () => {
         setRefreshing(true);
-        await loadEmployees();
-        if (selectedEmployee) {
-            await loadAttendance();
-        }
+        await Promise.all([loadEmployees(), loadAttendance()]);
         setRefreshing(false);
     };
 
-    // SEARCH AND FILTER FUNCTIONS
-    // ===========================================
-    const filterEmployees = () => {
-        if (searchQuery.trim()) {
-            const filtered = employees.filter(emp => {
-                if (emp.status !== 'Active') return false;
-                const employeeName = (emp.employee_name || '').toLowerCase();
-                const name = (emp.name || '').toLowerCase();
-                const designation = (emp.designation || '').toLowerCase();
-                const department = (emp.department || '').toLowerCase();
-                const searchTerm = searchQuery.toLowerCase();
-                return employeeName.includes(searchTerm) || name.includes(searchTerm) ||
-                    designation.includes(searchTerm) || department.includes(searchTerm);
-            });
-            setFilteredEmployees(filtered);
-        } else {
-            setFilteredEmployees(employees.filter(emp => emp.status === 'Active'));
-        }
+    // ------------------------------------------------------------------ dates
+    const applyPreset = (type) => {
+        setActivePreset(type);
+        setDateRange(presetRange(type));
     };
 
-    // ===========================================
-    // DATE RANGE FUNCTIONS
-    // ===========================================
-    const applyDatePreset = (preset) => {
-        const today = new Date();
-        let startDate, endDate;
-
-        switch (preset.type) {
-            case 'today':
-                startDate = endDate = today;
-                break;
-            case 'yesterday':
-                const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
-                startDate = endDate = yesterday;
-                break;
-            case 'week':
-                startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-                endDate = today;
-                break;
-            case 'month':
-                startDate = new Date(today.getFullYear(), today.getMonth(), 1);
-                endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-                break;
-            case 'lastMonth':
-                startDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-                endDate = new Date(today.getFullYear(), today.getMonth(), 0);
-                break;
-            default:
-                return;
-        }
-        setDateRange({ startDate, endDate });
-    };
-
-    const clearDateRange = () => {
-        setDateRange({ startDate: null, endDate: null });
-    };
-
-    const onStartDateChange = (event, selectedDate) => {
+    const onStartDateChange = (event, date) => {
         setShowStartPicker(false);
-        if (selectedDate) {
-            setDateRange(prev => ({ ...prev, startDate: selectedDate }));
-        }
+        if (event?.type === 'dismissed' || !date) {return;}
+        const startDate = startOfDay(date);
+        setActivePreset(null);
+        setDateRange((prev) => ({
+            startDate,
+            endDate: prev.endDate && prev.endDate < startDate ? startDate : prev.endDate,
+        }));
     };
 
-    const onEndDateChange = (event, selectedDate) => {
+    const onEndDateChange = (event, date) => {
         setShowEndPicker(false);
-        if (selectedDate) {
-            setDateRange(prev => ({ ...prev, endDate: selectedDate }));
-        }
+        if (event?.type === 'dismissed' || !date) {return;}
+        setActivePreset(null);
+        setDateRange((prev) => ({ ...prev, endDate: startOfDay(date) }));
     };
 
-    // ===========================================
-    // FILE DOWNLOAD FUNCTIONS
-    // ===========================================
-    //
-    // Save the exported PDF/Excel to the device's public Downloads folder so
-    // the user can open it directly from their file-manager / Files app.
-    //
-    // On a modern Android target (this app targets SDK 35), scoped storage is
-    // fully enforced and `requestLegacyExternalStorage` is ignored, so a raw
-    // RNFS.writeFile() to /storage/emulated/0/Download fails with EACCES. The
-    // only supported way to put a file into the public Downloads folder is via
-    // MediaStore, which we reach through react-native-blob-util's
-    // MediaCollection.copyToMediaStore (Android API 29+).
-    //
-    // - Android 10+ (API 29+): write a temp file to app cache, then copy it
-    //   into MediaStore's Download collection. No runtime permission needed.
-    // - Android 9 and below (API < 29): MediaStore copy isn't available; we
-    //   request WRITE_EXTERNAL_STORAGE and write straight to Downloads.
-    // - iOS: no public Downloads folder — save in app docs.
-    //
-    // If anything fails we fall back to the app's private external dir so the
-    // user still gets the file — and the alert tells them where it ended up.
+    const rangeIncludesToday = () => {
+        const today = startOfDay(new Date());
+        return dateRange.startDate <= today && dateRange.endDate >= today;
+    };
+
+    // ------------------------------------------------------------------ exports
     const downloadFile = async (base64Data, fileName, mimeType) => {
         const base64Content = base64Data.replace(/^data:.*?;base64,/, '');
 
@@ -457,595 +377,363 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
         }
     };
 
-    // ===========================================
-    // EXPORT FUNCTIONS
-    // ===========================================
-    const handleQuickExport = async (format) => {
-        if (!selectedEmployee) {
-            showToast({
-                type: 'warning',
-                text1: 'Select Employee',
-                text2: 'Please select an employee first',
-            });
-            return;
-        }
-
+    const runExport = async (scope, format) => {
         if (!dateRange.startDate || !dateRange.endDate) {
-            showToast({
-                type: 'warning',
-                text1: 'Select Date Range',
-                text2: 'Please select a date range first',
-            });
+            showToast({ type: 'warning', text1: 'Select Dates', text2: 'Please select a date range first' });
             return;
         }
-
-        setExportLoading(true);
+        if (scope === 'employee' && !selectedEmployee) {
+            showToast({ type: 'warning', text1: 'Select Employee', text2: 'Please select an employee first' });
+            return;
+        }
+        setExporting(`${scope}-${format}`);
         try {
             const params = {
-                employee_id: selectedEmployee,
                 start_date: formatLocalDate(dateRange.startDate),
                 end_date: formatLocalDate(dateRange.endDate),
-                export_format: format
+                export_format: format,
             };
-
-            const response = await ApiService.exportAttendanceReport(params);
-
-            if (response.success && response.data?.message) {
-                const result = response.data.message;
-
-                if (result.status === 'success' && result.content) {
-                    await downloadFile(result.content, result.file_name, result.content_type);
-                } else {
-                    throw new Error('Invalid export response');
-                }
-            } else {
-                throw new Error('Export failed');
+            if (scope === 'employee') {
+                params.employee_id = selectedEmployee;
+            } else if (exportDepartment) {
+                params.department = exportDepartment;
             }
+            const response = await ApiService.exportAttendanceReport(params);
+            const result = response.data?.message;
+            if (!response.success || result?.status !== 'success' || !result.content) {
+                throw new Error(result?.message || response.message || 'Export failed');
+            }
+            setShowExport(false);
+            await downloadFile(result.content, result.file_name, result.content_type);
         } catch (error) {
-            console.error('Export error:', error);
-            showToast({
-                type: 'error',
-                text1: 'Export Failed',
-                text2: error.message || 'Failed to export attendance report',
-            });
+            showToast({ type: 'error', text1: 'Export Failed', text2: error.message || 'Could not create the file' });
         } finally {
-            setExportLoading(false);
+            setExporting(null);
         }
     };
 
-    const handleExportWithOptions = async (format) => {
-        setShowExportModal(false);
-        await handleQuickExport(format);
-    };
-
-    const handleExportAll = async (format) => {
-        if (!dateRange.startDate || !dateRange.endDate) {
-            showToast({
-                type: 'warning',
-                text1: 'Select Date Range',
-                text2: 'Please select a date range first',
-            });
-            return;
-        }
-
-        Alert.alert(
-            'Export All Employees',
-            'This will export attendance for all employees. Continue?',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                    text: 'Export',
-                    onPress: async () => {
-                        setExportLoading(true);
-                        try {
-                            const params = {
-                                start_date: formatLocalDate(dateRange.startDate),
-                                end_date: formatLocalDate(dateRange.endDate),
-                                export_format: format,
-                                department: selectedDepartment || null
-                            };
-
-                            const response = await ApiService.exportAttendanceReport(params);
-
-                            if (response.success && response.data?.message) {
-                                const result = response.data.message;
-
-                                if (result.status === 'success' && result.content) {
-                                    await downloadFile(result.content, result.file_name, result.content_type);
-                                } else {
-                                    throw new Error(result.message || 'Export returned no data');
-                                }
-                            } else {
-                                throw new Error('Export request failed');
-                            }
-                        } catch (error) {
-                            console.error('Export error:', error);
-                            showToast({
-                                type: 'error',
-                                text1: 'Export Failed',
-                                text2: error.message || 'Failed to export all employees report',
-                            });
-                        } finally {
-                            setExportLoading(false);
-                            setShowExportModal(false);
-                        }
-                    }
-                }
-            ]
-        );
-    };
-
-    // ===========================================
-    // RENDER HELPERS
-    // ===========================================
-    const formatDate = (date) => {
-        if (!date) return 'Not selected';
-        return date.toLocaleDateString('en-US', {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric'
-        });
-    };
-
-    const calculateDateRangeDays = () => {
-        if (!dateRange.startDate || !dateRange.endDate) return 0;
-        const diffTime = Math.abs(dateRange.endDate - dateRange.startDate);
-        return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-    };
-
-    const renderDatePresets = () => {
-        const presets = [
-            { label: 'Today', type: 'today', icon: 'calendar-day' },
-            { label: 'Yesterday', type: 'yesterday', icon: 'calendar-minus' },
-            { label: 'Last 7 Days', type: 'week', icon: 'calendar-week' },
-            { label: 'This Month', type: 'month', icon: 'calendar' },
-            { label: 'Last Month', type: 'lastMonth', icon: 'calendar-alt' },
-        ];
-
-        return (
-            <View style={styles.presetContainer}>
-                {presets.map((preset) => (
-                    <TouchableOpacity
-                        key={preset.type}
-                        style={styles.presetButton}
-                        onPress={() => applyDatePreset(preset)}
-                    >
-                        <Icon name={preset.icon} size={14} color="#6366F1" />
-                        <Text style={styles.presetText}>{preset.label}</Text>
-                    </TouchableOpacity>
-                ))}
+    // ------------------------------------------------------------------ render pieces
+    // Layout and styling follow the other admin screens (Today's Attendance in particular):
+    // white full-width filter bars, compact icon stat cards, an attendance-rate bar, then
+    // white shadowed cards on the light page background.
+    const renderFilters = () => (
+        <View style={styles.filterBar}>
+            <View style={styles.pickerContainer}>
+                {loadingEmployees && employees.length === 0 ? (
+                    <ActivityIndicator size="small" color={colors.primary} style={styles.pickerLoader} />
+                ) : (
+                    <Picker selectedValue={selectedEmployee} onValueChange={setSelectedEmployee} style={styles.picker}>
+                        <Picker.Item label="Select an employee" value="" />
+                        {employees.map((emp) => (
+                            <Picker.Item
+                                key={emp.name}
+                                label={`${emp.employee_name || emp.name} (${emp.name})`}
+                                value={emp.name}
+                            />
+                        ))}
+                    </Picker>
+                )}
             </View>
-        );
-    };
 
-    const renderSummaryCard = () => {
-        if (!summaryStats || Object.keys(summaryStats).length === 0) return null;
+            {/* period: one row of tabs, like the tabs on Today's Attendance */}
+            <View style={styles.tabRow}>
+                {PRESETS.map((p) => {
+                    const active = activePreset === p.type;
+                    return (
+                        <TouchableOpacity
+                            key={p.type}
+                            style={[styles.tab, { flexGrow: p.label.length + 4 }, active && styles.tabActive]}
+                            onPress={() => applyPreset(p.type)}
+                            activeOpacity={0.8}
+                        >
+                            <Text
+                                style={[styles.tabText, active && styles.tabTextActive]}
+                                numberOfLines={1}
+                                adjustsFontSizeToFit
+                                minimumFontScale={0.75}
+                            >
+                                {p.label}
+                            </Text>
+                        </TouchableOpacity>
+                    );
+                })}
+            </View>
 
-        const primaryStats = [
-            {
-                label: 'Working Days',
-                value: summaryStats.total_working_days || summaryStats.total_days || 0,
-                icon: 'calendar-check',
-                color: '#6366F1',
-                bgColor: '#EEF2FF'
-            },
-            {
-                label: 'Present',
-                value: summaryStats.present_days || 0,
-                icon: 'check-circle',
-                color: '#10B981',
-                bgColor: '#ECFDF5'
-            },
-            {
-                label: 'WFH',
-                value: summaryStats.wfh_days || 0,
-                icon: 'home',
-                color: '#F59E0B',
-                bgColor: '#FEF3C7'
-            },
-            {
-                label: 'Absent',
-                value: summaryStats.absent_days || 0,
-                icon: 'times-circle',
-                color: '#EF4444',
-                bgColor: '#FEE2E2'
-            },
+            <View style={styles.dateRow}>
+                <TouchableOpacity style={styles.dateButton} onPress={() => setShowStartPicker(true)} activeOpacity={0.8}>
+                    <Icon name="calendar-alt" size={13} color={colors.primary} />
+                    <Text style={styles.dateText}>{formatDisplayDate(dateRange.startDate)}</Text>
+                </TouchableOpacity>
+                <Icon name="arrow-right" size={12} color={colors.textMuted} />
+                <TouchableOpacity style={styles.dateButton} onPress={() => setShowEndPicker(true)} activeOpacity={0.8}>
+                    <Icon name="calendar-alt" size={13} color={colors.primary} />
+                    <Text style={styles.dateText}>{formatDisplayDate(dateRange.endDate)}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.exportButton} onPress={() => setShowExport(true)} activeOpacity={0.8}>
+                    <Icon name="file-download" size={13} color={colors.primary} />
+                    <Text style={styles.exportButtonText}>Export</Text>
+                </TouchableOpacity>
+            </View>
+        </View>
+    );
+
+    const renderStats = () => {
+        if (!summaryStats) {
+            return null;
+        }
+        const s = summaryStats;
+        const stats = [
+            { label: 'Present', value: s.present_days, icon: 'check-circle', color: STATUS_COLORS.present },
+            { label: 'WFH', value: s.wfh_days, icon: 'home', color: STATUS_COLORS.wfh },
+            { label: 'On Site', value: s.onsite_days, icon: 'building', color: STATUS_COLORS.onsite },
+            { label: 'Absent', value: s.absent_days, icon: 'times-circle', color: STATUS_COLORS.absent },
+            { label: 'Leave', value: s.leave_days ?? s.on_leave, icon: 'calendar-times', color: STATUS_COLORS.leave },
+            { label: 'Holidays', value: s.holiday_days ?? s.holidays, icon: 'calendar-day', color: STATUS_COLORS.holiday },
+            { label: 'Late', value: s.late_arrivals, icon: 'clock', color: STATUS_COLORS.late },
+            { label: 'Hours', value: s.total_working_hours, icon: 'hourglass-half', color: colors.primary },
         ];
-
-        const secondaryStats = [
-            {
-                label: 'On Leave',
-                value: summaryStats.on_leave || 0,
-                icon: 'calendar-times',
-                color: '#F59E0B'
-            },
-            {
-                label: 'Holiday',
-                value: summaryStats.holiday_days || summaryStats.holidays || 0,
-                icon: 'umbrella-beach',
-                color: '#8B5CF6'
-            },
-            {
-                label: 'Late Arrivals',
-                value: summaryStats.late_arrivals || 0,
-                icon: 'clock',
-                color: '#EF4444'
-            },
-        ];
-
-        const attendanceRate = summaryStats.attendance_percentage || 0;
-        const totalHours = summaryStats.total_working_hours || 0;
-        const avgHours = summaryStats.avg_working_hours || 0;
-
+        const pct = s.attendance_percentage;
+        const rateColor = pct == null ? colors.textMuted
+            : pct >= 80 ? STATUS_COLORS.present : pct >= 60 ? STATUS_COLORS.late : STATUS_COLORS.absent;
         return (
-            <View style={styles.summaryCard}>
-                <View style={styles.summaryHeader}>
-                    <View style={styles.summaryHeaderLeft}>
-                        <Icon name="chart-bar" size={18} color="#6366F1" />
-                        <Text style={styles.summaryTitle}>Attendance Summary</Text>
-                    </View>
-                    <View style={[
-                        styles.attendanceRateBadge,
-                        { backgroundColor: attendanceRate >= 90 ? '#ECFDF5' : attendanceRate >= 75 ? '#FEF3C7' : '#FEE2E2' }
-                    ]}>
-                        <Text style={[
-                            styles.attendanceRateText,
-                            { color: attendanceRate >= 90 ? '#10B981' : attendanceRate >= 75 ? '#F59E0B' : '#EF4444' }
-                        ]}>
-                            {attendanceRate.toFixed(1)}%
+            <>
+                <View style={styles.summaryContainer}>
+                    {stats.map((st) => (
+                        <View key={st.label} style={styles.statCard}>
+                            <Icon name={st.icon} size={16} color={st.color} />
+                            <View style={styles.statContent}>
+                                <Text style={[styles.statNumber, { color: st.color }]}>{num(st.value)}</Text>
+                                <Text style={styles.statLabel}>{st.label}</Text>
+                            </View>
+                        </View>
+                    ))}
+                </View>
+
+                <View style={styles.rateContainer}>
+                    <View style={styles.rateHeader}>
+                        <Text style={styles.rateLabel}>Attendance Rate</Text>
+                        <Text style={[styles.ratePercentage, { color: rateColor }]}>
+                            {pct == null ? '-' : `${num(pct)}%`}
                         </Text>
                     </View>
-                </View>
-
-                <View style={styles.primaryStatsGrid}>
-                    {primaryStats.map((stat, index) => (
-                        <View key={index} style={[styles.primaryStatItem, { backgroundColor: stat.bgColor }]}>
-                            <Icon name={stat.icon} size={18} color={stat.color} />
-                            <Text style={styles.primaryStatValue}>{stat.value}</Text>
-                            <Text style={styles.primaryStatLabel}>{stat.label}</Text>
-                        </View>
-                    ))}
-                </View>
-
-                <View style={styles.secondaryStatsRow}>
-                    {secondaryStats.map((stat, index) => (
-                        <View key={index} style={styles.secondaryStatItem}>
-                            <Icon name={stat.icon} size={12} color={stat.color} />
-                            <Text style={[styles.secondaryStatText, { color: stat.color }]}>
-                                {stat.label}: {stat.value}
-                            </Text>
-                        </View>
-                    ))}
-                </View>
-
-                <View style={styles.hoursContainer}>
-                    <View style={styles.hoursItem}>
-                        <Icon name="clock" size={14} color="#6366F1" />
-                        <Text style={styles.hoursLabel}>Total Hours</Text>
-                        <Text style={styles.hoursValue}>{totalHours}h</Text>
+                    <View style={styles.progressBarContainer}>
+                        <View style={[styles.progressBarFill, { width: `${Math.min(pct || 0, 100)}%`, backgroundColor: rateColor }]} />
                     </View>
-                    <View style={styles.hoursDivider} />
-                    <View style={styles.hoursItem}>
-                        <Icon name="chart-line" size={14} color="#10B981" />
-                        <Text style={styles.hoursLabel}>Avg/Day</Text>
-                        <Text style={styles.hoursValue}>{avgHours}h</Text>
-                    </View>
+                    <Text style={styles.rateSubtext}>
+                        {s.attended_days_so_far ?? 0} of {s.working_days_so_far ?? 0} working days attended
+                        {rangeIncludesToday() ? ' \u00B7 today not counted yet' : ''}
+                    </Text>
                 </View>
+            </>
+        );
+    };
+
+    const renderSalary = () => {
+        if (!summaryStats) {
+            return null;
+        }
+        if (!isFullMonth) {
+            return (
+                <View style={styles.infoCard}>
+                    <Icon name="info-circle" size={13} color={colors.info} />
+                    <Text style={styles.infoText}>Salary is shown for a full month. Choose This Month or Last Month.</Text>
+                </View>
+            );
+        }
+        if (!salary) {
+            return null;
+        }
+        const hasRows = (salary.earnings || []).length > 0;
+        const isSlip = salary.source === 'slip';
+        return (
+            <View style={[styles.card, styles.cardAccent]}>
+                <View style={styles.cardHeader}>
+                    <View style={styles.cardTitleRow}>
+                        <Icon name="wallet" size={14} color={colors.primary} />
+                        <Text style={styles.cardTitle}>Salary</Text>
+                    </View>
+                    {hasRows ? (
+                        <View style={[styles.statusBadge, isSlip ? styles.badgeSlip : styles.badgeEstimate]}>
+                            <Text style={styles.statusText}>{isSlip ? 'Payslip' : 'Estimate'}</Text>
+                        </View>
+                    ) : null}
+                </View>
+                {hasRows ? (
+                    <>
+                        <Text style={styles.groupTitle}>Earnings</Text>
+                        {salary.earnings.map((r) => (
+                            <View key={`e-${r.component}`} style={styles.moneyRow}>
+                                <Text style={styles.moneyLabel}>{r.component}</Text>
+                                <Text style={styles.moneyValue}>{inr(r.amount)}</Text>
+                            </View>
+                        ))}
+                        <View style={[styles.moneyRow, styles.moneyTotalRow]}>
+                            <Text style={styles.moneyTotalLabel}>Gross pay</Text>
+                            <Text style={styles.moneyTotalLabel}>{inr(salary.gross_pay)}</Text>
+                        </View>
+                        <Text style={styles.groupTitle}>Deductions</Text>
+                        {salary.deductions.length ? (
+                            salary.deductions.map((r) => (
+                                <View key={`d-${r.component}`} style={styles.moneyRow}>
+                                    <Text style={styles.moneyLabel}>{r.component}</Text>
+                                    <Text style={[styles.moneyValue, styles.moneyNegative]}>-{inr(r.amount)}</Text>
+                                </View>
+                            ))
+                        ) : (
+                            <Text style={styles.smallText}>No deductions</Text>
+                        )}
+                        <View style={styles.netRow}>
+                            <Text style={styles.netLabel}>Net Pay</Text>
+                            <Text style={styles.netValue}>{inr(salary.net_pay)}</Text>
+                        </View>
+                        <Text style={styles.smallText}>
+                            {salary.source_label}
+                            {!isSlip && !salary.month_complete ? '. Month in progress: absent and WFH days so far.' : ''}
+                        </Text>
+                    </>
+                ) : (
+                    <Text style={styles.smallText}>{salary.source_label}</Text>
+                )}
             </View>
         );
     };
 
-    const renderExportModal = () => {
+    const renderExportOption = (scope, format) => {
+        const busy = exporting === `${scope}-${format}`;
+        const isPdf = format === 'pdf';
+        const blocked = scope === 'employee' && !selectedEmployee;
         return (
-            <Modal
-                visible={showExportModal}
-                transparent={true}
-                animationType="slide"
-                onRequestClose={() => setShowExportModal(false)}
+            <TouchableOpacity
+                key={`${scope}-${format}`}
+                style={[styles.option, (blocked || (exporting && !busy)) && styles.disabled]}
+                onPress={() => runExport(scope, format)}
+                disabled={Boolean(exporting) || blocked}
+                activeOpacity={0.8}
             >
-                <View style={styles.modalBackdrop}>
-                    <View style={styles.modalContainer}>
-                        <View style={styles.modalHeaderFixed}>
-                            <Text style={styles.modalTitleFixed}>Export Options</Text>
-                            <TouchableOpacity
-                                style={styles.closeButtonFixed}
-                                onPress={() => setShowExportModal(false)}
-                            >
-                                <Text style={styles.closeButtonText}>×</Text>
-                            </TouchableOpacity>
-                        </View>
-
-                        <ScrollView style={styles.modalScrollView}>
-                            <View style={styles.sectionFixed}>
-                                <Text style={styles.sectionHeaderFixed}>Export Range</Text>
-                                <View style={styles.dateRangeDisplay}>
-                                    <Text style={styles.dateRangeText}>
-                                        {formatDate(dateRange.startDate)} - {formatDate(dateRange.endDate)}
-                                    </Text>
-                                    <Text style={styles.dateRangeDays}>
-                                        {calculateDateRangeDays()} days
-                                    </Text>
-                                </View>
-                            </View>
-
-                            <View style={styles.sectionFixed}>
-                                <Text style={styles.sectionHeaderFixed}>Include</Text>
-                                <View style={styles.optionItem}>
-                                    <Text style={styles.optionLabel}>Working Hours</Text>
-                                    <Switch
-                                        value={exportOptions.includeWorkingHours}
-                                        onValueChange={(value) =>
-                                            setExportOptions(prev => ({ ...prev, includeWorkingHours: value }))
-                                        }
-                                    />
-                                </View>
-                                <View style={styles.optionItem}>
-                                    <Text style={styles.optionLabel}>Late Arrivals</Text>
-                                    <Switch
-                                        value={exportOptions.includeLateArrivals}
-                                        onValueChange={(value) =>
-                                            setExportOptions(prev => ({ ...prev, includeLateArrivals: value }))
-                                        }
-                                    />
-                                </View>
-                            </View>
-
-                            <View style={styles.sectionFixed}>
-                                <Text style={styles.sectionHeaderFixed}>Export Individual</Text>
-
-                                <TouchableOpacity
-                                    style={[styles.exportButtonFixed, styles.pdfButton]}
-                                    onPress={() => handleExportWithOptions('pdf')}
-                                    disabled={!selectedEmployee}
-                                >
-                                    <View style={styles.buttonContent}>
-                                        <Icon name="file-pdf" size={24} color="#DC2626" />
-                                        <View style={styles.buttonTextContainer}>
-                                            <Text style={styles.buttonTitle}>Export as PDF</Text>
-                                            <Text style={styles.buttonSubtitle}>
-                                                {selectedEmployee ? 'Ready to export' : 'Select an employee first'}
-                                            </Text>
-                                        </View>
-                                    </View>
-                                </TouchableOpacity>
-
-                                <TouchableOpacity
-                                    style={[styles.exportButtonFixed, styles.excelButton]}
-                                    onPress={() => handleExportWithOptions('excel')}
-                                    disabled={!selectedEmployee}
-                                >
-                                    <View style={styles.buttonContent}>
-                                        <Icon name="file-excel" size={24} color="#16A34A" />
-                                        <View style={styles.buttonTextContainer}>
-                                            <Text style={styles.buttonTitle}>Export as Excel</Text>
-                                            <Text style={styles.buttonSubtitle}>
-                                                {selectedEmployee ? 'Ready to export' : 'Select an employee first'}
-                                            </Text>
-                                        </View>
-                                    </View>
-                                </TouchableOpacity>
-                            </View>
-
-                            <View style={styles.sectionFixed}>
-                                <Text style={styles.sectionHeaderFixed}>Export All Employees</Text>
-
-                                <TouchableOpacity
-                                    style={[styles.exportButtonFixed, styles.allPdfButton]}
-                                    onPress={() => handleExportAll('pdf')}
-                                >
-                                    <View style={styles.buttonContent}>
-                                        <Icon name="file-pdf" size={24} color="#D97706" />
-                                        <View style={styles.buttonTextContainer}>
-                                            <Text style={styles.buttonTitle}>Export All as PDF</Text>
-                                            <Text style={styles.buttonSubtitle}>
-                                                Comprehensive report for all employees
-                                            </Text>
-                                        </View>
-                                    </View>
-                                </TouchableOpacity>
-
-                                <TouchableOpacity
-                                    style={[styles.exportButtonFixed, styles.allExcelButton]}
-                                    onPress={() => handleExportAll('excel')}
-                                >
-                                    <View style={styles.buttonContent}>
-                                        <Icon name="file-excel" size={24} color="#DC2626" />
-                                        <View style={styles.buttonTextContainer}>
-                                            <Text style={styles.buttonTitle}>Export All as Excel</Text>
-                                            <Text style={styles.buttonSubtitle}>
-                                                Comprehensive report for all employees
-                                            </Text>
-                                        </View>
-                                    </View>
-                                </TouchableOpacity>
-                            </View>
-
-                            <View style={styles.warningsSection}>
-                                <Text style={styles.warningTitle}>⚠️ Note</Text>
-                                <Text style={styles.warningText}>
-                                    Files will be saved to app storage. Large exports may take some time to generate.
-                                </Text>
-                            </View>
-                        </ScrollView>
-                    </View>
+                <Icon name={isPdf ? 'file-pdf' : 'file-excel'} size={18} color={isPdf ? STATUS_COLORS.absent : STATUS_COLORS.present} />
+                <View style={styles.optionTextBox}>
+                    <Text style={styles.optionText}>{isPdf ? 'PDF report' : 'Excel sheet'}</Text>
+                    <Text style={styles.optionSub}>
+                        {scope === 'employee'
+                            ? `Summary${isFullMonth ? ', salary' : ''} and daily records`
+                            : `One row per employee${isFullMonth ? ' with salary' : ''}`}
+                    </Text>
                 </View>
-            </Modal>
+                {busy ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                    <Icon name="download" size={13} color={colors.textMuted} />
+                )}
+            </TouchableOpacity>
         );
     };
 
-    // ===========================================
-    // MAIN RENDER
-    // ===========================================
-    return (
-        <View style={styles.container}>
-            <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-
-            <ScrollView
-                contentContainerStyle={styles.flatListContent}
-                showsVerticalScrollIndicator={false}
-                refreshControl={
-                    <RefreshControl
-                        refreshing={refreshing}
-                        onRefresh={onRefresh}
-                    />
-                }
+    const renderExportModal = () => (
+        <Modal
+            visible={showExport}
+            transparent
+            animationType="fade"
+            onRequestClose={() => !exporting && setShowExport(false)}
+        >
+            <TouchableOpacity
+                style={styles.modalOverlay}
+                activeOpacity={1}
+                onPress={() => !exporting && setShowExport(false)}
             >
-                {/* Employee Selection */}
-                <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Select Employee</Text>
-                    {loading ? (
-                        <ActivityIndicator size="small" color="#6366F1" />
-                    ) : (
-                        <View style={styles.pickerContainer}>
-                            <Picker
-                                selectedValue={selectedEmployee}
-                                onValueChange={setSelectedEmployee}
-                                style={styles.picker}
-                            >
-                                <Picker.Item label="-- Select Employee --" value="" />
-                                {filteredEmployees.map((emp) => (
-                                    <Picker.Item
-                                        key={emp.name}
-                                        label={`${emp.name} — ${emp.employee_name || emp.name}`}
-                                        value={emp.name}
-                                    />
+                <TouchableOpacity activeOpacity={1} style={styles.modalContent}>
+                    <Text style={styles.modalTitle}>Export Reports</Text>
+                    <Text style={styles.modalSubtitle}>
+                        {formatDisplayDate(dateRange.startDate)} - {formatDisplayDate(dateRange.endDate)}
+                    </Text>
+
+                    <Text style={styles.modalSection}>
+                        {selectedEmployee ? employees.find((e) => e.name === selectedEmployee)?.employee_name || selectedEmployee : 'This employee'}
+                    </Text>
+                    {selectedEmployee ? null : <Text style={styles.optionHint}>Select an employee first</Text>}
+                    {renderExportOption('employee', 'pdf')}
+                    {renderExportOption('employee', 'excel')}
+
+                    <Text style={styles.modalSection}>All employees</Text>
+                    {departments.length > 0 ? (
+                        <View style={[styles.pickerContainer, styles.modalPicker]}>
+                            <Picker selectedValue={exportDepartment} onValueChange={setExportDepartment} style={styles.picker}>
+                                <Picker.Item label="All departments" value="" />
+                                {departments.map((d) => (
+                                    <Picker.Item key={d.name} label={d.department_name || d.name} value={d.name} />
                                 ))}
                             </Picker>
                         </View>
-                    )}
-                </View>
+                    ) : null}
+                    {renderExportOption('all', 'pdf')}
+                    {renderExportOption('all', 'excel')}
 
-                {/* Date Range Section */}
-                <View style={styles.section}>
-                    <View style={styles.sectionHeader}>
-                        <Text style={styles.sectionTitle}>Date Range</Text>
-                        {(dateRange.startDate || dateRange.endDate) && (
-                            <TouchableOpacity onPress={clearDateRange}>
-                                <Text style={styles.clearButton}>Clear</Text>
-                            </TouchableOpacity>
-                        )}
-                    </View>
+                    <Text style={styles.modalNote}>Files are saved to your phone's Downloads folder.</Text>
+                    <TouchableOpacity
+                        style={[styles.closeButton, exporting && styles.disabled]}
+                        onPress={() => setShowExport(false)}
+                        disabled={Boolean(exporting)}
+                    >
+                        <Text style={styles.closeButtonText}>Close</Text>
+                    </TouchableOpacity>
+                </TouchableOpacity>
+            </TouchableOpacity>
+        </Modal>
+    );
 
-                    {renderDatePresets()}
+    // ------------------------------------------------------------------ main
+    const employeeName = employees.find((e) => e.name === selectedEmployee)?.employee_name;
 
-                    <View style={styles.dateRow}>
-                        <TouchableOpacity
-                            style={styles.dateButton}
-                            onPress={() => setShowStartPicker(true)}
-                        >
-                            <Icon name="calendar" size={14} color="#6366F1" />
-                            <Text style={styles.dateButtonText}>
-                                {formatDate(dateRange.startDate)}
-                            </Text>
-                        </TouchableOpacity>
+    return (
+        <View style={styles.container}>
+            <StatusBar barStyle="dark-content" backgroundColor={colors.surface} />
+            <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.scrollBottom}
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />}
+            >
+                {renderFilters()}
 
-                        <Icon name="arrow-right" size={14} color="#9CA3AF" />
-
-                        <TouchableOpacity
-                            style={styles.dateButton}
-                            onPress={() => setShowEndPicker(true)}
-                        >
-                            <Icon name="calendar" size={14} color="#6366F1" />
-                            <Text style={styles.dateButtonText}>
-                                {formatDate(dateRange.endDate)}
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-
-                {/* Summary Stats */}
-                {selectedEmployee && renderSummaryCard()}
-
-                {/* Export Section */}
-                {selectedEmployee && (dateRange.startDate && dateRange.endDate) && (
-                    <View style={styles.section}>
-                        <Text style={styles.sectionTitle}>Export Reports</Text>
-                        <View style={styles.actionButtons}>
-                            <TouchableOpacity
-                                style={[styles.actionButton, { backgroundColor: '#DC2626' }]}
-                                onPress={() => handleQuickExport('pdf')}
-                                disabled={exportLoading}
-                            >
-                                <Icon name="file-pdf" size={16} color="white" />
-                                <Text style={styles.actionButtonText}>Quick PDF</Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                                style={[styles.actionButton, { backgroundColor: '#16A34A' }]}
-                                onPress={() => handleQuickExport('excel')}
-                                disabled={exportLoading}
-                            >
-                                <Icon name="file-excel" size={16} color="white" />
-                                <Text style={styles.actionButtonText}>Quick Excel</Text>
-                            </TouchableOpacity>
+                {!selectedEmployee ? (
+                    <View style={styles.scrollContent}>
+                        <View style={styles.emptyContainer}>
+                            <Icon name="user-friends" size={48} color={colors.textMuted} />
+                            <Text style={styles.emptyTitle}>Select an Employee</Text>
+                            <Text style={styles.emptyText}>Attendance, salary and daily records will appear here.</Text>
                         </View>
-
-                        <TouchableOpacity
-                            style={[styles.actionButton, { backgroundColor: '#6366F1', marginTop: 12 }]}
-                            onPress={() => setShowExportModal(true)}
-                            disabled={exportLoading}
-                        >
-                            <Icon name="cog" size={16} color="white" />
-                            <Text style={styles.actionButtonText}>Advanced Export</Text>
-                        </TouchableOpacity>
-
-                        {exportLoading && (
-                            <View style={styles.exportingContainer}>
-                                <ActivityIndicator size="small" color="#6366F1" />
-                                <Text style={styles.exportingText}>Generating export...</Text>
-                            </View>
-                        )}
-
-                        <Text style={styles.exportNote}>
-                            Files will be saved to app storage
-                        </Text>
                     </View>
-                )}
-
-                {/* Attendance List Header */}
-                {selectedEmployee && (
-                    <View style={styles.section}>
-                        <Text style={styles.sectionTitle}>
-                            Attendance Records
-                            {attendance.length > 0 && ` (${attendance.length})`}
-                        </Text>
-                    </View>
-                )}
-
-                {/* Attendance Records or Empty State */}
-                {loadingAttendance ? (
+                ) : loadingAttendance && !summaryStats ? (
                     <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color="#6366F1" />
-                        <Text style={styles.loadingText}>Loading attendance...</Text>
-                    </View>
-                ) : !selectedEmployee ? (
-                    <View style={styles.emptyState}>
-                        <Icon name="user-friends" size={48} color="#9CA3AF" />
-                        <Text style={styles.emptyStateTitle}>Select an Employee</Text>
-                        <Text style={styles.emptyStateText}>
-                            Choose an employee from the dropdown above to view their attendance records
-                        </Text>
-                    </View>
-                ) : selectedEmployee && attendance.length === 0 ? (
-                    <View style={styles.emptyState}>
-                        <Icon name="calendar-times" size={48} color="#9CA3AF" />
-                        <Text style={styles.emptyStateTitle}>No Records Found</Text>
-                        <Text style={styles.emptyStateText}>
-                            No attendance records found for selected period
-                        </Text>
+                        <ActivityIndicator color={colors.primary} size="large" />
+                        <Text style={styles.loadingText}>Loading attendance data...</Text>
                     </View>
                 ) : (
-                    attendance.map((item, index) => (
-                        <AttendanceList 
-                            key={item.name || item.employee || index.toString()} 
-                            attendance={[item]}
-                            renderMode="plain"
-                        />
-                    ))
+                    <>
+                        {renderStats()}
+                        <View style={styles.scrollContent}>
+                            {renderSalary()}
+
+                            <View style={styles.sectionHeader}>
+                                <Text style={styles.sectionTitle}>Daily Records</Text>
+                                <Text style={styles.sectionCount} numberOfLines={1}>
+                                    {employeeName ? `${employeeName} · ` : ''}{attendance.length} days
+                                </Text>
+                            </View>
+                            {loadingAttendance ? <ActivityIndicator size="small" color={colors.primary} style={styles.inlineLoader} /> : null}
+                            {attendance.length === 0 ? (
+                                <View style={styles.emptyContainer}>
+                                    <Icon name="inbox" size={48} color={colors.textMuted} />
+                                    <Text style={styles.emptyTitle}>No Records</Text>
+                                    <Text style={styles.emptyText}>Nothing to show for this period.</Text>
+                                </View>
+                            ) : (
+                                <AttendanceList attendance={attendance} />
+                            )}
+                        </View>
+                    </>
                 )}
             </ScrollView>
 
-            {/* Date Pickers */}
+            {renderExportModal()}
             {showStartPicker && (
                 <DateTimePicker
                     value={dateRange.startDate || new Date()}
@@ -1055,7 +743,6 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                     maximumDate={new Date()}
                 />
             )}
-
             {showEndPicker && (
                 <DateTimePicker
                     value={dateRange.endDate || new Date()}
@@ -1063,500 +750,241 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                     display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                     onChange={onEndDateChange}
                     minimumDate={dateRange.startDate || undefined}
-                    maximumDate={new Date()}
+                    maximumDate={presetRange('month').endDate}
                 />
             )}
-
-            {/* Export Modal */}
-            {renderExportModal()}
         </View>
     );
 }
 
-// ===========================================
-// STYLES
-// ===========================================
+const SHADOW = {
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+};
+
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#F3F4F6',
-    },
-    errorContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 40,
-    },
-    errorTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: '#EF4444',
-        marginTop: 16,
-        marginBottom: 8,
-    },
-    errorText: {
-        fontSize: 14,
-        color: '#6B7280',
-        textAlign: 'center',
-    },
-    flatListContent: {
-        paddingBottom: 20,
-    },
-    headerSection: {
-        backgroundColor: '#FFFFFF',
-        paddingVertical: 16,
-        paddingHorizontal: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 3,
-    },
-    headerTop: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    backButton: {
-        padding: 8,
-        marginRight: 12,
-    },
-    headerTitleContainer: {
-        flex: 1,
-    },
-    headerTitle: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: '#111827',
-    },
-    headerSubtitle: {
-        fontSize: 12,
-        color: '#6B7280',
-        marginTop: 2,
-    },
-    section: {
-        padding: 16,
-        backgroundColor: '#FFFFFF',
-        marginVertical: 8,
-        borderRadius: 12,
-        marginHorizontal: 16,
-        elevation: 1,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
-    },
-    sectionHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    sectionTitle: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#374151',
-        marginBottom: 12,
-    },
-    clearButton: {
-        fontSize: 14,
-        color: '#6366F1',
-        fontWeight: '500',
-    },
-    searchContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#F9FAFB',
-        borderRadius: 12,
+    container: { flex: 1, backgroundColor: colors.background },
+    scrollBottom: { paddingBottom: 20 },
+    scrollContent: { padding: 12 },
+
+    // filter bar (white, full width)
+    filterBar: {
+        backgroundColor: colors.surface,
         paddingHorizontal: 12,
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-    },
-    searchIcon: {
-        marginRight: 8,
-    },
-    searchInput: {
-        flex: 1,
-        paddingVertical: 12,
-        fontSize: 14,
-        color: '#111827',
+        paddingTop: 10,
+        paddingBottom: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.border,
+        gap: 8,
     },
     pickerContainer: {
         borderWidth: 1,
-        borderColor: '#E5E7EB',
-        borderRadius: 12,
+        borderColor: colors.border,
+        borderRadius: 8,
         backgroundColor: '#F9FAFB',
         overflow: 'hidden',
+        justifyContent: 'center',
     },
-    picker: {
-        height: 50,
-    },
-    presetContainer: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
-        marginBottom: 16,
-    },
-    presetButton: {
-        flexDirection: 'row',
+    picker: { height: 50, color: colors.textPrimary },
+    pickerLoader: { paddingVertical: 15 },
+    tabRow: { flexDirection: 'row', gap: 6 },
+    tab: {
+        flexBasis: 0,
         alignItems: 'center',
-        paddingHorizontal: 12,
+        justifyContent: 'center',
         paddingVertical: 8,
-        backgroundColor: '#EEF2FF',
+        paddingHorizontal: 4,
+        backgroundColor: colors.background,
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: '#C7D2FE',
-        gap: 6,
+        borderColor: colors.border,
     },
-    presetText: {
-        fontSize: 12,
-        color: '#6366F1',
-        fontWeight: '500',
+    tabActive: {
+        backgroundColor: colors.primary,
+        borderColor: colors.primary,
+        elevation: 1,
+        shadowColor: colors.primary,
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.3,
+        shadowRadius: 2,
     },
-    dateRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 12,
-    },
+    tabText: { fontSize: 11, fontWeight: '700', color: colors.textPrimary },
+    tabTextActive: { color: colors.white },
+    dateRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     dateButton: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 12,
-        paddingHorizontal: 12,
-        backgroundColor: '#F9FAFB',
+        gap: 6,
+        paddingVertical: 8,
+        backgroundColor: colors.background,
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: '#E5E7EB',
-        gap: 8,
+        borderColor: colors.border,
     },
-    dateButtonText: {
-        fontSize: 12,
-        color: '#374151',
-        fontWeight: '500',
-    },
-    summaryCard: {
-        backgroundColor: '#FFFFFF',
-        borderRadius: 12,
-        padding: 16,
-        marginHorizontal: 16,
-        marginVertical: 8,
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-    },
-    summaryHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 16,
-    },
-    summaryHeaderLeft: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    summaryTitle: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#374151',
-    },
-    attendanceRateBadge: {
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 20,
-    },
-    attendanceRateText: {
-        fontSize: 14,
-        fontWeight: '700',
-    },
-    primaryStatsGrid: {
+    dateText: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
+
+    // stat cards (same as Today's Attendance)
+    summaryContainer: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 8,
-        marginBottom: 12,
+        justifyContent: 'space-between',
+        rowGap: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        backgroundColor: colors.surface,
     },
-    primaryStatItem: {
-        flex: 1,
-        minWidth: '22%',
+    statCard: {
+        width: '23.8%',
+        flexDirection: 'row',
         alignItems: 'center',
+        backgroundColor: colors.background,
+        padding: 8,
+        borderRadius: 8,
+        gap: 6,
+    },
+    statContent: { flex: 1 },
+    statNumber: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
+    statLabel: { fontSize: 9, color: colors.textSecondary, marginTop: 1, fontWeight: '500' },
+
+    // attendance rate bar (same as Today's Attendance)
+    rateContainer: {
+        backgroundColor: colors.surface,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.border,
+    },
+    rateHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+    rateLabel: { fontSize: 12, fontWeight: '600', color: colors.textPrimary },
+    ratePercentage: { fontSize: 16, fontWeight: '700', color: colors.primary },
+    progressBarContainer: { height: 6, backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden', marginBottom: 4 },
+    progressBarFill: { height: '100%', borderRadius: 3 },
+    rateSubtext: { fontSize: 10, color: colors.textSecondary, textAlign: 'center' },
+
+    // cards
+    card: {
+        backgroundColor: colors.surface,
+        borderRadius: 10,
+        padding: 12,
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: colors.borderLight,
+        ...SHADOW,
+    },
+    cardAccent: { borderLeftWidth: 3, borderLeftColor: colors.primary },
+    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+    cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    cardTitle: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+    statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
+    statusText: { fontSize: 10, color: colors.white, fontWeight: '600' },
+    badgeSlip: { backgroundColor: STATUS_COLORS.present },
+    badgeEstimate: { backgroundColor: STATUS_COLORS.late },
+    infoCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: '#F0F9FF',
         padding: 10,
         borderRadius: 8,
-        gap: 4,
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: '#BFDBFE',
     },
-    primaryStatValue: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: '#111827',
-    },
-    primaryStatLabel: {
-        fontSize: 10,
-        color: '#6B7280',
-        fontWeight: '500',
-    },
-    secondaryStatsRow: {
+    infoText: { flex: 1, fontSize: 11, fontWeight: '600', color: '#1E40AF' },
+
+    groupTitle: { fontSize: 11, fontWeight: '700', color: colors.textSecondary, marginTop: 6, marginBottom: 2 },
+    moneyRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 },
+    moneyLabel: { fontSize: 13, color: '#374151', flex: 1, paddingRight: 8 },
+    moneyValue: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
+    moneyNegative: { color: STATUS_COLORS.absent },
+    moneyTotalRow: { borderTopWidth: 1, borderTopColor: colors.border, marginTop: 2 },
+    moneyTotalLabel: { fontSize: 13, fontWeight: '700', color: colors.textPrimary },
+    netRow: {
         flexDirection: 'row',
-        justifyContent: 'space-around',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        backgroundColor: colors.primaryLight,
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        marginTop: 10,
+    },
+    netLabel: { fontSize: 13, fontWeight: '700', color: colors.primary },
+    netValue: { fontSize: 17, fontWeight: '800', color: colors.primary },
+    smallText: { fontSize: 11, color: colors.textSecondary, marginTop: 8 },
+
+    exportButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        paddingHorizontal: 10,
         paddingVertical: 8,
-        borderTopWidth: 1,
-        borderBottomWidth: 1,
-        borderColor: '#E5E7EB',
-        marginBottom: 12,
-    },
-    secondaryStatItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-    },
-    secondaryStatText: {
-        fontSize: 12,
-        fontWeight: '500',
-    },
-    hoursContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#F9FAFB',
+        backgroundColor: colors.background,
         borderRadius: 8,
-        padding: 12,
+        borderWidth: 1,
+        borderColor: colors.primary,
     },
-    hoursItem: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
-    },
-    hoursDivider: {
-        width: 1,
-        height: 20,
-        backgroundColor: '#D1D5DB',
-        marginHorizontal: 8,
-    },
-    hoursLabel: {
-        fontSize: 12,
-        color: '#6B7280',
-        fontWeight: '500',
-    },
-    hoursValue: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: '#111827',
-    },
-    actionButtons: {
-        flexDirection: 'row',
-        gap: 12,
-    },
-    actionButton: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 12,
-        borderRadius: 12,
-        elevation: 1,
-        gap: 8,
-    },
-    actionButtonText: {
-        color: 'white',
-        fontWeight: '600',
-        fontSize: 14,
-    },
-    exportNote: {
-        textAlign: 'center',
-        fontSize: 12,
-        color: '#9CA3AF',
-        marginTop: 8,
-        fontStyle: 'italic',
-    },
-    exportingContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginTop: 12,
-        padding: 8,
-        backgroundColor: '#EEF2FF',
-        borderRadius: 8,
-    },
-    exportingText: {
-        marginLeft: 8,
-        fontSize: 14,
-        color: '#6366F1',
-        fontWeight: '500',
-    },
-    loadingContainer: {
-        alignItems: 'center',
-        padding: 40,
-    },
-    loadingText: {
-        marginTop: 12,
-        fontSize: 14,
-        color: '#6B7280',
-    },
-    emptyState: {
-        alignItems: 'center',
-        padding: 40,
-        marginTop: 40,
-    },
-    emptyStateTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: '#374151',
-        marginTop: 16,
-        marginBottom: 8,
-    },
-    emptyStateText: {
-        fontSize: 14,
-        color: '#6B7280',
-        textAlign: 'center',
-        lineHeight: 20,
-    },
-    modalBackdrop: {
-        flex: 1,
-        backgroundColor: 'rgba(0, 0, 0, 0.6)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 20,
-    },
-    modalContainer: {
-        backgroundColor: 'white',
-        borderRadius: 16,
+    exportButtonText: { fontSize: 12, color: colors.primary, fontWeight: '600' },
+    disabled: { opacity: 0.5 },
+
+    // export pop-up (same look as the filter pop-ups on the approval screens)
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center', padding: 16 },
+    modalContent: {
+        backgroundColor: colors.surface,
+        borderRadius: 14,
+        padding: 16,
         width: '100%',
-        maxHeight: '90%',
-        elevation: 10,
+        maxWidth: 400,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 8,
+        elevation: 10,
     },
-    modalHeaderFixed: {
+    modalTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, textAlign: 'center' },
+    modalSubtitle: { fontSize: 12, color: colors.textSecondary, textAlign: 'center', marginTop: 2, marginBottom: 8 },
+    modalSection: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginTop: 8, marginBottom: 6 },
+    modalPicker: { marginBottom: 6 },
+    modalNote: { fontSize: 11, color: colors.textMuted, textAlign: 'center', marginTop: 6 },
+    option: {
         flexDirection: 'row',
-        justifyContent: 'space-between',
         alignItems: 'center',
-        padding: 20,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
-    },
-    modalTitleFixed: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: '#111827',
-    },
-    closeButtonFixed: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        backgroundColor: '#F3F4F6',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    closeButtonText: {
-        fontSize: 18,
-        color: '#6B7280',
-        fontWeight: '600',
-    },
-    modalScrollView: {
-        maxHeight: 500,
-    },
-    sectionFixed: {
-        padding: 20,
-        paddingTop: 10,
-    },
-    sectionHeaderFixed: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#374151',
-        marginBottom: 12,
-    },
-    dateRangeDisplay: {
-        padding: 12,
-        backgroundColor: '#F0F9FF',
+        paddingVertical: 10,
+        paddingHorizontal: 14,
         borderRadius: 8,
+        marginBottom: 6,
+        backgroundColor: colors.background,
+        gap: 12,
     },
-    dateRangeText: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: '#0369A1',
-    },
-    dateRangeDays: {
-        fontSize: 12,
-        color: '#0284C7',
-        marginTop: 4,
-    },
-    optionItem: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingVertical: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
-    },
-    optionLabel: {
-        fontSize: 14,
-        color: '#374151',
-        flex: 1,
-    },
-    exportButtonFixed: {
-        padding: 16,
-        borderRadius: 12,
-        marginBottom: 10,
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-    },
-    pdfButton: {
-        backgroundColor: '#FEF2F2',
-    },
-    excelButton: {
-        backgroundColor: '#F0FDF4',
-    },
-    allPdfButton: {
-        backgroundColor: '#FEF3C7',
-    },
-    allExcelButton: {
-        backgroundColor: '#FEF2F2',
-    },
-    buttonContent: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    buttonTextContainer: {
-        marginLeft: 12,
-        flex: 1,
-    },
-    buttonTitle: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#374151',
-        marginBottom: 4,
-    },
-    buttonSubtitle: {
-        fontSize: 13,
-        color: '#6B7280',
-    },
-    warningsSection: {
-        margin: 20,
-        padding: 16,
-        backgroundColor: '#FEF3C7',
+    optionTextBox: { flex: 1 },
+    optionText: { fontSize: 14, color: colors.textPrimary, fontWeight: '500' },
+    optionSub: { fontSize: 11, color: colors.textSecondary, marginTop: 1 },
+    optionHint: { fontSize: 11, color: STATUS_COLORS.late, marginBottom: 6 },
+    closeButton: {
+        marginTop: 12,
+        paddingVertical: 10,
         borderRadius: 8,
         borderWidth: 1,
-        borderColor: '#F59E0B',
-        marginTop: 0,
+        borderColor: colors.border,
+        alignItems: 'center',
     },
-    warningTitle: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: '#D97706',
-        marginBottom: 8,
-    },
-    warningText: {
-        fontSize: 12,
-        color: '#D97706',
-        lineHeight: 18,
-    },
+    closeButtonText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+
+    sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, marginBottom: 8 },
+    sectionTitle: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+    sectionCount: { fontSize: 11, color: colors.textSecondary, flexShrink: 1, marginLeft: 8, textAlign: 'right' },
+    inlineLoader: { marginBottom: 8 },
+
+    loadingContainer: { justifyContent: 'center', alignItems: 'center', paddingVertical: 30 },
+    loadingText: { marginTop: 10, fontSize: 14, color: colors.textSecondary },
+    emptyContainer: { justifyContent: 'center', alignItems: 'center', paddingVertical: 40 },
+    emptyTitle: { fontSize: 18, fontWeight: '600', color: colors.textSecondary, marginTop: 12 },
+    emptyText: { fontSize: 13, color: colors.textMuted, textAlign: 'center', marginTop: 6, paddingHorizontal: 32 },
 });
 
 export default AllAttendanceAnalyticsScreen;

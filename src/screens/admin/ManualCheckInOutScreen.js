@@ -265,7 +265,8 @@ const ManualCheckInOutScreen = ({ navigation }) => {
             const res = await ApiService.updateAttendanceTimes(updateData);
             setSnack({
                 visible: true,
-                msg: res.success ? 'Times updated' : res.message || 'Failed to update',
+                // the server submits a draft once it has both times, and says so
+                msg: res.success ? res.data?.message?.message || 'Times updated' : res.message || 'Failed to update',
             });
             if (res.success) {
                 setEditDialog({ open: false, row: null, mode: null, checkIn: null, checkOut: null, showPicker: null });
@@ -274,6 +275,30 @@ const ManualCheckInOutScreen = ({ navigation }) => {
         } catch (error) {
             setSnack({ visible: true, msg: 'Error: ' + error.message });
         }
+    };
+
+    const doSubmitRecord = (row) => {
+        const noCheckout = !(row.out_time || row.custom_out_time_copy);
+        Alert.alert(
+            'Submit Attendance',
+            noCheckout
+                ? `${row.employee_name || row.employee} has no check-out time. Submit ${row.name} anyway? It can't be edited normally after submitting.`
+                : `Submit ${row.name} for ${row.employee_name || row.employee}?`,
+            [
+                { text: 'No', style: 'cancel' },
+                {
+                    text: 'Submit',
+                    onPress: async () => {
+                        const res = await ApiService.submitAttendance({ attendance_id: row.name });
+                        setSnack({
+                            visible: true,
+                            msg: res.success ? res.data?.message?.message || 'Attendance submitted' : res.message || 'Failed to submit',
+                        });
+                        if (res.success) fetchList();
+                    },
+                },
+            ]
+        );
     };
 
     const doDeleteRecord = async (row) => {
@@ -515,6 +540,17 @@ const ManualCheckInOutScreen = ({ navigation }) => {
                             <Icon name="edit" size={10} color="white" />
                             <Text style={styles.buttonText}>Both</Text>
                         </TouchableOpacity>
+
+                        {/* Submit (drafts only) */}
+                        {item.docstatus === 0 && (
+                            <TouchableOpacity
+                                style={[styles.actionButton, { backgroundColor: '#F59E0B' }]}
+                                onPress={() => doSubmitRecord(item)}
+                            >
+                                <Icon name="check-circle" size={10} color="white" />
+                                <Text style={styles.buttonText}>Submit</Text>
+                            </TouchableOpacity>
+                        )}
                     </View>
                 )}
             </View>
