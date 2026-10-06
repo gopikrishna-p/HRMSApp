@@ -429,8 +429,14 @@ class ApiService {
         return this.get(m('get_today_attendance'), { date });
     }
 
-    getAttendanceRecordsForDate({ date }) {
-        return this.get(m('get_attendance_records_for_date'), { date });
+    getAttendanceRecordsForDate({ date, include_missing }) {
+        // include_missing: also return employees with no record that day ("Not Marked")
+        return this.get(m('get_attendance_records_for_date'), { date, include_missing: include_missing ? 1 : 0 });
+    }
+
+    adminMarkAttendance({ employee, date, check_in_time, check_out_time, work_type }) {
+        // Add attendance for an employee who has no record that day; times are 'HH:MM'
+        return this.post(m('admin_mark_attendance'), { employee, date, check_in_time, check_out_time, work_type });
     }
 
     getAttendanceRecords({ employee, start_date, end_date }) {

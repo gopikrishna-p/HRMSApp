@@ -58,3 +58,62 @@ export const clampToDateRange = (date, min, max) => {
 };
 
 export default formatLocalDate;
+
+/**
+ * Time of day for display, e.g. "09:48 AM", from a backend datetime string
+ * ("2026-10-06 09:48:53.442343"), an "HH:MM[:SS]" string or a Date. Reads the
+ * digits directly, so it never shifts with the phone's timezone and never
+ * depends on the JS engine parsing a space-separated date. Returns null if empty.
+ *
+ * @param {string|Date|null|undefined} value
+ * @returns {string|null}
+ */
+export const formatTimeOfDay = (value) => {
+    if (!value) {
+        return null;
+    }
+    let h;
+    let m;
+    if (value instanceof Date) {
+        if (Number.isNaN(value.getTime())) {
+            return null;
+        }
+        h = value.getHours();
+        m = value.getMinutes();
+    } else {
+        const match = String(value).match(/(\d{1,2}):(\d{2})(?::\d{2})?/);
+        if (!match) {
+            return null;
+        }
+        h = parseInt(match[1], 10);
+        m = parseInt(match[2], 10);
+    }
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${suffix}`;
+};
+
+/**
+ * "HH:MM" (24-hour) from a Date, for sending a time to the backend.
+ *
+ * @param {Date} date
+ * @returns {string}
+ */
+export const toHHMM = (date) =>
+    `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+
+/**
+ * A Date on `day` at the time found in `value` ("YYYY-MM-DD HH:MM:SS" or "HH:MM"),
+ * or at `fallback` ("HH:MM") when value has no time. Used to pre-fill time pickers.
+ *
+ * @param {Date} day
+ * @param {string|null|undefined} value
+ * @param {string} fallback
+ * @returns {Date}
+ */
+export const timeOnDay = (day, value, fallback = '09:00') => {
+    const match = String(value || fallback).match(/(\d{1,2}):(\d{2})/) || String(fallback).match(/(\d{1,2}):(\d{2})/);
+    const d = new Date(day.getFullYear(), day.getMonth(), day.getDate());
+    d.setHours(parseInt(match[1], 10), parseInt(match[2], 10), 0, 0);
+    return d;
+};

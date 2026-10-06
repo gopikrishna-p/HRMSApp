@@ -125,8 +125,8 @@ class AttendanceService {
         if (resp?.success) {
             return resp.data?.message ?? resp.data ?? {};
         }
-        // normalize error case to empty payload to avoid .length crash
-        return { present: [], absent: [], holiday: [], total_employees: 0, working_employees: 0, date: date || '' };
+        // normalize error case to empty payload to avoid .length crash; `error` lets the screen say so
+        return { present: [], absent: [], leave: [], holiday: [], total_employees: 0, working_employees: 0, date: date || '', error: resp?.message || 'Failed to load attendance' };
     }
 
     // Get comprehensive attendance history including holidays and leaves

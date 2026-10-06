@@ -1,630 +1,699 @@
 // src/screens/admin/AdminCheckInOutScreen.js
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { View, Alert, StyleSheet, ScrollView } from 'react-native';
-import { Text, Switch, Card, useTheme, ProgressBar, Searchbar, Chip, IconButton } from 'react-native-paper';
+//
+// The admin's own check-in / check-out, plus kiosk mode: check in or out any employee from this
+// device. Shows the person's attendance for today so only the right action is offered
+// (Check In -> Check Out -> done). Office mode needs the device inside the office geofence;
+// the server checks the geofence and WFH / On Site eligibility again.
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+    View,
+    Text,
+    StyleSheet,
+    ScrollView,
+    TouchableOpacity,
+    TextInput,
+    Switch,
+    Alert,
+    ActivityIndicator,
+    RefreshControl,
+} from 'react-native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
 import { useAuth } from '../../context/AuthContext';
 import AttendanceService from '../../services/attendance.service';
 import { ensureLocationPermission, getCurrentPosition } from '../../utils/location';
-import Button from '../../components/common/Button';
+import { colors } from '../../theme/colors';
+import { getAvatarColor, getInitials } from '../../theme/adminStyles';
+import { formatTimeOfDay } from '../../utils/dateFormat';
+import showToast from '../../utils/Toast';
+import { STATUS_COLORS } from '../../components/admin/AttendanceList';
 
-// Haversine (meters)
+// Haversine distance in metres
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
     const R = 6371e3;
-    const φ1 = (lat1 * Math.PI) / 180;
-    const φ2 = (lat2 * Math.PI) / 180;
-    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-    const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
+    const p1 = (lat1 * Math.PI) / 180;
+    const p2 = (lat2 * Math.PI) / 180;
+    const dp = ((lat2 - lat1) * Math.PI) / 180;
+    const dl = ((lon2 - lon1) * Math.PI) / 180;
+    const a = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+const WORK_MODES = [
+    { key: 'Office', label: 'Office', icon: 'building', color: colors.primary },
+    { key: 'WFH', label: 'WFH', icon: 'home', color: STATUS_COLORS.wfh },
+    { key: 'Onsite', label: 'On Site', icon: 'map-marker-alt', color: STATUS_COLORS.onsite },
+];
+
+const NO_STATUS = { hasCheckedIn: false, hasCheckedOut: false, checkInTime: null, checkOutTime: null, status: null, workType: null };
+
+const errorMessage = (res) => {
+    const msg = res?.data?.message;
+    if (msg && typeof msg === 'object' && msg.message) {
+        return msg.message;
+    }
+    return res?.message || 'Something went wrong';
 };
 
 const AdminCheckInOutScreen = () => {
     const { user, employee } = useAuth();
-    const { custom } = useTheme();
-
-    const [loading, setLoading] = useState(false);
-    const [workMode, setWorkMode] = useState('Office'); // 'Office' | 'WFH' | 'Onsite'
-    const [wfhEligible, setWfhEligible] = useState(false);
-    const [onsiteEligible, setOnsiteEligible] = useState(true);
-    const [officeLocation, setOfficeLocation] = useState(null);
-    const [currentLocation, setCurrentLocation] = useState(null);
-    const [locationStatus, setLocationStatus] = useState('checking'); // checking | inside | outside | error | wfh | onsite
-    const [distance, setDistance] = useState(null);
-    const [locationError, setLocationError] = useState(null);
+    const adminId = employee?.name;
+    const adminName = employee?.employee_name || user?.full_name || 'Admin';
 
     const [kioskMode, setKioskMode] = useState(false);
+    const [employeeList, setEmployeeList] = useState([]);
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedEmployee, setSelectedEmployee] = useState(null);
-    const [employeeList, setEmployeeList] = useState([]);
-    const [filteredEmployees, setFilteredEmployees] = useState([]);
 
-    const adminEmployeeId = employee?.name;
+    const [workMode, setWorkMode] = useState('Office');
+    const [adminWfhEligible, setAdminWfhEligible] = useState(false);
+    const [adminOnsiteEligible, setAdminOnsiteEligible] = useState(false);
 
-    const fetchWFHInfo = useCallback(async () => {
+    const [officeLocation, setOfficeLocation] = useState(null);
+    const [officeError, setOfficeError] = useState(null);
+    const [locationStatus, setLocationStatus] = useState('checking'); // checking | inside | outside | error
+    const [distance, setDistance] = useState(null);
+    const [currentLocation, setCurrentLocation] = useState(null);
+    const [locationError, setLocationError] = useState(null);
+
+    const [today, setToday] = useState(NO_STATUS);
+    const [statusLoading, setStatusLoading] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [refreshing, setRefreshing] = useState(false);
+
+    // the person being checked in / out
+    const targetId = kioskMode ? selectedEmployee?.name : adminId;
+    const targetName = kioskMode ? selectedEmployee?.employee_name : adminName;
+
+    // ------------------------------------------------------------------ data
+    const loadEligibility = useCallback(async () => {
         const res = await AttendanceService.getUserWFHInfo();
-        if (res.success && res.data?.message) {
-            setWfhEligible(!!res.data.message.wfh_eligible);
-            setOnsiteEligible(res.data.message.on_site_eligible !== false);
+        const info = res.success ? res.data?.message : null;
+        if (info) {
+            setAdminWfhEligible(Boolean(info.wfh_eligible));
+            setAdminOnsiteEligible(Boolean(info.on_site_eligible));
         }
     }, []);
 
-    const fetchOfficeLocation = useCallback(async () => {
-        if (!adminEmployeeId) return;
-        const res = await AttendanceService.getOfficeLocation(adminEmployeeId);
-        if (res.success && res.data?.message) {
-            setOfficeLocation(res.data.message);
-        }
-    }, [adminEmployeeId]);
-
-    const fetchEmployeeList = useCallback(async () => {
-        try {
-            const res = await AttendanceService.getEmployeeWFHList();
-            if (res.success && res.data?.message) {
-                setEmployeeList(res.data.message);
-                setFilteredEmployees(res.data.message);
-            }
-        } catch (e) {
-            console.error('Failed to fetch employee list:', e);
-        }
-    }, []);
-
-    const checkGeofenceStatus = useCallback(async () => {
-        if (workMode === 'WFH' || workMode === 'Onsite' || !officeLocation) {
-            setLocationStatus(workMode === 'WFH' ? 'wfh' : workMode === 'Onsite' ? 'onsite' : 'checking');
+    const loadOfficeLocation = useCallback(async (empId) => {
+        if (!empId) {
             return;
         }
-        try {
-            setLocationStatus('checking');
-            setLocationError(null);
+        setOfficeError(null);
+        const res = await AttendanceService.getOfficeLocation(empId);
+        if (res.success && res.data?.message?.latitude != null) {
+            setOfficeLocation(res.data.message);
+        } else {
+            setOfficeLocation(null);
+            setOfficeError(errorMessage(res).replace('Error getting office location: ', ''));
+        }
+    }, []);
 
+    const loadToday = useCallback(async (empId) => {
+        if (!empId) {
+            setToday(NO_STATUS);
+            return;
+        }
+        setStatusLoading(true);
+        try {
+            setToday(await AttendanceService.getTodayAttendanceStatus(empId));
+        } finally {
+            setStatusLoading(false);
+        }
+    }, []);
+
+    const checkGeofence = useCallback(async () => {
+        if (!officeLocation) {
+            return;
+        }
+        setLocationStatus('checking');
+        setLocationError(null);
+        try {
             await ensureLocationPermission();
             const pos = await getCurrentPosition();
-
-            const userLat = pos.coords.latitude;
-            const userLon = pos.coords.longitude;
-            setCurrentLocation({ latitude: userLat, longitude: userLon });
-
-            const dist = calculateDistance(userLat, userLon, officeLocation.latitude, officeLocation.longitude);
-            const rounded = Math.round(dist);
-            setDistance(rounded);
-
-            setLocationStatus(rounded <= officeLocation.radius ? 'inside' : 'outside');
+            const { latitude, longitude } = pos.coords;
+            setCurrentLocation({ latitude, longitude });
+            const d = Math.round(calculateDistance(latitude, longitude, officeLocation.latitude, officeLocation.longitude));
+            setDistance(d);
+            setLocationStatus(d <= officeLocation.radius ? 'inside' : 'outside');
         } catch (err) {
             setLocationError(err?.message || 'Location unavailable');
             setLocationStatus('error');
         }
-    }, [workMode, officeLocation]);
+    }, [officeLocation]);
 
-    // Initial data loads
     useEffect(() => {
-        if (adminEmployeeId) {
-            fetchWFHInfo();
-            fetchOfficeLocation();
+        if (adminId) {
+            loadEligibility();
         }
-    }, [adminEmployeeId, fetchWFHInfo, fetchOfficeLocation]);
+    }, [adminId, loadEligibility]);
 
-    // Run location check when officeLocation becomes available OR when work mode changes
+    // office location and today's status follow the person being checked in
     useEffect(() => {
-        if (workMode === 'WFH') {
-            setLocationStatus('wfh');
-            setDistance(null);
-            setLocationError(null);
-        } else if (workMode === 'Onsite') {
-            setLocationStatus('onsite');
-            setDistance(null);
-            setLocationError(null);
-        } else if (officeLocation) {
-            checkGeofenceStatus();
-        } else {
-            setLocationStatus('checking');
-        }
-    }, [officeLocation, workMode]);
+        loadOfficeLocation(targetId || adminId);
+        loadToday(targetId);
+    }, [targetId, adminId, loadOfficeLocation, loadToday]);
 
-    // Kiosk list load (once when enabled)
     useEffect(() => {
-        if (kioskMode) fetchEmployeeList();
-    }, [kioskMode, fetchEmployeeList]);
+        if (workMode === 'Office' && officeLocation) {
+            checkGeofence();
+        }
+    }, [workMode, officeLocation, checkGeofence]);
 
-    // Search filter
     useEffect(() => {
-        if (!searchQuery.trim()) setFilteredEmployees(employeeList);
-        else {
-            const q = searchQuery.toLowerCase();
-            setFilteredEmployees(
-                employeeList.filter(
-                    (e) => e.employee_name?.toLowerCase().includes(q) || e.name?.toLowerCase().includes(q)
-                )
-            );
+        if (kioskMode && employeeList.length === 0) {
+            AttendanceService.getEmployeeWFHList().then((res) => {
+                if (res.success && Array.isArray(res.data?.message)) {
+                    setEmployeeList(res.data.message);
+                } else {
+                    showToast({ type: 'error', text1: 'Could not load employees', text2: errorMessage(res) });
+                }
+            });
         }
-    }, [searchQuery, employeeList]);
+    }, [kioskMode, employeeList.length]);
 
-    const canDoWFH = useMemo(() => kioskMode || wfhEligible, [kioskMode, wfhEligible]);
-    const canDoOnsite = useMemo(() => kioskMode || onsiteEligible, [kioskMode, onsiteEligible]);
-
-    const parseBackendError = (errorResponse) => {
-        try {
-            if (errorResponse._server_messages) {
-                const arr = JSON.parse(errorResponse._server_messages);
-                const first = JSON.parse(arr?.[0] || '{}');
-                return first.message || 'Operation failed';
-            }
-            return errorResponse.message || 'Operation failed';
-        } catch {
-            return 'Operation failed';
-        }
+    const onRefresh = async () => {
+        setRefreshing(true);
+        await Promise.all([loadToday(targetId), workMode === 'Office' ? checkGeofence() : Promise.resolve()]);
+        setRefreshing(false);
     };
 
-    const doAction = async (action) => {
-        const targetEmployee = kioskMode && selectedEmployee ? selectedEmployee.name : adminEmployeeId;
-        const targetName = kioskMode && selectedEmployee ? selectedEmployee.employee_name : (user?.full_name || 'Admin');
+    // ------------------------------------------------------------------ derived
+    const filteredEmployees = useMemo(() => {
+        const q = searchQuery.trim().toLowerCase();
+        const list = q
+            ? employeeList.filter((e) => e.employee_name?.toLowerCase().includes(q) || e.name?.toLowerCase().includes(q))
+            : employeeList;
+        return list.slice(0, 8);
+    }, [employeeList, searchQuery]);
 
+    // eligibility: own flags for the admin; for kiosk the server decides per employee
+    const wfhAllowed = kioskMode ? Boolean(selectedEmployee?.custom_wfh_eligible) : adminWfhEligible;
+    const onsiteAllowed = kioskMode ? true : adminOnsiteEligible;
+    const modeAllowed = (key) => (key === 'WFH' ? wfhAllowed : key === 'Onsite' ? onsiteAllowed : true);
+
+    useEffect(() => {
+        if (!modeAllowed(workMode)) {
+            setWorkMode('Office');
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [wfhAllowed, onsiteAllowed]);
+
+    const nextAction = !today.hasCheckedIn ? 'Check-In' : !today.hasCheckedOut ? 'Check-Out' : null;
+    const blockedReason = (() => {
         if (kioskMode && !selectedEmployee) {
-            Alert.alert('Select Employee', 'Please select an employee to proceed.');
-            return;
+            return 'Select an employee first.';
         }
+        if (!nextAction) {
+            return null;
+        }
+        if (workMode === 'Office') {
+            if (officeError) {
+                return officeError;
+            }
+            if (locationStatus === 'checking') {
+                return 'Checking location...';
+            }
+            if (locationStatus === 'error') {
+                return 'Location unavailable. Tap refresh on the location card.';
+            }
+            if (locationStatus === 'outside') {
+                return `${distance} m from the office. Move within ${officeLocation?.radius} m or choose WFH / On Site.`;
+            }
+        }
+        return null;
+    })();
 
-        if (workMode === 'Office' && locationStatus === 'outside') {
-            Alert.alert(
-                'Outside Geofence',
-                `${kioskMode ? 'This device is' : 'You are'} ${distance}m away. Must be within ${officeLocation?.radius}m to ${action === 'Check-In' ? 'check in' : 'check out'}.`
-            );
-            return;
-        }
-        if (workMode === 'Office' && (locationStatus === 'error' || locationStatus === 'checking')) {
-            Alert.alert('Location Error', 'Cannot determine location. Tap the refresh icon to retry.', [
-                { text: 'OK' }
-            ]);
-            return;
-        }
-
-        if (kioskMode) {
-            const modeText = workMode === 'WFH' ? 'Mode: WFH' : workMode === 'Onsite' ? 'Mode: Onsite' : `Distance: ${distance}m`;
-            Alert.alert('Confirm', `${action} for:\n${targetName} (${targetEmployee})\n${modeText}`, [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Confirm', onPress: () => performCheck(action, targetEmployee, targetName) },
-            ]);
-        } else {
-            await performCheck(action, targetEmployee, targetName);
-        }
-    };
-
-    const performCheck = async (action, emp, displayName) => {
+    // ------------------------------------------------------------------ action
+    const performAction = async () => {
+        setBusy(true);
         try {
-            setLoading(true);
-
-            let latitude, longitude, work_type;
-
-            if (workMode === 'WFH') {
-                if (!canDoWFH) {
-                    Alert.alert('WFH Not Allowed', 'You are not eligible for WFH.');
-                    setLoading(false);
-                    return;
-                }
-                work_type = 'WFH';
-            } else if (workMode === 'Onsite') {
-                if (!canDoOnsite) {
-                    Alert.alert('Onsite Not Allowed', 'You are not eligible for Onsite work.');
-                    setLoading(false);
-                    return;
-                }
-                work_type = 'Onsite';
-                // Get current location for onsite work
-                await ensureLocationPermission();
-                const pos = await getCurrentPosition();
-                latitude = pos.coords.latitude;
-                longitude = pos.coords.longitude;
-            } else {
-                if (currentLocation) {
-                    latitude = currentLocation.latitude;
-                    longitude = currentLocation.longitude;
+            let latitude;
+            let longitude;
+            if (workMode !== 'WFH') {
+                if (workMode === 'Office' && currentLocation) {
+                    ({ latitude, longitude } = currentLocation);
                 } else {
                     await ensureLocationPermission();
                     const pos = await getCurrentPosition();
-                    latitude = pos.coords.latitude;
-                    longitude = pos.coords.longitude;
+                    ({ latitude, longitude } = pos.coords);
                 }
             }
-
             const res = await AttendanceService.geoAttendance({
-                employee: emp,
-                action,
+                employee: targetId,
+                action: nextAction,
                 latitude,
                 longitude,
-                work_type,
+                work_type: workMode,
             });
-
-            // Check actual response status (Frappe wraps errors in HTTP 200)
-            const responseData = res.data?.message;
-            const isActualSuccess = res.success && responseData && responseData.status !== 'error' && responseData.status !== 'Error';
-
-            if (isActualSuccess) {
-                const m = responseData;
-                const modeText = workMode === 'WFH' ? 'Mode: WFH' : workMode === 'Onsite' ? 'Mode: Onsite' : `Distance: ${distance ?? 0}m`;
-                Alert.alert(
-                    'Success',
-                    `${action} successful for ${displayName}!\nRef: ${m.geo_log || m.attendance || 'Done'}\n${modeText}`,
-                    [{ text: 'OK', onPress: () => { 
-                        if (kioskMode) { setSelectedEmployee(null); setSearchQuery(''); } 
-                        if (workMode === 'Office') checkGeofenceStatus();
-                    } }]
-                );
+            const result = res.data?.message;
+            if (res.success && result && String(result.status).toLowerCase() !== 'error') {
+                const time = formatTimeOfDay(result.timestamp || result.checkout_time || new Date());
+                showToast({
+                    type: 'success',
+                    text1: `${nextAction === 'Check-In' ? 'Checked in' : 'Checked out'}: ${targetName}`,
+                    text2: time ? `at ${time}` : undefined,
+                });
+                if (kioskMode) {
+                    setSelectedEmployee(null);
+                    setSearchQuery('');
+                }
+                loadToday(kioskMode ? null : targetId);
             } else {
-                const msg = parseBackendError(res.data || res);
-                Alert.alert('Failed', msg);
+                Alert.alert(`${nextAction} failed`, errorMessage(res));
             }
         } catch (e) {
             Alert.alert('Error', e?.message || 'Something went wrong.');
         } finally {
-            setLoading(false);
+            setBusy(false);
         }
     };
 
-    const statusColor = (() => {
-        switch (locationStatus) {
-            case 'inside': return custom.palette.success;
-            case 'outside': return custom.palette.danger;
-            case 'checking': return custom.palette.warning;
-            case 'wfh': return custom.palette.primary;
-            case 'onsite': return custom.palette.info || '#2196F3';
-            default: return custom.palette.textSecondary;
+    const onActionPress = () => {
+        if (!nextAction || blockedReason) {
+            return;
         }
-    })();
-
-    const statusIcon = (() => {
-        switch (locationStatus) {
-            case 'inside': return 'check-circle';
-            case 'outside': return 'times-circle';
-            case 'checking': return 'sync';
-            case 'wfh': return 'home';
-            case 'onsite': return 'map-marker-alt';
-            default: return 'question-circle';
+        if (kioskMode) {
+            const mode = WORK_MODES.find((m) => m.key === workMode)?.label;
+            Alert.alert('Confirm', `${nextAction} for ${targetName} (${targetId})\nWork mode: ${mode}`, [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Confirm', onPress: performAction },
+            ]);
+        } else {
+            performAction();
         }
-    })();
+    };
 
-    const statusText = (() => {
-        switch (locationStatus) {
-            case 'inside': return 'Inside Office Geofence';
-            case 'outside': return 'Outside Office Geofence';
-            case 'checking': return 'Checking Location...';
-            case 'wfh': return 'Work From Home Mode';
-            case 'onsite': return 'Onsite / Client Location';
-            case 'error': return 'Location Error';
-            default: return 'Unknown Status';
+    // ------------------------------------------------------------------ render pieces
+    const renderToday = () => {
+        if (!targetId) {
+            return null;
         }
-    })();
-
-    return (
-        <View style={{ flex: 1, backgroundColor: custom.palette.background }}>
-            <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 36 }}>
-                {/* Admin identity */}
-                <Card style={styles.card}>
-                    <Card.Content>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                            <Icon name="user-shield" size={20} color={custom.palette.primary} />
-                            <Text style={{ fontSize: 18, fontWeight: '800', marginLeft: 10 }}>
-                                {user?.full_name || 'Admin'}
-                            </Text>
+        const checkIn = formatTimeOfDay(today.checkInTime);
+        const checkOut = formatTimeOfDay(today.checkOutTime);
+        const state = !today.hasCheckedIn
+            ? { label: 'Not checked in', color: colors.textSecondary, icon: 'hourglass-start' }
+            : !today.hasCheckedOut
+                ? { label: 'Checked in', color: STATUS_COLORS.late, icon: 'user-clock' }
+                : { label: 'Completed', color: STATUS_COLORS.present, icon: 'check-circle' };
+        return (
+            <View style={styles.todayRow}>
+                {statusLoading ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                    <>
+                        <View style={[styles.badge, { backgroundColor: state.color }]}>
+                            <Icon name={state.icon} size={9} color={colors.white} />
+                            <Text style={styles.badgeText}>{state.label}</Text>
                         </View>
-                        <View style={styles.rowCenter}>
-                            <Icon name="id-badge" size={14} color={custom.palette.textSecondary} />
-                            <Text style={styles.subtleText}>{adminEmployeeId || 'N/A'}</Text>
-                        </View>
-                    </Card.Content>
-                </Card>
-
-                {/* Kiosk Mode */}
-                <Card style={styles.card}>
-                    <Card.Title
-                        title="Kiosk Mode"
-                        subtitle="Check in/out for other employees"
-                        left={(props) => <Icon {...props} name="desktop" size={20} color={custom.palette.warning} />}
-                    />
-                    <Card.Content>
-                        <View style={styles.rowBetween}>
-                            <View style={styles.rowCenter}>
-                                <Icon name="users" size={16} color={custom.palette.warning} />
-                                <Text style={styles.boldText}>Enable Kiosk Mode</Text>
+                        {checkIn ? (
+                            <View style={styles.timeInfo}>
+                                <Icon name="sign-in-alt" size={11} color={STATUS_COLORS.present} />
+                                <Text style={styles.timeText}>{checkIn}</Text>
                             </View>
-                            <Switch
-                                value={kioskMode}
-                                onValueChange={(val) => {
-                                    setKioskMode(val);
-                                    if (!val) {
-                                        setSelectedEmployee(null);
-                                        setSearchQuery('');
-                                    }
-                                }}
-                            />
-                        </View>
-                        {kioskMode && (
-                            <View style={styles.bannerWarn}>
-                                <Text style={styles.bannerWarnText}>💡 In kiosk mode, you can check in/out any employee using this device.</Text>
+                        ) : null}
+                        {checkOut ? (
+                            <View style={styles.timeInfo}>
+                                <Icon name="sign-out-alt" size={11} color={STATUS_COLORS.absent} />
+                                <Text style={styles.timeText}>{checkOut}</Text>
                             </View>
-                        )}
-                    </Card.Content>
-                </Card>
-
-                {/* Employee Picker */}
-                {kioskMode && (
-                    <Card style={styles.card}>
-                        <Card.Title title="Select Employee" />
-                        <Card.Content>
-                            <Searchbar
-                                placeholder="Search by name or ID..."
-                                onChangeText={setSearchQuery}
-                                value={searchQuery}
-                                style={{ marginBottom: 12 }}
-                            />
-                            {selectedEmployee ? (
-                                <View style={styles.selectedEmployee}>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={{ fontWeight: '800', fontSize: 16 }}>{selectedEmployee.employee_name}</Text>
-                                        <Text style={{ color: custom.palette.textSecondary, fontSize: 13 }}>{selectedEmployee.name}</Text>
-                                        {!!selectedEmployee.department && (
-                                            <Text style={{ color: custom.palette.textSecondary, fontSize: 12, marginTop: 4 }}>
-                                                {selectedEmployee.department}
-                                            </Text>
-                                        )}
-                                    </View>
-                                    <Button variant="outline" onPress={() => { setSelectedEmployee(null); setSearchQuery(''); }} compact>
-                                        Change
-                                    </Button>
-                                </View>
-                            ) : (
-                                <ScrollView style={{ maxHeight: 220 }}>
-                                    {filteredEmployees.length === 0 ? (
-                                        <Text style={styles.subtleCenter}>{searchQuery ? 'No employees found' : 'Loading employees...'}</Text>
-                                    ) : (
-                                        filteredEmployees.slice(0, 10).map((emp) => (
-                                            <Card key={emp.name} style={{ marginBottom: 8 }} onPress={() => setSelectedEmployee(emp)}>
-                                                <Card.Content style={{ paddingVertical: 10 }}>
-                                                    <View style={styles.rowBetween}>
-                                                        <View style={{ flex: 1, paddingRight: 8 }}>
-                                                            <Text style={{ fontWeight: '700' }}>{emp.employee_name}</Text>
-                                                            <Text style={{ fontSize: 12, color: custom.palette.textSecondary }}>{emp.name}</Text>
-                                                        </View>
-                                                        <Chip mode="outlined" textStyle={{ fontSize: 10 }} style={{ height: 24 }}>
-                                                            {emp.status || 'Active'}
-                                                        </Chip>
-                                                    </View>
-                                                </Card.Content>
-                                            </Card>
-                                        ))
-                                    )}
-                                    {filteredEmployees.length > 10 && (
-                                        <Text style={styles.subtleCenter}>Showing 10 of {filteredEmployees.length} results. Refine your search.</Text>
-                                    )}
-                                </ScrollView>
-                            )}
-                        </Card.Content>
-                    </Card>
+                        ) : null}
+                    </>
                 )}
+            </View>
+        );
+    };
 
-                {/* Work Mode Selection */}
-                <Card style={styles.card}>
-                    <Card.Title title="Work Mode" subtitle="Choose working location" />
-                    <Card.Content>
-                        <View style={styles.workModeContainer}>
-                            <View 
-                                style={[
-                                    styles.workModeOption, 
-                                    workMode === 'Office' && styles.workModeSelected,
-                                    { borderColor: workMode === 'Office' ? custom.palette.primary : custom.palette.border || '#E0E0E0' }
-                                ]}
-                                onTouchEnd={() => setWorkMode('Office')}
-                            >
-                                <Icon name="building" size={20} color={workMode === 'Office' ? custom.palette.primary : custom.palette.textSecondary} />
-                                <Text style={[styles.workModeText, workMode === 'Office' && { color: custom.palette.primary }]}>Office</Text>
-                            </View>
-                            <View 
-                                style={[
-                                    styles.workModeOption, 
-                                    workMode === 'WFH' && styles.workModeSelected,
-                                    { borderColor: workMode === 'WFH' ? custom.palette.primary : custom.palette.border || '#E0E0E0' },
-                                    !canDoWFH && styles.workModeDisabled
-                                ]}
-                                onTouchEnd={() => canDoWFH && setWorkMode('WFH')}
-                            >
-                                <Icon name="home" size={20} color={workMode === 'WFH' ? custom.palette.primary : custom.palette.textSecondary} />
-                                <Text style={[styles.workModeText, workMode === 'WFH' && { color: custom.palette.primary }]}>WFH</Text>
-                            </View>
-                            <View 
-                                style={[
-                                    styles.workModeOption, 
-                                    workMode === 'Onsite' && styles.workModeSelected,
-                                    { borderColor: workMode === 'Onsite' ? (custom.palette.info || '#2196F3') : custom.palette.border || '#E0E0E0' },
-                                    !canDoOnsite && styles.workModeDisabled
-                                ]}
-                                onTouchEnd={() => canDoOnsite && setWorkMode('Onsite')}
-                            >
-                                <Icon name="map-marker-alt" size={20} color={workMode === 'Onsite' ? (custom.palette.info || '#2196F3') : custom.palette.textSecondary} />
-                                <Text style={[styles.workModeText, workMode === 'Onsite' && { color: custom.palette.info || '#2196F3' }]}>Onsite</Text>
-                            </View>
-                        </View>
-                        {!canDoWFH && workMode === 'WFH' && (
-                            <View style={styles.bannerWarn}>
-                                <Text style={styles.bannerWarnText}>⚠️ You are not eligible for WFH. Contact administrator.</Text>
-                            </View>
-                        )}
-                        {!canDoOnsite && workMode === 'Onsite' && (
-                            <View style={styles.bannerWarn}>
-                                <Text style={styles.bannerWarnText}>⚠️ You are not eligible for Onsite work. Contact administrator.</Text>
-                            </View>
-                        )}
-                    </Card.Content>
-                </Card>
+    const renderPerson = (id, name, subtitle) => (
+        <View style={styles.personRow}>
+            <View style={[styles.avatar, { backgroundColor: getAvatarColor(name) }]}>
+                <Text style={styles.avatarText}>{getInitials(name)}</Text>
+            </View>
+            <View style={styles.flex}>
+                <Text style={styles.personName}>{name}</Text>
+                <Text style={styles.personId}>{subtitle || id}</Text>
+            </View>
+        </View>
+    );
 
-                {/* Location Status (with REFRESH icon at top-right) */}
-                {workMode === 'Office' && (
-                    <Card style={styles.card}>
-                        <Card.Title
-                            title="Location Status"
-                            subtitle={locationStatus === 'checking' ? 'Verifying location...' : 'Tap refresh to re-check'}
-                            right={() => (
-                                <IconButton
-                                    icon="refresh"
-                                    onPress={checkGeofenceStatus}
-                                    disabled={loading}
-                                    accessibilityLabel="Refresh location"
-                                />
-                            )}
-                        />
-                        <Card.Content>
-                            <View style={[styles.statusContainer, { backgroundColor: `${statusColor}15` }]}>
-                                <Icon name={statusIcon} size={24} color={statusColor} />
-                                <View style={{ flex: 1, marginLeft: 12 }}>
-                                    <Text style={[styles.statusTitle, { color: statusColor }]}>{statusText}</Text>
-                                    {distance !== null && locationStatus !== 'checking' && (
-                                        <Text style={styles.secondaryText}>Distance: {distance}m from office</Text>
-                                    )}
-                                    {locationError && <Text style={[styles.errorText]}>{locationError}</Text>}
-                                </View>
-                            </View>
-
-                            {locationStatus === 'checking' && (
-                                <ProgressBar indeterminate color={custom.palette.primary} style={{ marginTop: 12 }} />
-                            )}
-
-                            {locationStatus !== 'checking' && distance !== null && officeLocation && (
-                                <View style={{ marginTop: 16 }}>
-                                    <View style={styles.rowBetween}>
-                                        <Text style={styles.secondaryText}>Geofence Radius: {officeLocation.radius}m</Text>
-                                        <Text style={[styles.secondaryText, { fontWeight: '700', color: statusColor }]}>
-                                            {locationStatus === 'inside' ? 'Within Range' : 'Out of Range'}
-                                        </Text>
-                                    </View>
-                                    <ProgressBar
-                                        progress={Math.min(distance / (officeLocation.radius * 2), 1)}
-                                        color={locationStatus === 'inside' ? custom.palette.success : custom.palette.danger}
-                                        style={{ marginTop: 6 }}
-                                    />
-                                </View>
-                            )}
-                        </Card.Content>
-                    </Card>
-                )}
-
-                {/* Office Details */}
-                {workMode === 'Office' && officeLocation && (
-                    <Card style={styles.card}>
-                        <Card.Title
-                            title="Office Geofence Details"
-                            left={(props) => <Icon {...props} name="map-marker-alt" size={20} color={custom.palette.primary} />}
-                        />
-                        <Card.Content>
-                            <View style={styles.infoRow}>
-                                <Text style={styles.infoLabel}>Latitude:</Text>
-                                <Text style={styles.infoValue}>{officeLocation.latitude.toFixed(6)}</Text>
-                            </View>
-                            <View style={styles.infoRow}>
-                                <Text style={styles.infoLabel}>Longitude:</Text>
-                                <Text style={styles.infoValue}>{officeLocation.longitude.toFixed(6)}</Text>
-                            </View>
-                            <View style={styles.infoRow}>
-                                <Text style={styles.infoLabel}>Radius:</Text>
-                                <Text style={styles.infoValue}>{officeLocation.radius}m</Text>
-                            </View>
-                        </Card.Content>
-                    </Card>
-                )}
-
-                {/* Actions */}
-                <View style={styles.actionsContainer}>
-                    <Button
-                        onPress={() => doAction('Check-In')}
-                        style={styles.actionButton}
-                        disabled={loading || (workMode === 'Office' && locationStatus !== 'inside') || (kioskMode && !selectedEmployee)}
-                    >
-                        <Icon name="sign-in-alt" size={14} /> {kioskMode && selectedEmployee ? `Check In - ${selectedEmployee.employee_name}` : 'Check In'}
-                    </Button>
-
-                    <Button
-                        variant="outline"
-                        onPress={() => doAction('Check-Out')}
-                        style={styles.actionButton}
-                        disabled={loading || (workMode === 'Office' && locationStatus !== 'inside') || (kioskMode && !selectedEmployee)}
-                    >
-                        <Icon name="sign-out-alt" size={14} /> {kioskMode && selectedEmployee ? `Check Out - ${selectedEmployee.employee_name}` : 'Check Out'}
-                    </Button>
+    const renderLocation = () => {
+        if (workMode !== 'Office') {
+            const mode = WORK_MODES.find((m) => m.key === workMode);
+            return (
+                <View style={styles.infoCard}>
+                    <Icon name={mode.icon} size={14} color={mode.color} />
+                    <Text style={styles.infoText}>
+                        {workMode === 'WFH' ? 'Work From Home: no location check.' : 'On Site: your current location is recorded.'}
+                    </Text>
                 </View>
-
-                {workMode === 'Office' && locationStatus === 'outside' && (
-                    <View style={[styles.bannerError, { borderLeftColor: custom.palette.danger }]}>
-                        <Text style={[styles.errorTitle, { color: custom.palette.danger }]}>⚠️ Check-in/out disabled</Text>
-                        <Text style={[styles.errorText, { color: custom.palette.danger }]}>
-                            Device is {distance}m away. Move closer to office or switch to WFH/Onsite mode.
+            );
+        }
+        const s = officeError
+            ? { color: STATUS_COLORS.absent, icon: 'exclamation-triangle', text: 'No office location' }
+            : {
+                checking: { color: STATUS_COLORS.late, icon: 'location-arrow', text: 'Checking location...' },
+                inside: { color: STATUS_COLORS.present, icon: 'check-circle', text: 'Inside office area' },
+                outside: { color: STATUS_COLORS.absent, icon: 'times-circle', text: 'Outside office area' },
+                error: { color: STATUS_COLORS.absent, icon: 'exclamation-triangle', text: 'Location unavailable' },
+            }[locationStatus];
+        const progress = officeLocation && distance != null ? Math.min(distance / (officeLocation.radius * 2), 1) : 0;
+        return (
+            <View style={styles.card}>
+                <View style={styles.cardHeader}>
+                    <View style={styles.cardTitleRow}>
+                        <Icon name="map-marked-alt" size={14} color={colors.primary} />
+                        <Text style={styles.cardTitle}>Location</Text>
+                    </View>
+                    <TouchableOpacity
+                        style={styles.iconButton}
+                        onPress={checkGeofence}
+                        disabled={!officeLocation || locationStatus === 'checking'}
+                        activeOpacity={0.8}
+                    >
+                        {locationStatus === 'checking' && officeLocation ? (
+                            <ActivityIndicator size="small" color={colors.primary} />
+                        ) : (
+                            <Icon name="sync-alt" size={13} color={colors.primary} />
+                        )}
+                    </TouchableOpacity>
+                </View>
+                <View style={[styles.locationStatus, { backgroundColor: `${s.color}14`, borderColor: `${s.color}40` }]}>
+                    <Icon name={s.icon} size={18} color={s.color} />
+                    <View style={styles.flex}>
+                        <Text style={[styles.locationTitle, { color: s.color }]}>{s.text}</Text>
+                        <Text style={styles.locationSub}>
+                            {officeError
+                                || locationError
+                                || (distance != null && officeLocation
+                                    ? `${distance} m from ${officeLocation.location_name || 'office'} · allowed ${officeLocation.radius} m`
+                                    : 'Getting your position')}
                         </Text>
                     </View>
-                )}
+                </View>
+                {distance != null && officeLocation && !officeError ? (
+                    <View style={styles.progressBarContainer}>
+                        <View style={[styles.progressBarFill, { width: `${progress * 100}%`, backgroundColor: s.color }]} />
+                    </View>
+                ) : null}
+            </View>
+        );
+    };
+
+    const actionStyle = nextAction === 'Check-In' ? styles.actionCheckIn : nextAction === 'Check-Out' ? styles.actionCheckOut : styles.actionDone;
+    const actionDisabled = busy || !nextAction || Boolean(blockedReason) || statusLoading;
+
+    // ------------------------------------------------------------------ main
+    return (
+        <View style={styles.container}>
+            <ScrollView
+                contentContainerStyle={styles.scrollContent}
+                keyboardShouldPersistTaps="handled"
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />}
+            >
+                {/* Who */}
+                <View style={styles.card}>
+                    {kioskMode && selectedEmployee
+                        ? renderPerson(selectedEmployee.name, selectedEmployee.employee_name, `${selectedEmployee.name}${selectedEmployee.department ? ` · ${selectedEmployee.department.replace(' - DG', '')}` : ''}`)
+                        : kioskMode
+                            ? renderPerson('', 'Kiosk mode', 'Choose an employee below')
+                            : renderPerson(adminId, adminName, adminId)}
+                    {renderToday()}
+                    <View style={styles.divider} />
+                    <View style={styles.kioskRow}>
+                        <View style={styles.flex}>
+                            <Text style={styles.kioskTitle}>Kiosk mode</Text>
+                            <Text style={styles.kioskSub}>Check in or out another employee on this device</Text>
+                        </View>
+                        <Switch
+                            value={kioskMode}
+                            onValueChange={(val) => {
+                                setKioskMode(val);
+                                setSelectedEmployee(null);
+                                setSearchQuery('');
+                            }}
+                            trackColor={{ true: colors.primaryLight, false: colors.border }}
+                            thumbColor={kioskMode ? colors.primary : '#F4F4F5'}
+                        />
+                    </View>
+                </View>
+
+                {/* Kiosk: pick the employee */}
+                {kioskMode ? (
+                    <View style={styles.card}>
+                        <View style={styles.cardHeader}>
+                            <View style={styles.cardTitleRow}>
+                                <Icon name="users" size={14} color={colors.primary} />
+                                <Text style={styles.cardTitle}>Employee</Text>
+                            </View>
+                            {selectedEmployee ? (
+                                <TouchableOpacity
+                                    style={styles.linkButton}
+                                    onPress={() => {
+                                        setSelectedEmployee(null);
+                                        setSearchQuery('');
+                                    }}
+                                    activeOpacity={0.8}
+                                >
+                                    <Text style={styles.linkButtonText}>Change</Text>
+                                </TouchableOpacity>
+                            ) : null}
+                        </View>
+                        {selectedEmployee ? (
+                            <Text style={styles.kioskSub}>Selected. Choose the work mode and tap the button below.</Text>
+                        ) : (
+                            <>
+                                <View style={styles.searchContainer}>
+                                    <Icon name="search" size={13} color={colors.textMuted} />
+                                    <TextInput
+                                        style={styles.searchInput}
+                                        placeholder="Search by name or ID"
+                                        placeholderTextColor={colors.textMuted}
+                                        value={searchQuery}
+                                        onChangeText={setSearchQuery}
+                                    />
+                                </View>
+                                {employeeList.length === 0 ? (
+                                    <ActivityIndicator size="small" color={colors.primary} style={styles.listLoader} />
+                                ) : filteredEmployees.length === 0 ? (
+                                    <Text style={styles.emptyText}>No employees match "{searchQuery}"</Text>
+                                ) : (
+                                    filteredEmployees.map((emp) => (
+                                        <TouchableOpacity
+                                            key={emp.name}
+                                            style={styles.employeeOption}
+                                            onPress={() => setSelectedEmployee(emp)}
+                                            activeOpacity={0.8}
+                                        >
+                                            {renderPerson(emp.name, emp.employee_name, emp.name)}
+                                            <Icon name="chevron-right" size={12} color={colors.textMuted} />
+                                        </TouchableOpacity>
+                                    ))
+                                )}
+                            </>
+                        )}
+                    </View>
+                ) : null}
+
+                {/* Work mode */}
+                <View style={styles.card}>
+                    <View style={styles.cardHeader}>
+                        <View style={styles.cardTitleRow}>
+                            <Icon name="briefcase" size={14} color={colors.primary} />
+                            <Text style={styles.cardTitle}>Work Mode</Text>
+                        </View>
+                    </View>
+                    <View style={styles.modeRow}>
+                        {WORK_MODES.map((m) => {
+                            const active = workMode === m.key;
+                            const allowed = modeAllowed(m.key);
+                            return (
+                                <TouchableOpacity
+                                    key={m.key}
+                                    style={[styles.modeOption, active && { backgroundColor: m.color, borderColor: m.color }, !allowed && styles.disabled]}
+                                    onPress={() => allowed && setWorkMode(m.key)}
+                                    disabled={!allowed}
+                                    activeOpacity={0.8}
+                                >
+                                    <Icon name={m.icon} size={16} color={active ? colors.white : m.color} />
+                                    <Text style={[styles.modeText, active && styles.modeTextActive]}>{m.label}</Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                    {!wfhAllowed || !onsiteAllowed ? (
+                        <Text style={styles.kioskSub}>
+                            {[!wfhAllowed && 'WFH', !onsiteAllowed && 'On Site'].filter(Boolean).join(' and ')} not enabled for{' '}
+                            {kioskMode ? (selectedEmployee ? targetName : 'this employee') : 'you'}.
+                        </Text>
+                    ) : null}
+                </View>
+
+                {renderLocation()}
+
+                {/* Action */}
+                <TouchableOpacity
+                    style={[styles.actionButton, actionStyle, actionDisabled && styles.actionDisabled]}
+                    onPress={onActionPress}
+                    disabled={actionDisabled}
+                    activeOpacity={0.85}
+                >
+                    {busy ? (
+                        <ActivityIndicator size="small" color={colors.white} />
+                    ) : (
+                        <Icon
+                            name={nextAction === 'Check-In' ? 'sign-in-alt' : nextAction === 'Check-Out' ? 'sign-out-alt' : 'check-circle'}
+                            size={16}
+                            color={colors.white}
+                        />
+                    )}
+                    <Text style={styles.actionText}>
+                        {!targetId
+                            ? 'Check In'
+                            : nextAction === 'Check-In'
+                                ? `Check In${kioskMode ? ` ${targetName}` : ''}`
+                                : nextAction === 'Check-Out'
+                                    ? `Check Out${kioskMode ? ` ${targetName}` : ''}`
+                                    : 'Completed for today'}
+                    </Text>
+                </TouchableOpacity>
+                {blockedReason ? (
+                    <View style={styles.hintRow}>
+                        <Icon name="info-circle" size={12} color={colors.textSecondary} />
+                        <Text style={styles.hintText}>{blockedReason}</Text>
+                    </View>
+                ) : null}
             </ScrollView>
         </View>
     );
 };
 
+const SHADOW = {
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+};
+
 const styles = StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    scrollContent: { padding: 12, paddingBottom: 32 },
+    flex: { flex: 1 },
+    disabled: { opacity: 0.4 },
+
     card: {
-        marginBottom: 14,
-        backgroundColor: '#FFF',
-        borderRadius: 16,
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOpacity: 0.08,
-        shadowRadius: 3,
-        shadowOffset: { width: 0, height: 1 },
+        backgroundColor: colors.surface,
+        borderRadius: 10,
+        padding: 12,
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: colors.borderLight,
+        ...SHADOW,
     },
-    rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    rowCenter: { flexDirection: 'row', alignItems: 'center' },
-    boldText: { marginLeft: 8, fontWeight: '600' },
-    subtleText: { fontSize: 13, color: '#6B7280', marginLeft: 8 },
-    subtleCenter: { textAlign: 'center', color: '#6B7280', padding: 10, fontSize: 12 },
-    statusContainer: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#E0E0E0' },
-    statusTitle: { fontWeight: '800', fontSize: 16 },
-    secondaryText: { marginTop: 4, color: '#6B7280', fontSize: 13 },
-    errorText: { marginTop: 4, fontSize: 12 },
-    infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#E0E0E0' },
-    infoLabel: { fontSize: 13, color: '#757575', fontWeight: '500' },
-    infoValue: { fontSize: 13, color: '#111827', fontWeight: '700' },
-    bannerWarn: { marginTop: 12, padding: 10, backgroundColor: '#FFF3CD', borderRadius: 10 },
-    bannerWarnText: { color: '#856404', fontSize: 13 },
-    bannerError: { marginTop: 12, padding: 12, backgroundColor: '#FFEBEE', borderRadius: 10, borderLeftWidth: 4 },
-    errorTitle: { fontWeight: '700', fontSize: 13 },
-    selectedEmployee: { flexDirection: 'row', alignItems: 'center', padding: 16, backgroundColor: '#E3F2FD', borderRadius: 12, borderWidth: 1.5, borderColor: '#2196F3' },
-    actionsContainer: {
-        marginTop: 8,
-        marginBottom: 16,
-    },
-    actionButton: {
-        marginBottom: 12,
-    },
-    workModeContainer: {
+    cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+    cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    cardTitle: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+    divider: { height: 1, backgroundColor: colors.border, marginVertical: 10 },
+
+    personRow: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+    avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+    avatarText: { fontSize: 15, fontWeight: '700', color: colors.white },
+    personName: { fontSize: 15, fontWeight: '600', color: colors.textPrimary },
+    personId: { fontSize: 12, color: colors.textSecondary, marginTop: 1 },
+
+    todayRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 10 },
+    badge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
+    badgeText: { fontSize: 10, color: colors.white, fontWeight: '600' },
+    timeInfo: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+    timeText: { fontSize: 12, color: '#374151', fontWeight: '500' },
+
+    kioskRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    kioskTitle: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
+    kioskSub: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
+
+    linkButton: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: colors.primary },
+    linkButtonText: { fontSize: 12, fontWeight: '600', color: colors.primary },
+    searchContainer: {
         flexDirection: 'row',
-        justifyContent: 'space-between',
+        alignItems: 'center',
         gap: 8,
+        backgroundColor: colors.background,
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        borderWidth: 1,
+        borderColor: colors.border,
+        marginBottom: 8,
     },
-    workModeOption: {
+    searchInput: { flex: 1, paddingVertical: 9, fontSize: 14, color: colors.textPrimary },
+    listLoader: { marginVertical: 12 },
+    employeeOption: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.borderLight,
+    },
+    emptyText: { fontSize: 12, color: colors.textMuted, textAlign: 'center', paddingVertical: 12 },
+
+    modeRow: { flexDirection: 'row', gap: 8 },
+    modeOption: {
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
+        gap: 6,
+        paddingVertical: 12,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: colors.border,
+        backgroundColor: colors.background,
+    },
+    modeText: { fontSize: 12, fontWeight: '700', color: colors.textPrimary },
+    modeTextActive: { color: colors.white },
+
+    infoCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: '#F0F9FF',
+        padding: 10,
+        borderRadius: 8,
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: '#BFDBFE',
+    },
+    infoText: { flex: 1, fontSize: 12, fontWeight: '600', color: '#1E40AF' },
+    iconButton: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: colors.background,
+        borderWidth: 1,
+        borderColor: colors.border,
+    },
+    locationStatus: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 10, borderWidth: 1 },
+    locationTitle: { fontSize: 14, fontWeight: '700' },
+    locationSub: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
+    progressBarContainer: { height: 6, backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden', marginTop: 10 },
+    progressBarFill: { height: '100%', borderRadius: 3 },
+
+    actionButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
         paddingVertical: 14,
-        paddingHorizontal: 8,
         borderRadius: 12,
-        borderWidth: 2,
-        backgroundColor: '#FAFAFA',
+        marginTop: 4,
+        ...SHADOW,
     },
-    workModeSelected: {
-        backgroundColor: '#E3F2FD',
-    },
-    workModeDisabled: {
-        opacity: 0.5,
-    },
-    workModeText: {
-        marginTop: 6,
-        fontSize: 13,
-        fontWeight: '600',
-        color: '#6B7280',
-    },
+    actionCheckIn: { backgroundColor: STATUS_COLORS.present },
+    actionCheckOut: { backgroundColor: STATUS_COLORS.absent },
+    actionDone: { backgroundColor: colors.textSecondary },
+    actionDisabled: { opacity: 0.5, elevation: 0, shadowOpacity: 0 },
+    actionText: { fontSize: 15, fontWeight: '700', color: colors.white },
+    hintRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, paddingHorizontal: 4 },
+    hintText: { flex: 1, fontSize: 12, color: colors.textSecondary },
 });
 
 export default AdminCheckInOutScreen;

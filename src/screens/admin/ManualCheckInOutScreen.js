@@ -1,949 +1,694 @@
 // src/screens/admin/ManualCheckInOutScreen.js
+//
+// Fix one day's attendance: edit check-in / check-out times, submit drafts, set times for
+// several records at once, and add attendance for employees with no record that day.
+// Times are sent as 'HH:MM' and applied on the record's own date by the server, so they
+// never shift with the phone's timezone. A draft with both times is submitted automatically.
 import React, { useCallback, useMemo, useState } from 'react';
 import {
     View,
+    Text,
     StyleSheet,
-    FlatList,
+    ScrollView,
     RefreshControl,
     TouchableOpacity,
     Modal,
     Alert,
-    ScrollView,
+    ActivityIndicator,
+    Platform,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/FontAwesome5';
-import { format as fmtDate, addDays, subDays } from 'date-fns';
-
-import {
-    Text,
-    TextInput,
-    Snackbar,
-    HelperText,
-    ActivityIndicator,
-    Divider,
-} from 'react-native-paper';
-
+import { addDays, subDays } from 'date-fns';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import ApiService from '../../services/api.service';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { colors } from '../../theme/colors';
-import { formatLocalDate } from '../../utils/dateFormat';
+import { formatLocalDate, formatTimeOfDay, toHHMM, timeOnDay } from '../../utils/dateFormat';
+import showToast from '../../utils/Toast';
+import { STATUS_COLORS } from '../../components/admin/AttendanceList';
 
-const fmt = (d) =>
-    typeof d === 'string'
-        ? d
-        : d?.toISOString?.().slice(0, 19).replace('T', ' ') ?? '';
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const longDate = (d) => `${WEEKDAYS[d.getDay()]}, ${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 
-const hhmmss = (dt) => {
-    try {
-        const d = typeof dt === 'string' ? new Date(dt) : dt;
-        return d ? fmtDate(d, 'HH:mm:ss') : '—';
-    } catch {
-        return '—';
+const TABS = [
+    { key: 'all', label: 'All', icon: 'list' },
+    { key: 'pending', label: 'No Check-out', icon: 'sign-out-alt' },
+    { key: 'missing', label: 'Not Marked', icon: 'user-clock' },
+];
+
+const STATUS = {
+    'Present': { color: STATUS_COLORS.present, label: 'Present' },
+    'Half Day': { color: STATUS_COLORS.present, label: 'Half Day' },
+    'Work From Home': { color: STATUS_COLORS.wfh, label: 'WFH' },
+    'On Site': { color: STATUS_COLORS.onsite, label: 'On Site' },
+    'On Leave': { color: STATUS_COLORS.leave, label: 'On Leave' },
+    'Absent': { color: STATUS_COLORS.absent, label: 'Absent' },
+    'Not Marked': { color: STATUS_COLORS.muted, label: 'Not Marked' },
+};
+const WORK_TYPES = [
+    { key: 'Office', label: 'Office', icon: 'building' },
+    { key: 'WFH', label: 'WFH', icon: 'home' },
+    { key: 'On Site', label: 'On Site', icon: 'map-marker-alt' },
+];
+
+const formatHours = (hours) => {
+    const h = Number(hours) || 0;
+    if (h <= 0) {
+        return null;
     }
+    const whole = Math.floor(h);
+    const minutes = Math.round((h - whole) * 60);
+    return whole ? `${whole}h${minutes ? ` ${minutes}m` : ''}` : `${minutes}m`;
 };
 
-const ManualCheckInOutScreen = ({ navigation }) => {
-    // ---- core state
+const ManualCheckInOutScreen = () => {
     const [date, setDate] = useState(new Date());
-    const [showDate, setShowDate] = useState(false);
-
-    // ymd MUST use local-timezone components so the date string sent to the
-    // backend matches the displayDate the user sees. `toISOString().slice(0,10)`
-    // was the previous (UTC-based) implementation and produced an off-by-one
-    // day in any non-UTC timezone — the screen would say "24-05-2026" while
-    // querying records for "2026-05-23". See src/utils/dateFormat.js for why.
-    const ymd = useMemo(() => formatLocalDate(date), [date]);
-    const displayDate = useMemo(() => fmtDate(date, 'dd-MM-yyyy'), [date]);
-
-    const [list, setList] = useState([]);
+    const [showDatePicker, setShowDatePicker] = useState(false);
+    const [tab, setTab] = useState('all');
+    const [rows, setRows] = useState([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
 
-    const [snack, setSnack] = useState({ visible: false, msg: '' });
-
-    // stats + mode
-    const [stats, setStats] = useState(null);
-    const [mode, setMode] = useState('all');
-
-    // selection for bulk ops
     const [selectMode, setSelectMode] = useState(false);
     const [selected, setSelected] = useState([]);
-    const toggleSelect = (id) =>
-        setSelected((old) => (old.includes(id) ? old.filter((x) => x !== id) : [...old, id]));
 
-    // busy flags
-    const [bulkBusy, setBulkBusy] = useState(false);
+    // dialogs: 'edit' (one record), 'add' (no record yet), 'bulk' (selected records)
+    const [dialog, setDialog] = useState(null);
+    const [saving, setSaving] = useState(false);
+    const [iosPicker, setIosPicker] = useState(null); // { field } while an iOS inline time picker is open
 
-    // edit single times
-    const [editDialog, setEditDialog] = useState({
-        open: false,
-        row: null,
-        mode: null, // 'in' | 'out' | 'both'
-        checkIn: null,
-        checkOut: null,
-        showPicker: null, // 'in' | 'out'
-    });
+    const ymd = useMemo(() => formatLocalDate(date), [date]);
+    const isTodayOrLater = ymd >= formatLocalDate(new Date());
 
-    // bulk operations menu
-    const [bulkMenu, setBulkMenu] = useState(false);
-    const [bulkOpDialog, setBulkOpDialog] = useState({
-        open: false,
-        type: '', // 'checkin' | 'checkout' | 'both'
-        checkIn: '',
-        checkOut: '',
-    });
-
-    // ---- data fetchers
-    const fetchStats = useCallback(async () => {
-        const res = await ApiService.getAttendanceStatisticsForDate({ date: ymd });
-        if (res.success) setStats(res.data?.message ?? res.data ?? null);
-    }, [ymd]);
-
-    const fetchList = useCallback(async () => {
-        setLoading(true);
-        const res =
-            mode === 'pending'
-                ? await ApiService.getPendingCheckouts({ date: ymd })
-                : await ApiService.getAttendanceRecordsForDate({ date: ymd });
-
-        if (res.success) {
-            if (mode === 'pending') {
-                const out =
-                    res.data?.message?.pending_checkouts ??
-                    res.data?.data?.pending_checkouts ??
-                    res.data?.pending_checkouts ??
-                    [];
-                setList(out);
+    // ------------------------------------------------------------------ data
+    const load = useCallback(async (isRefresh = false) => {
+        isRefresh ? setRefreshing(true) : setLoading(true);
+        try {
+            const res = await ApiService.getAttendanceRecordsForDate({ date: ymd, include_missing: true });
+            if (res.success) {
+                setRows(res.data?.message?.attendance_records || []);
             } else {
-                const out =
-                    res.data?.message?.attendance_records ??
-                    res.data?.data?.attendance_records ??
-                    res.data?.attendance_records ??
-                    [];
-                setList(out);
+                setRows([]);
+                showToast({ type: 'error', text1: 'Could not load records', text2: res.message || 'Please try again' });
             }
-        } else {
-            setSnack({ visible: true, msg: res.message || 'Failed to load' });
+        } finally {
+            isRefresh ? setRefreshing(false) : setLoading(false);
         }
-        setLoading(false);
-    }, [ymd, mode]);
+    }, [ymd]);
 
     useFocusEffect(
         useCallback(() => {
-            fetchList();
-            fetchStats();
-        }, [fetchList, fetchStats])
+            setSelected([]);
+            setSelectMode(false);
+            load(false);
+        }, [load])
     );
 
-    const onRefresh = useCallback(async () => {
-        setRefreshing(true);
-        await fetchList();
-        await fetchStats();
-        setRefreshing(false);
-    }, [fetchList, fetchStats]);
+    const counts = useMemo(() => {
+        const records = rows.filter((r) => r.name);
+        return {
+            records: records.length,
+            pending: records.filter((r) => r.in_time && !r.out_time && r.status !== 'On Leave').length,
+            missing: rows.filter((r) => !r.name).length,
+            drafts: records.filter((r) => r.docstatus === 0).length,
+        };
+    }, [rows]);
 
-    // ---- actions (single)
-    const doManualCheckout = async (attendance_id, hour = 18) => {
-        const res = await ApiService.manualCheckout({ attendance_id });
-        setSnack({
-            visible: true,
-            msg: res.success ? `Checkout added (${hour === 18 ? '6 PM' : '7 PM'})` : res.message || 'Failed to checkout',
-        });
-        if (res.success) fetchList();
+    const visibleRows = useMemo(() => {
+        if (tab === 'pending') {
+            return rows.filter((r) => r.name && r.in_time && !r.out_time && r.status !== 'On Leave');
+        }
+        if (tab === 'missing') {
+            return rows.filter((r) => !r.name);
+        }
+        return rows;
+    }, [rows, tab]);
+    const selectableRows = visibleRows.filter((r) => r.name && r.status !== 'On Leave');
+
+    const navigateDate = (direction) => {
+        if (direction === 'next' && isTodayOrLater) {
+            return;
+        }
+        setDate((d) => (direction === 'prev' ? subDays(d, 1) : addDays(d, 1)));
     };
 
-    const doQuickCheckIn = async (attendance_id, hour = 10) => {
-        const t = new Date(date);
-        t.setHours(hour, 0, 0, 0);
-        const res = await ApiService.updateAttendanceTimes({
-            attendance_id,
-            check_in_time: fmt(t),
-        });
-        setSnack({
-            visible: true,
-            msg: res.success ? `Check-in added (${hour} AM)` : res.message || 'Failed to add check-in',
-        });
-        if (res.success) fetchList();
-    };
-
-    const doQuickCheckOut = async (attendance_id, hour = 19) => {
-        const t = new Date(date);
-        t.setHours(hour, 0, 0, 0);
-        const res = await ApiService.updateAttendanceTimes({
-            attendance_id,
-            check_out_time: fmt(t),
-        });
-        setSnack({
-            visible: true,
-            msg: res.success ? `Check-out added (${hour - 12} PM)` : res.message || 'Failed to add check-out',
-        });
-        if (res.success) fetchList();
-    };
-
-    const openEditTimes = (row, mode = 'both') => {
-        // Pre-fill existing times or use defaults
-        const checkInTime = row.in_time 
-            ? fmtDate(new Date(row.in_time), 'HH:mm') 
-            : '10:00'; // Default check-in time
-        
-        const checkOutTime = (row.out_time || row.custom_out_time_copy) 
-            ? fmtDate(new Date(row.out_time || row.custom_out_time_copy), 'HH:mm') 
-            : '19:00'; // Default check-out time
-
-        setEditDialog({
-            open: true,
-            row,
-            mode, // 'in', 'out', or 'both'
-            checkIn: checkInTime,
-            checkOut: checkOutTime,
-            showPicker: null,
-        });
-    };
-
-    const doUpdateTimes = async () => {
-        const { row, checkIn, checkOut, mode } = editDialog;
-        if (!row) return;
-
-        try {
-            const attendanceDate = new Date(row.attendance_date || date);
-            
-            let updateData = {
-                attendance_id: row.name
-            };
-
-            // Prepare check-in time if editing
-            if (mode === 'in' || mode === 'both') {
-                if (!checkIn) {
-                    setSnack({
-                        visible: true,
-                        msg: 'Check-in time is required'
-                    });
-                    return;
-                }
-                
-                const [hours, minutes] = checkIn.split(':');
-                const checkInDateTime = new Date(attendanceDate);
-                checkInDateTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
-                
-                // Send as local datetime string without timezone conversion
-                // Format: "YYYY-MM-DD HH:MM:SS" (no timezone info)
-                const year = checkInDateTime.getFullYear();
-                const month = String(checkInDateTime.getMonth() + 1).padStart(2, '0');
-                const day = String(checkInDateTime.getDate()).padStart(2, '0');
-                const hour = String(checkInDateTime.getHours()).padStart(2, '0');
-                const minute = String(checkInDateTime.getMinutes()).padStart(2, '0');
-                const second = '00';
-                
-                updateData.check_in_time = `${year}-${month}-${day} ${hour}:${minute}:${second}`;
-            }
-
-            // Prepare check-out time if editing
-            if (mode === 'out' || mode === 'both') {
-                if (!checkOut) {
-                    setSnack({
-                        visible: true,
-                        msg: 'Check-out time is required'
-                    });
-                    return;
-                }
-                
-                const [hours, minutes] = checkOut.split(':');
-                const checkOutDateTime = new Date(attendanceDate);
-                checkOutDateTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
-                
-                // Send as local datetime string without timezone conversion
-                const year = checkOutDateTime.getFullYear();
-                const month = String(checkOutDateTime.getMonth() + 1).padStart(2, '0');
-                const day = String(checkOutDateTime.getDate()).padStart(2, '0');
-                const hour = String(checkOutDateTime.getHours()).padStart(2, '0');
-                const minute = String(checkOutDateTime.getMinutes()).padStart(2, '0');
-                const second = '00';
-                
-                updateData.check_out_time = `${year}-${month}-${day} ${hour}:${minute}:${second}`;
-            }
-
-            const res = await ApiService.updateAttendanceTimes(updateData);
-            setSnack({
-                visible: true,
-                // the server submits a draft once it has both times, and says so
-                msg: res.success ? res.data?.message?.message || 'Times updated' : res.message || 'Failed to update',
+    const pickDate = () => {
+        if (Platform.OS === 'android') {
+            DateTimePickerAndroid.open({
+                value: date,
+                mode: 'date',
+                maximumDate: new Date(),
+                onChange: (event, d) => event?.type !== 'dismissed' && d && setDate(d),
             });
-            if (res.success) {
-                setEditDialog({ open: false, row: null, mode: null, checkIn: null, checkOut: null, showPicker: null });
-                fetchList();
-            }
-        } catch (error) {
-            setSnack({ visible: true, msg: 'Error: ' + error.message });
+        } else {
+            setShowDatePicker(true);
         }
     };
 
-    const doSubmitRecord = (row) => {
-        const noCheckout = !(row.out_time || row.custom_out_time_copy);
+    // ------------------------------------------------------------------ time pickers
+    const setDialogTime = (field, value) => setDialog((dlg) => (dlg ? { ...dlg, [field]: value } : dlg));
+
+    const openTimePicker = (field) => {
+        const current = dialog?.[field] || timeOnDay(date, null, field.toLowerCase().includes('out') ? '18:00' : '10:00');
+        if (Platform.OS === 'android') {
+            DateTimePickerAndroid.open({
+                value: current,
+                mode: 'time',
+                is24Hour: false,
+                onChange: (event, d) => event?.type !== 'dismissed' && d && setDialogTime(field, timeOnDay(date, toHHMM(d))),
+            });
+        } else {
+            setIosPicker({ field });
+        }
+    };
+
+    const renderTimeField = (label, field, optional = false) => {
+        const value = dialog?.[field];
+        return (
+            <View style={styles.inputContainer}>
+                <Text style={styles.inputLabel}>{label}</Text>
+                <View style={styles.timeFieldRow}>
+                    <TouchableOpacity style={[styles.timeField, styles.flex]} onPress={() => openTimePicker(field)} activeOpacity={0.8}>
+                        <Icon name="clock" size={14} color={colors.primary} />
+                        <Text style={[styles.timeFieldText, !value && styles.placeholder]}>
+                            {value ? formatTimeOfDay(value) : 'Tap to set'}
+                        </Text>
+                    </TouchableOpacity>
+                    {optional && value ? (
+                        <TouchableOpacity style={styles.clearButton} onPress={() => setDialogTime(field, null)} activeOpacity={0.8}>
+                            <Icon name="times" size={14} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                    ) : null}
+                </View>
+                {Platform.OS === 'ios' && iosPicker?.field === field ? (
+                    <DateTimePicker
+                        mode="time"
+                        display="spinner"
+                        value={value || timeOnDay(date, null, '10:00')}
+                        onChange={(_, d) => d && setDialogTime(field, timeOnDay(date, toHHMM(d)))}
+                    />
+                ) : null}
+            </View>
+        );
+    };
+
+    const closeDialog = () => {
+        if (!saving) {
+            setDialog(null);
+            setIosPicker(null);
+        }
+    };
+
+    // ------------------------------------------------------------------ actions
+    const openEdit = (row) => setDialog({
+        type: 'edit',
+        row,
+        checkIn: row.in_time ? timeOnDay(date, row.in_time) : null,
+        checkOut: row.out_time ? timeOnDay(date, row.out_time) : null,
+    });
+
+    const openAdd = (row) => setDialog({
+        type: 'add',
+        row,
+        workType: 'Office',
+        checkIn: timeOnDay(date, null, '10:00'),
+        checkOut: isTodayOrLater ? null : timeOnDay(date, null, '19:00'),
+    });
+
+    const openBulk = () => setDialog({
+        type: 'bulk',
+        mode: 'out',
+        checkIn: timeOnDay(date, null, '10:00'),
+        checkOut: timeOnDay(date, null, '18:00'),
+    });
+
+    const saveEdit = async () => {
+        const { row, checkIn, checkOut } = dialog;
+        if (!checkIn && !checkOut) {
+            showToast({ type: 'warning', text1: 'Set a time', text2: 'Choose a check-in or check-out time' });
+            return;
+        }
+        if (checkIn && checkOut && checkOut <= checkIn) {
+            showToast({ type: 'warning', text1: 'Check the times', text2: 'Check-out must be after check-in' });
+            return;
+        }
+        setSaving(true);
+        try {
+            const res = await ApiService.updateAttendanceTimes({
+                attendance_id: row.name,
+                check_in_time: checkIn ? `${ymd} ${toHHMM(checkIn)}:00` : undefined,
+                check_out_time: checkOut ? `${ymd} ${toHHMM(checkOut)}:00` : undefined,
+            });
+            if (res.success) {
+                showToast({ type: 'success', text1: row.employee_name, text2: res.data?.message?.message || 'Times updated' });
+                setDialog(null);
+                load(true);
+            } else {
+                showToast({ type: 'error', text1: 'Not saved', text2: res.message || 'Failed to update times' });
+            }
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const saveAdd = async () => {
+        const { row, workType, checkIn, checkOut } = dialog;
+        if (checkOut && checkOut <= checkIn) {
+            showToast({ type: 'warning', text1: 'Check the times', text2: 'Check-out must be after check-in' });
+            return;
+        }
+        setSaving(true);
+        try {
+            const res = await ApiService.adminMarkAttendance({
+                employee: row.employee,
+                date: ymd,
+                check_in_time: toHHMM(checkIn),
+                check_out_time: checkOut ? toHHMM(checkOut) : undefined,
+                work_type: workType,
+            });
+            if (res.success) {
+                showToast({ type: 'success', text1: row.employee_name, text2: res.data?.message?.message || 'Attendance added' });
+                setDialog(null);
+                load(true);
+            } else {
+                showToast({ type: 'error', text1: 'Not added', text2: res.message || 'Failed to add attendance' });
+            }
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const saveBulk = async () => {
+        const { mode, checkIn, checkOut } = dialog;
+        if (mode === 'both' && checkOut <= checkIn) {
+            showToast({ type: 'warning', text1: 'Check the times', text2: 'Check-out must be after check-in' });
+            return;
+        }
+        setSaving(true);
+        try {
+            const res = await ApiService.bulkUpdateAttendanceTimes({
+                attendance_updates: selected.map((id) => ({
+                    attendance_id: id,
+                    check_in_time: mode !== 'out' ? toHHMM(checkIn) : undefined,
+                    check_out_time: mode !== 'in' ? toHHMM(checkOut) : undefined,
+                })),
+            });
+            const result = res.data?.message || {};
+            if (res.success) {
+                const firstError = result.errors?.[0]?.error;
+                showToast({
+                    type: result.failed ? 'warning' : 'success',
+                    text1: `${result.successful ?? 0} updated${result.failed ? `, ${result.failed} not updated` : ''}`,
+                    text2: firstError || 'Drafts with both times are submitted',
+                });
+                setDialog(null);
+                setSelected([]);
+                setSelectMode(false);
+                load(true);
+            } else {
+                showToast({ type: 'error', text1: 'Not updated', text2: res.message || 'Bulk update failed' });
+            }
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const submitRecord = (row) => {
+        const noCheckout = !row.out_time;
         Alert.alert(
             'Submit Attendance',
             noCheckout
-                ? `${row.employee_name || row.employee} has no check-out time. Submit ${row.name} anyway? It can't be edited normally after submitting.`
-                : `Submit ${row.name} for ${row.employee_name || row.employee}?`,
+                ? `${row.employee_name} has no check-out time. Submit anyway? Add the check-out time first if you know it.`
+                : `Submit ${row.employee_name}'s attendance for ${longDate(date)}?`,
             [
-                { text: 'No', style: 'cancel' },
+                { text: 'Cancel', style: 'cancel' },
                 {
                     text: 'Submit',
                     onPress: async () => {
                         const res = await ApiService.submitAttendance({ attendance_id: row.name });
-                        setSnack({
-                            visible: true,
-                            msg: res.success ? res.data?.message?.message || 'Attendance submitted' : res.message || 'Failed to submit',
-                        });
-                        if (res.success) fetchList();
+                        if (res.success) {
+                            showToast({ type: 'success', text1: row.employee_name, text2: res.data?.message?.message || 'Attendance submitted' });
+                            load(true);
+                        } else {
+                            showToast({ type: 'error', text1: 'Not submitted', text2: res.message || 'Failed to submit' });
+                        }
                     },
                 },
             ]
         );
     };
 
-    const doDeleteRecord = async (row) => {
-        Alert.alert(
-            'Delete/Cancel Attendance',
-            `Are you sure you want to ${row.docstatus === 1 ? 'cancel' : 'delete'} record ${row.name}?`,
-            [
-                { text: 'No', style: 'cancel' },
-                {
-                    text: 'Yes',
-                    style: 'destructive',
-                    onPress: async () => {
-                        const res = await ApiService.deleteAttendanceRecord({ attendance_id: row.name, reason: 'Admin action' });
-                        setSnack({
-                            visible: true,
-                            msg: res.success ? 'Record removed' : res.message || 'Failed to remove',
-                        });
-                        if (res.success) fetchList();
-                    },
-                },
-            ]
-        );
-    };
+    const toggleSelect = (id) => setSelected((old) => (old.includes(id) ? old.filter((x) => x !== id) : [...old, id]));
+    const allSelected = selectableRows.length > 0 && selectableRows.every((r) => selected.includes(r.name));
+    const toggleSelectAll = () => setSelected(allSelected ? [] : selectableRows.map((r) => r.name));
 
-    // ---- actions (bulk)
-    const getTargetRecords = () => (selectMode ? selected : list.map((r) => r.name));
+    // ------------------------------------------------------------------ row
+    const renderRow = (row) => {
+        const isMissing = !row.name;
+        const isLeave = row.status === 'On Leave';
+        const status = STATUS[row.status] || { color: STATUS_COLORS.muted, label: row.status };
+        const checkIn = formatTimeOfDay(row.in_time);
+        const checkOut = formatTimeOfDay(row.out_time);
+        const hours = formatHours(row.working_hours);
+        const canSelect = selectMode && !isMissing && !isLeave;
+        const checked = selected.includes(row.name);
 
-    const openBulkOperation = (type) => {
-        const ids = getTargetRecords();
-        if (!ids.length) {
-            setSnack({ visible: true, msg: 'No records selected' });
-            return;
-        }
-        
-        // Set default times based on operation type
-        const t = new Date(date);
-        const defaultCheckIn = new Date(date);
-        defaultCheckIn.setHours(9, 0, 0, 0);
-        const defaultCheckOut = new Date(date);
-        defaultCheckOut.setHours(18, 0, 0, 0);
-
-        setBulkOpDialog({
-            open: true,
-            type,
-            checkIn: type === 'checkin' || type === 'both' ? fmt(defaultCheckIn) : '',
-            checkOut: type === 'checkout' || type === 'both' ? fmt(defaultCheckOut) : '',
-        });
-        setBulkMenu(false);
-    };
-
-    const doBulkOperation = async () => {
-        setBulkBusy(true);
-        const ids = getTargetRecords();
-        
-        if (!ids.length) {
-            setSnack({ visible: true, msg: 'No records selected' });
-            setBulkBusy(false);
-            return;
-        }
-
-        const { type, checkIn, checkOut } = bulkOpDialog;
-
-        try {
-            if (type === 'checkout' && !checkIn) {
-                // Quick checkout with default time
-                const t = new Date(date);
-                t.setHours(18, 0, 0, 0);
-                const res = await ApiService.bulkManualCheckout({
-                    attendance_ids: ids,
-                    default_checkout_time: checkOut || fmt(t),
-                });
-                
-                setSnack({
-                    visible: true,
-                    msg: res.success
-                        ? `Bulk checkout: ${res.data?.message?.successful ?? 0} OK, ${res.data?.message?.failed ?? 0} failed`
-                        : res.message || 'Bulk checkout failed',
-                });
-                
-                if (res.success) {
-                    setBulkOpDialog({ open: false, type: '', checkIn: '', checkOut: '' });
-                    setSelected([]);
-                    setSelectMode(false);
-                    fetchList();
-                }
-            } else {
-                // Use bulk update for check-in or both
-                const payload = ids.map((id) => ({
-                    attendance_id: id,
-                    check_in_time: checkIn || undefined,
-                    check_out_time: checkOut || undefined,
-                }));
-                
-                const res = await ApiService.bulkUpdateAttendanceTimes({ attendance_updates: payload });
-                
-                setSnack({
-                    visible: true,
-                    msg: res.success
-                        ? `Bulk update: ${res.data?.message?.successful ?? 0} OK, ${res.data?.message?.failed ?? 0} failed`
-                        : res.message || 'Bulk update failed',
-                });
-                
-                if (res.success) {
-                    setBulkOpDialog({ open: false, type: '', checkIn: '', checkOut: '' });
-                    setSelected([]);
-                    setSelectMode(false);
-                    fetchList();
-                }
-            }
-        } catch (error) {
-            setSnack({ visible: true, msg: 'Operation failed: ' + error.message });
-        }
-
-        setBulkBusy(false);
-    };
-
-    const toggleSelectAll = () => {
-        if (selected.length === list.length) {
-            setSelected([]);
-        } else {
-            setSelected(list.map((r) => r.name));
-        }
-    };
-
-    // ---- UI helpers
-    const getStatusColor = (item) => {
-        if (item.status === 'On Leave') return '#F59E0B';
-        if (!item.in_time) return '#EF4444';
-        if (!item.out_time && !item.custom_out_time_copy) return '#F59E0B';
-        return '#10B981';
-    };
-    const getStatusText = (item) => {
-        if (item.status === 'On Leave') return 'On Leave';
-        if (!item.in_time) return 'No Check-In';
-        if (!item.out_time && !item.custom_out_time_copy) return 'Missing Check-Out';
-        return 'Complete';
-    };
-    const navigateDate = (dir) => {
-        setDate((d) => (dir === 'prev' ? subDays(d, 1) : addDays(d, 1)));
-    };
-
-    // ---- row render
-    const renderItem = ({ item }) => {
-        const checked = selected.includes(item.name);
-        const isOnLeave = item.status === 'On Leave';
-        
         return (
-            <View style={styles.attendanceItem}>
-                {selectMode ? (
-                    <TouchableOpacity
-                        style={[styles.checkbox, checked && styles.checkboxSelected]}
-                        onPress={() => toggleSelect(item.name)}
-                        activeOpacity={0.8}
-                    >
-                        {checked ? <Icon name="check" size={12} color="white" /> : null}
-                    </TouchableOpacity>
-                ) : null}
-
-                <View style={styles.employeeInfo}>
-                    <Text style={styles.employeeName}>{item.employee_name}</Text>
-                    <Text style={styles.employeeId}>ID: {item.employee}</Text>
-
-                    {isOnLeave ? (
-                        <View style={styles.leaveContainer}>
-                            <Icon name="plane-departure" size={12} color="#F59E0B" />
-                            <Text style={styles.leaveText}>Employee is on leave today</Text>
+            <TouchableOpacity
+                key={row.name || `missing-${row.employee}`}
+                style={[styles.attendanceItem, checked && styles.itemSelected]}
+                onPress={canSelect ? () => toggleSelect(row.name) : undefined}
+                activeOpacity={canSelect ? 0.8 : 1}
+                disabled={!canSelect}
+            >
+                <View style={styles.itemHeader}>
+                    {selectMode ? (
+                        <View style={[styles.checkbox, checked && styles.checkboxChecked, !canSelect && styles.checkboxDisabled]}>
+                            {checked ? <Icon name="check" size={10} color={colors.white} /> : null}
                         </View>
-                    ) : (
-                        <View style={styles.timeContainer}>
-                            {item.in_time ? (
-                                <View style={styles.timeInfo}>
-                                    <Icon name="sign-in-alt" size={12} color="#10B981" />
-                                    <Text style={styles.timeText}>In: {hhmmss(item.in_time)}</Text>
-                                </View>
-                            ) : (
-                                <View style={styles.timeInfo}>
-                                    <Icon name="exclamation-circle" size={12} color="#EF4444" />
-                                    <Text style={[styles.timeText, { color: '#EF4444' }]}>No check-in</Text>
-                                </View>
-                            )}
-
-                            {(item.out_time || item.custom_out_time_copy) ? (
-                                <View style={styles.timeInfo}>
-                                    <Icon name="sign-out-alt" size={12} color="#EF4444" />
-                                    <Text style={styles.timeText}>
-                                        Out: {hhmmss(item.out_time || item.custom_out_time_copy)}
-                                    </Text>
-                                </View>
-                            ) : (
-                                <View style={styles.timeInfo}>
-                                    <Icon name="exclamation-circle" size={12} color="#F59E0B" />
-                                    <Text style={[styles.timeText, { color: '#F59E0B' }]}>No check-out</Text>
-                                </View>
-                            )}
+                    ) : null}
+                    <View style={styles.flex}>
+                        <Text style={styles.employeeName}>{row.employee_name}</Text>
+                        <Text style={styles.employeeId}>{row.employee}</Text>
+                    </View>
+                    <View style={styles.badgesContainer}>
+                        {row.late_entry ? (
+                            <View style={[styles.badge, styles.badgeLate]}>
+                                <Text style={styles.badgeText}>Late</Text>
+                            </View>
+                        ) : null}
+                        <View style={[styles.badge, { backgroundColor: status.color }]}>
+                            <Text style={styles.badgeText}>{status.label}</Text>
                         </View>
-                    )}
-
-                    <View style={styles.statusContainer}>
-                        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item) }]}>
-                            <Text style={styles.statusText}>{getStatusText(item)}</Text>
-                        </View>
-
-                        <View
-                            style={[
-                                styles.statusBadge,
-                                { backgroundColor: item.docstatus === 1 ? '#10B981' : '#F59E0B' },
-                            ]}
-                        >
-                            <Text style={styles.statusText}>{item.docstatus === 1 ? 'Submitted' : 'Draft'}</Text>
-                        </View>
+                        {!isMissing ? (
+                            <View style={[styles.badge, row.docstatus === 1 ? styles.badgeSubmitted : styles.badgeDraft]}>
+                                <Text style={styles.badgeText}>{row.docstatus === 1 ? 'Submitted' : 'Draft'}</Text>
+                            </View>
+                        ) : null}
                     </View>
                 </View>
 
-                {!selectMode && !isOnLeave && (
-                    <View style={styles.actionButtons}>
-                        {/* Edit Check-In */}
-                        <TouchableOpacity
-                            style={[styles.actionButton, { backgroundColor: '#10B981' }]}
-                            onPress={() => openEditTimes(item, 'in')}
-                        >
-                            <Icon name="sign-in-alt" size={10} color="white" />
-                            <Text style={styles.buttonText}>Edit In</Text>
-                        </TouchableOpacity>
+                <View style={styles.divider} />
 
-                        {/* Edit Check-Out */}
-                        <TouchableOpacity
-                            style={[styles.actionButton, { backgroundColor: '#8B5CF6' }]}
-                            onPress={() => openEditTimes(item, 'out')}
-                        >
-                            <Icon name="sign-out-alt" size={10} color="white" />
-                            <Text style={styles.buttonText}>Edit Out</Text>
-                        </TouchableOpacity>
-
-                        {/* Edit Both */}
-                        <TouchableOpacity
-                            style={[styles.actionButton, { backgroundColor: '#3B82F6' }]}
-                            onPress={() => openEditTimes(item, 'both')}
-                        >
-                            <Icon name="edit" size={10} color="white" />
-                            <Text style={styles.buttonText}>Both</Text>
-                        </TouchableOpacity>
-
-                        {/* Submit (drafts only) */}
-                        {item.docstatus === 0 && (
-                            <TouchableOpacity
-                                style={[styles.actionButton, { backgroundColor: '#F59E0B' }]}
-                                onPress={() => doSubmitRecord(item)}
-                            >
-                                <Icon name="check-circle" size={10} color="white" />
-                                <Text style={styles.buttonText}>Submit</Text>
-                            </TouchableOpacity>
-                        )}
+                {isMissing ? (
+                    <Text style={styles.noteText}>No check-in recorded on this day.</Text>
+                ) : isLeave ? (
+                    <Text style={styles.noteText}>On approved leave. Nothing to fix.</Text>
+                ) : (
+                    <View style={styles.timeContainer}>
+                        <View style={styles.timeInfo}>
+                            <Icon name="sign-in-alt" size={12} color={checkIn ? STATUS_COLORS.present : STATUS_COLORS.absent} />
+                            <Text style={[styles.timeText, !checkIn && styles.missingText]}>In: {checkIn || 'Missing'}</Text>
+                        </View>
+                        <View style={styles.timeInfo}>
+                            <Icon name="sign-out-alt" size={12} color={checkOut ? STATUS_COLORS.absent : STATUS_COLORS.late} />
+                            <Text style={[styles.timeText, !checkOut && styles.pendingText]}>Out: {checkOut || 'Missing'}</Text>
+                        </View>
+                        {hours ? (
+                            <View style={styles.timeInfo}>
+                                <Icon name="hourglass-half" size={11} color={colors.primary} />
+                                <Text style={styles.timeText}>{hours}</Text>
+                            </View>
+                        ) : null}
                     </View>
                 )}
-            </View>
+
+                {!selectMode && !isLeave ? (
+                    <View style={styles.actionRow}>
+                        {isMissing ? (
+                            <TouchableOpacity style={[styles.actionButton, styles.actionPrimary]} onPress={() => openAdd(row)} activeOpacity={0.8}>
+                                <Icon name="plus" size={11} color={colors.white} />
+                                <Text style={[styles.actionText, styles.actionTextLight]}>Add Attendance</Text>
+                            </TouchableOpacity>
+                        ) : (
+                            <>
+                                <TouchableOpacity style={styles.actionButton} onPress={() => openEdit(row)} activeOpacity={0.8}>
+                                    <Icon name="edit" size={11} color={colors.primary} />
+                                    <Text style={styles.actionText}>Edit Times</Text>
+                                </TouchableOpacity>
+                                {row.docstatus === 0 ? (
+                                    <TouchableOpacity style={[styles.actionButton, styles.actionSubmit]} onPress={() => submitRecord(row)} activeOpacity={0.8}>
+                                        <Icon name="check-circle" size={11} color={STATUS_COLORS.present} />
+                                        <Text style={[styles.actionText, styles.actionTextSubmit]}>Submit</Text>
+                                    </TouchableOpacity>
+                                ) : null}
+                            </>
+                        )}
+                    </View>
+                ) : null}
+            </TouchableOpacity>
         );
     };
 
-    return (
-        <View style={styles.container}>
-            {/* Date Navigation */}
-            <View style={styles.dateNavigation}>
-                <TouchableOpacity style={styles.dateNavButton} onPress={() => navigateDate('prev')} activeOpacity={0.8}>
-                    <Icon name="chevron-left" size={16} color="#6366F1" />
-                </TouchableOpacity>
+    // ------------------------------------------------------------------ dialogs
+    const renderDialog = () => {
+        if (!dialog) {
+            return null;
+        }
+        const title = dialog.type === 'edit' ? 'Edit Times' : dialog.type === 'add' ? 'Add Attendance' : 'Set Times';
+        const subtitle = dialog.type === 'bulk'
+            ? `${selected.length} record${selected.length === 1 ? '' : 's'} · ${longDate(date)}`
+            : `${dialog.row.employee_name} · ${longDate(date)}`;
+        const onSave = dialog.type === 'edit' ? saveEdit : dialog.type === 'add' ? saveAdd : saveBulk;
 
-                <TouchableOpacity style={styles.dateInfo} onPress={() => setShowDate(true)} activeOpacity={0.8}>
-                    <Text style={styles.dateLabel}>{displayDate}</Text>
-                    <Text style={styles.recordCount}>{list.length} records</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity style={styles.dateNavButton} onPress={() => navigateDate('next')} activeOpacity={0.8}>
-                    <Icon name="chevron-right" size={16} color="#6366F1" />
-                </TouchableOpacity>
-            </View>
-
-            {/* Mode Switch & Actions */}
-            <View style={styles.controlBar}>
-                <View style={styles.modeSwitch}>
-                    <TouchableOpacity 
-                        onPress={() => setMode('pending')} 
-                        style={[styles.modeBtn, mode === 'pending' && styles.modeBtnActive]}
-                        activeOpacity={0.8}
-                    >
-                        <Text style={[styles.modeText, mode === 'pending' && styles.modeTextActive]}>Pending</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity 
-                        onPress={() => setMode('all')} 
-                        style={[styles.modeBtn, mode === 'all' && styles.modeBtnActive]}
-                        activeOpacity={0.8}
-                    >
-                        <Text style={[styles.modeText, mode === 'all' && styles.modeTextActive]}>All</Text>
-                    </TouchableOpacity>
-                </View>
-
-                <View style={styles.actionBar}>
-                    {selectMode && (
-                        <TouchableOpacity
-                            style={styles.selectAllBtn}
-                            onPress={toggleSelectAll}
-                            activeOpacity={0.8}
-                        >
-                            <Icon 
-                                name={selected.length === list.length ? "check-square" : "square"} 
-                                size={16} 
-                                color="#6366F1" 
-                            />
-                            <Text style={styles.selectAllText}>
-                                {selected.length === list.length ? 'Deselect All' : 'Select All'}
-                            </Text>
-                        </TouchableOpacity>
-                    )}
-                    
-                    <TouchableOpacity
-                        style={[styles.bulkBtn, selectMode && styles.bulkBtnActive]}
-                        onPress={() => {
-                            if (selectMode && selected.length === 0) {
-                                setSelectMode(false);
-                            } else {
-                                setSelectMode(!selectMode);
-                                if (!selectMode) setSelected([]);
-                            }
-                        }}
-                        activeOpacity={0.8}
-                    >
-                        <Icon name={selectMode ? "times" : "tasks"} size={14} color="white" />
-                        <Text style={styles.bulkBtnText}>
-                            {selectMode 
-                                ? (selected.length > 0 ? `${selected.length} Selected` : 'Cancel')
-                                : 'Bulk'}
-                        </Text>
-                    </TouchableOpacity>
-
-                    {selectMode && (
-                        <TouchableOpacity
-                            style={[styles.bulkActionBtn, (!list.length || bulkBusy) && styles.buttonDisabled]}
-                            onPress={() => setBulkMenu(true)}
-                            disabled={!list.length || bulkBusy}
-                            activeOpacity={0.8}
-                        >
-                            <Icon name="bolt" size={14} color="white" />
-                            <Text style={styles.bulkActionText}>Actions</Text>
-                        </TouchableOpacity>
-                    )}
-                </View>
-            </View>
-
-            {/* Quick Stats row */}
-            {stats ? (
-                <View style={styles.quickStats}>
-                    <View style={styles.statItem}>
-                        <Text style={styles.statNumber}>{stats.attendance_statistics?.total_records ?? 0}</Text>
-                        <Text style={styles.statLabel}>Total</Text>
-                    </View>
-                    <View style={styles.statItem}>
-                        <Text style={[styles.statNumber, { color: '#F59E0B' }]}>
-                            {stats.attendance_statistics?.missing_checkout ?? 0}
-                        </Text>
-                        <Text style={styles.statLabel}>No Out</Text>
-                    </View>
-                    <View style={styles.statItem}>
-                        <Text style={[styles.statNumber, { color: '#EF4444' }]}>
-                            {stats.attendance_statistics?.missing_checkin ?? 0}
-                        </Text>
-                        <Text style={styles.statLabel}>No In</Text>
-                    </View>
-                    <View style={styles.statItem}>
-                        <Text style={[styles.statNumber, { color: '#10B981' }]}>
-                            {stats.attendance_rate ?? 0}%
-                        </Text>
-                        <Text style={styles.statLabel}>Rate</Text>
-                    </View>
-                </View>
-            ) : null}
-
-            {/* Content */}
-            {loading ? (
-                <View style={styles.loadingContainer}>
-                    <ActivityIndicator color="#6366F1" size="large" />
-                    <Text style={styles.loadingText}>Loading attendance records...</Text>
-                </View>
-            ) : list.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                    <Icon name="calendar-times" size={48} color="#9CA3AF" />
-                    <Text style={styles.emptyTitle}>No Records Found</Text>
-                    <Text style={styles.emptyText}>
-                        {mode === 'pending' ? 'No pending checkouts' : 'No attendance records'} for {ymd}
-                    </Text>
-                </View>
-            ) : (
-                <FlatList
-                    data={list}
-                    keyExtractor={(item) => item.name}
-                    renderItem={renderItem}
-                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-                    contentContainerStyle={{ paddingBottom: 20, paddingTop: 8 }}
-                />
-            )}
-
-            {/* Date picker */}
-            {showDate && (
-                <DateTimePicker
-                    value={date}
-                    mode="date"
-                    onChange={(_, d) => {
-                        setShowDate(false);
-                        if (d) setDate(d);
-                    }}
-                />
-            )}
-
-            {/* Bulk Operations Menu */}
-            <Modal visible={bulkMenu} transparent animationType="fade">
-                <TouchableOpacity 
-                    style={styles.menuOverlay} 
-                    activeOpacity={1} 
-                    onPress={() => setBulkMenu(false)}
-                >
-                    <View style={styles.menuContent}>
-                        <Text style={styles.menuTitle}>Bulk Operations</Text>
-                        <Text style={styles.menuSubtitle}>
-                            {selectMode && selected.length > 0 
-                                ? `${selected.length} records selected` 
-                                : `All ${list.length} records`}
-                        </Text>
-                        
-                        <Divider style={{ marginVertical: 12 }} />
-
-                        <TouchableOpacity 
-                            style={styles.menuItem}
-                            onPress={() => openBulkOperation('checkin')}
-                            activeOpacity={0.7}
-                        >
-                            <Icon name="sign-in-alt" size={18} color="#10B981" />
-                            <View style={{ flex: 1, marginLeft: 12 }}>
-                                <Text style={styles.menuItemTitle}>Bulk Check-In</Text>
-                                <Text style={styles.menuItemDesc}>Set check-in time (default 9:00 AM)</Text>
-                            </View>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity 
-                            style={styles.menuItem}
-                            onPress={() => openBulkOperation('checkout')}
-                            activeOpacity={0.7}
-                        >
-                            <Icon name="sign-out-alt" size={18} color="#EF4444" />
-                            <View style={{ flex: 1, marginLeft: 12 }}>
-                                <Text style={styles.menuItemTitle}>Bulk Check-Out</Text>
-                                <Text style={styles.menuItemDesc}>Set check-out time (default 6:00 PM)</Text>
-                            </View>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity 
-                            style={styles.menuItem}
-                            onPress={() => openBulkOperation('both')}
-                            activeOpacity={0.7}
-                        >
-                            <Icon name="edit" size={18} color="#6366F1" />
-                            <View style={{ flex: 1, marginLeft: 12 }}>
-                                <Text style={styles.menuItemTitle}>Bulk Update Both</Text>
-                                <Text style={styles.menuItemDesc}>Set both check-in and check-out times</Text>
-                            </View>
-                        </TouchableOpacity>
-
-                        <Divider style={{ marginVertical: 12 }} />
-
-                        <TouchableOpacity 
-                            style={[styles.menuItem, { justifyContent: 'center' }]}
-                            onPress={() => setBulkMenu(false)}
-                            activeOpacity={0.7}
-                        >
-                            <Text style={[styles.menuItemTitle, { color: '#6B7280' }]}>Cancel</Text>
-                        </TouchableOpacity>
-                    </View>
-                </TouchableOpacity>
-            </Modal>
-
-            {/* Bulk Operation Dialog */}
-            <Modal visible={bulkOpDialog.open} transparent animationType="slide">
+        return (
+            <Modal visible transparent animationType="fade" onRequestClose={closeDialog}>
                 <View style={styles.modalOverlay}>
                     <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>
-                            {bulkOpDialog.type === 'checkin' && 'Bulk Check-In'}
-                            {bulkOpDialog.type === 'checkout' && 'Bulk Check-Out'}
-                            {bulkOpDialog.type === 'both' && 'Bulk Update Times'}
-                        </Text>
-                        <Text style={styles.modalSubtitle}>
-                            {selectMode && selected.length > 0 
-                                ? `${selected.length} records selected` 
-                                : `All ${list.length} records`}
-                        </Text>
+                        <Text style={styles.modalTitle}>{title}</Text>
+                        <Text style={styles.modalSubtitle}>{subtitle}</Text>
 
-                        <HelperText type="info" visible>
-                            Date: {ymd}. Enter custom times or use defaults.
-                        </HelperText>
-
-                        <ScrollView style={{ maxHeight: 350 }}>
-                            {(bulkOpDialog.type === 'checkin' || bulkOpDialog.type === 'both') && (
-                                <View style={styles.timeInputContainer}>
-                                    <Text style={styles.inputLabel}>
-                                        Check-In Time (YYYY-MM-DD HH:mm:ss)
-                                    </Text>
-                                    <TextInput
-                                        mode="outlined"
-                                        value={bulkOpDialog.checkIn}
-                                        placeholder="2024-01-01 09:00:00"
-                                        onChangeText={(t) => setBulkOpDialog((s) => ({ ...s, checkIn: t }))}
-                                        style={{ backgroundColor: 'white' }}
-                                    />
-                                    <HelperText type="info">
-                                        Default: 9:00 AM on {ymd}
-                                    </HelperText>
+                        {dialog.type === 'add' ? (
+                            <View style={styles.inputContainer}>
+                                <Text style={styles.inputLabel}>Work type</Text>
+                                <View style={styles.segmentRow}>
+                                    {WORK_TYPES.map((w) => (
+                                        <TouchableOpacity
+                                            key={w.key}
+                                            style={[styles.segment, dialog.workType === w.key && styles.segmentActive]}
+                                            onPress={() => setDialogTime('workType', w.key)}
+                                            activeOpacity={0.8}
+                                        >
+                                            <Icon name={w.icon} size={12} color={dialog.workType === w.key ? colors.white : colors.textSecondary} />
+                                            <Text style={[styles.segmentText, dialog.workType === w.key && styles.segmentTextActive]}>{w.label}</Text>
+                                        </TouchableOpacity>
+                                    ))}
                                 </View>
-                            )}
+                            </View>
+                        ) : null}
 
-                            {(bulkOpDialog.type === 'checkout' || bulkOpDialog.type === 'both') && (
-                                <View style={styles.timeInputContainer}>
-                                    <Text style={styles.inputLabel}>
-                                        Check-Out Time (YYYY-MM-DD HH:mm:ss)
-                                    </Text>
-                                    <TextInput
-                                        mode="outlined"
-                                        value={bulkOpDialog.checkOut}
-                                        placeholder="2024-01-01 18:00:00"
-                                        onChangeText={(t) => setBulkOpDialog((s) => ({ ...s, checkOut: t }))}
-                                        style={{ backgroundColor: 'white' }}
-                                    />
-                                    <HelperText type="info">
-                                        Default: 6:00 PM on {ymd}
-                                    </HelperText>
+                        {dialog.type === 'bulk' ? (
+                            <View style={styles.inputContainer}>
+                                <Text style={styles.inputLabel}>Set</Text>
+                                <View style={styles.segmentRow}>
+                                    {[
+                                        { key: 'in', label: 'Check-in' },
+                                        { key: 'out', label: 'Check-out' },
+                                        { key: 'both', label: 'Both' },
+                                    ].map((m) => (
+                                        <TouchableOpacity
+                                            key={m.key}
+                                            style={[styles.segment, dialog.mode === m.key && styles.segmentActive]}
+                                            onPress={() => setDialogTime('mode', m.key)}
+                                            activeOpacity={0.8}
+                                        >
+                                            <Text style={[styles.segmentText, dialog.mode === m.key && styles.segmentTextActive]}>{m.label}</Text>
+                                        </TouchableOpacity>
+                                    ))}
                                 </View>
-                            )}
-                        </ScrollView>
+                            </View>
+                        ) : null}
+
+                        {dialog.type !== 'bulk' || dialog.mode !== 'out' ? renderTimeField('Check-in time', 'checkIn') : null}
+                        {dialog.type !== 'bulk' || dialog.mode !== 'in'
+                            ? renderTimeField(dialog.type === 'add' ? 'Check-out time (optional)' : 'Check-out time', 'checkOut', dialog.type === 'add')
+                            : null}
+
+                        <Text style={styles.modalNote}>
+                            {dialog.type === 'add'
+                                ? 'With a check-out time the record is submitted straight away.'
+                                : 'A draft with both times is submitted automatically.'}
+                        </Text>
 
                         <View style={styles.modalButtons}>
-                            <TouchableOpacity
-                                style={[styles.modalButton, styles.cancelButton]}
-                                onPress={() => setBulkOpDialog({ open: false, type: '', checkIn: '', checkOut: '' })}
-                                activeOpacity={0.8}
-                            >
+                            <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={closeDialog} disabled={saving} activeOpacity={0.8}>
                                 <Text style={styles.cancelButtonText}>Cancel</Text>
                             </TouchableOpacity>
-
-                            <TouchableOpacity 
-                                style={[styles.modalButton, styles.confirmButton]} 
-                                onPress={doBulkOperation}
-                                disabled={bulkBusy}
-                                activeOpacity={0.8}
-                            >
-                                {bulkBusy ? (
-                                    <ActivityIndicator size="small" color="white" />
-                                ) : (
-                                    <Text style={styles.confirmButtonText}>Apply</Text>
+                            <TouchableOpacity style={[styles.modalButton, styles.confirmButton]} onPress={onSave} disabled={saving} activeOpacity={0.8}>
+                                {saving ? <ActivityIndicator size="small" color={colors.white} /> : (
+                                    <Text style={styles.confirmButtonText}>{dialog.type === 'add' ? 'Add' : dialog.type === 'bulk' ? 'Apply' : 'Save'}</Text>
                                 )}
                             </TouchableOpacity>
                         </View>
                     </View>
                 </View>
             </Modal>
+        );
+    };
 
-            {/* Edit Single Record Modal */}
-            <Modal visible={editDialog.open} transparent animationType="slide">
-                <View style={styles.modalOverlay}>
-                    <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>
-                            {editDialog.mode === 'in' && 'Edit Check-In Time'}
-                            {editDialog.mode === 'out' && 'Edit Check-Out Time'}
-                            {editDialog.mode === 'both' && 'Edit Times'}
-                        </Text>
-                        <Text style={styles.modalSubtitle}>
-                            {editDialog.row?.employee_name} • {editDialog.row?.name}
-                        </Text>
+    // ------------------------------------------------------------------ main
+    return (
+        <View style={styles.container}>
+            {/* Date navigation */}
+            <View style={styles.dateNavigation}>
+                <TouchableOpacity style={styles.dateNavButton} onPress={() => navigateDate('prev')} activeOpacity={0.8}>
+                    <Icon name="chevron-left" size={16} color={colors.primary} />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.dateInfo} onPress={pickDate} activeOpacity={0.8}>
+                    <Text style={styles.dateLabel}>{longDate(date)}</Text>
+                    <Text style={styles.recordCount}>{counts.records} records{counts.missing ? ` · ${counts.missing} not marked` : ''}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.dateNavButton, isTodayOrLater && styles.disabled]}
+                    onPress={() => navigateDate('next')}
+                    disabled={isTodayOrLater}
+                    activeOpacity={0.8}
+                >
+                    <Icon name="chevron-right" size={16} color={colors.primary} />
+                </TouchableOpacity>
+            </View>
 
-                        <HelperText type="info" visible>
-                            Date: {ymd} • {editDialog.mode === 'in' ? 'Default: 10:00 AM' : editDialog.mode === 'out' ? 'Default: 7:00 PM' : 'Defaults: 10 AM / 7 PM'}
-                        </HelperText>
-
-                        {(editDialog.mode === 'in' || editDialog.mode === 'both') && (
-                            <View style={styles.timeInputContainer}>
-                                <Text style={styles.inputLabel}>Check-In Time (HH:MM)</Text>
-                                <TextInput
-                                    mode="outlined"
-                                    value={editDialog.checkIn}
-                                    placeholder="10:00"
-                                    onChangeText={(t) =>
-                                        setEditDialog((s) => ({ ...s, checkIn: t }))
-                                    }
-                                    style={{ backgroundColor: 'white' }}
-                                    keyboardType="numeric"
-                                />
-                            </View>
-                        )}
-
-                        {(editDialog.mode === 'out' || editDialog.mode === 'both') && (
-                            <View style={styles.timeInputContainer}>
-                                <Text style={styles.inputLabel}>Check-Out Time (HH:MM)</Text>
-                                <TextInput
-                                    mode="outlined"
-                                    value={editDialog.checkOut}
-                                    placeholder="19:00"
-                                    onChangeText={(t) =>
-                                        setEditDialog((s) => ({ ...s, checkOut: t }))
-                                    }
-                                    style={{ backgroundColor: 'white' }}
-                                    keyboardType="numeric"
-                                />
-                            </View>
-                        )}
-
-                        <View style={styles.modalButtons}>
-                            <TouchableOpacity
-                                style={[styles.modalButton, styles.cancelButton]}
-                                onPress={() =>
-                                    setEditDialog({ open: false, row: null, mode: null, checkIn: null, checkOut: null, showPicker: null })
-                                }
-                                activeOpacity={0.8}
-                            >
-                                <Text style={styles.cancelButtonText}>Cancel</Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity 
-                                style={[styles.modalButton, styles.confirmButton]} 
-                                onPress={doUpdateTimes}
-                                activeOpacity={0.8}
-                            >
-                                <Text style={styles.confirmButtonText}>Save</Text>
-                            </TouchableOpacity>
+            {/* Summary */}
+            <View style={styles.summaryContainer}>
+                {[
+                    { label: 'Records', value: counts.records, icon: 'clipboard-list', color: colors.primary },
+                    { label: 'No Check-out', value: counts.pending, icon: 'sign-out-alt', color: STATUS_COLORS.late },
+                    { label: 'Not Marked', value: counts.missing, icon: 'user-clock', color: STATUS_COLORS.absent },
+                    { label: 'Drafts', value: counts.drafts, icon: 'pen', color: colors.textSecondary },
+                ].map((s) => (
+                    <View key={s.label} style={styles.statCard}>
+                        <Icon name={s.icon} size={15} color={s.color} />
+                        <View style={styles.flex}>
+                            <Text style={[styles.statNumber, { color: s.color }]}>{s.value}</Text>
+                            <Text style={styles.statLabel} numberOfLines={1}>{s.label}</Text>
                         </View>
                     </View>
-                </View>
-            </Modal>
+                ))}
+            </View>
 
-            <Snackbar
-                visible={snack.visible}
-                onDismiss={() => setSnack({ visible: false, msg: '' })}
-                duration={2500}
-            >
-                {snack.msg}
-            </Snackbar>
+            {/* Tabs */}
+            <View style={styles.tabContainer}>
+                {TABS.map((t) => {
+                    const active = tab === t.key;
+                    const count = t.key === 'all' ? rows.length : t.key === 'pending' ? counts.pending : counts.missing;
+                    return (
+                        <TouchableOpacity
+                            key={t.key}
+                            style={[styles.tab, active && styles.tabActive]}
+                            onPress={() => {
+                                setTab(t.key);
+                                setSelected([]);
+                            }}
+                            activeOpacity={0.8}
+                        >
+                            <Icon name={t.icon} size={11} color={active ? colors.white : colors.primary} />
+                            <Text style={[styles.tabText, active && styles.tabTextActive]} numberOfLines={1}>{t.label} ({count})</Text>
+                        </TouchableOpacity>
+                    );
+                })}
+            </View>
+
+            {/* Selection toolbar */}
+            {tab !== 'missing' && selectableRows.length > 0 ? (
+                <View style={styles.toolbar}>
+                    {selectMode ? (
+                        <>
+                            <TouchableOpacity style={styles.toolbarLink} onPress={toggleSelectAll} activeOpacity={0.8}>
+                                <Icon name={allSelected ? 'check-square' : 'square'} size={15} color={colors.primary} />
+                                <Text style={styles.toolbarLinkText}>{allSelected ? 'Clear all' : `Select all (${selectableRows.length})`}</Text>
+                            </TouchableOpacity>
+                            <View style={styles.toolbarButtons}>
+                                <TouchableOpacity
+                                    style={styles.toolbarButton}
+                                    onPress={() => {
+                                        setSelectMode(false);
+                                        setSelected([]);
+                                    }}
+                                    activeOpacity={0.8}
+                                >
+                                    <Text style={styles.toolbarButtonText}>Cancel</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.toolbarButton, styles.toolbarButtonPrimary, !selected.length && styles.disabled]}
+                                    onPress={openBulk}
+                                    disabled={!selected.length}
+                                    activeOpacity={0.8}
+                                >
+                                    <Icon name="clock" size={11} color={colors.white} />
+                                    <Text style={[styles.toolbarButtonText, styles.actionTextLight]}>Set Times ({selected.length})</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </>
+                    ) : (
+                        <>
+                            <Text style={styles.toolbarHint}>Fix several records at once</Text>
+                            <TouchableOpacity style={styles.toolbarButton} onPress={() => setSelectMode(true)} activeOpacity={0.8}>
+                                <Icon name="tasks" size={11} color={colors.primary} />
+                                <Text style={styles.toolbarButtonText}>Select</Text>
+                            </TouchableOpacity>
+                        </>
+                    )}
+                </View>
+            ) : null}
+
+            {/* List */}
+            {loading && !refreshing ? (
+                <View style={styles.loadingContainer}>
+                    <ActivityIndicator color={colors.primary} size="large" />
+                    <Text style={styles.loadingText}>Loading attendance records...</Text>
+                </View>
+            ) : (
+                <ScrollView
+                    style={styles.flex}
+                    contentContainerStyle={styles.scrollContent}
+                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} colors={[colors.primary]} />}
+                >
+                    {visibleRows.length === 0 ? (
+                        <View style={styles.emptyContainer}>
+                            <Icon name={tab === 'missing' ? 'user-check' : 'inbox'} size={48} color={colors.textMuted} />
+                            <Text style={styles.emptyTitle}>
+                                {tab === 'pending' ? 'No Missing Check-outs' : tab === 'missing' ? 'Everyone Is Marked' : 'No Records'}
+                            </Text>
+                            <Text style={styles.emptyText}>Nothing to fix on {longDate(date)}.</Text>
+                        </View>
+                    ) : (
+                        visibleRows.map(renderRow)
+                    )}
+                </ScrollView>
+            )}
+
+            {renderDialog()}
+
+            {showDatePicker && Platform.OS === 'ios' && (
+                <DateTimePicker
+                    mode="date"
+                    value={date}
+                    maximumDate={new Date()}
+                    onChange={(_, d) => {
+                        setShowDatePicker(false);
+                        if (d) {
+                            setDate(d);
+                        }
+                    }}
+                />
+            )}
         </View>
     );
 };
 
+const SHADOW = {
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+};
+
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#F8FAFC' },
+    container: { flex: 1, backgroundColor: colors.background },
+    flex: { flex: 1 },
+    disabled: { opacity: 0.4 },
 
     dateNavigation: {
         flexDirection: 'row',
@@ -951,310 +696,209 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         paddingHorizontal: 12,
         paddingVertical: 10,
-        backgroundColor: 'white',
+        backgroundColor: colors.surface,
         borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
-        elevation: 1,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
+        borderBottomColor: colors.border,
     },
     dateNavButton: {
         width: 36,
         height: 36,
         borderRadius: 18,
-        backgroundColor: '#F8FAFC',
+        backgroundColor: colors.background,
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: '#E5E7EB',
+        borderColor: colors.border,
     },
     dateInfo: { alignItems: 'center' },
-    dateLabel: { fontSize: 15, fontWeight: '700', color: '#111827' },
-    recordCount: { fontSize: 11, color: '#6B7280', marginTop: 2, fontWeight: '500' },
+    dateLabel: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+    recordCount: { fontSize: 11, color: colors.textSecondary, marginTop: 2, fontWeight: '500' },
 
-    controlBar: {
+    summaryContainer: { flexDirection: 'row', paddingHorizontal: 10, paddingVertical: 8, backgroundColor: colors.surface, gap: 6 },
+    statCard: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.background, padding: 8, borderRadius: 8, gap: 6 },
+    statNumber: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
+    statLabel: { fontSize: 9, color: colors.textSecondary, marginTop: 1, fontWeight: '500' },
+
+    tabContainer: {
+        flexDirection: 'row',
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        backgroundColor: colors.surface,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.border,
+        gap: 6,
+    },
+    tab: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 8,
+        paddingHorizontal: 4,
+        backgroundColor: colors.background,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: colors.border,
+        gap: 4,
+    },
+    tabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+    tabText: { fontSize: 11, fontWeight: '700', color: colors.textPrimary },
+    tabTextActive: { color: colors.white },
+
+    toolbar: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
         paddingHorizontal: 12,
         paddingVertical: 8,
-        backgroundColor: 'white',
-        borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
-    },
-    modeSwitch: {
-        flexDirection: 'row',
-        backgroundColor: colors.background,
-        borderRadius: 8,
-        padding: 2,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    modeBtn: {
-        paddingHorizontal: 14,
-        paddingVertical: 5,
-        borderRadius: 6,
-    },
-    modeBtnActive: {
-        backgroundColor: colors.primary,
-    },
-    modeText: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: colors.textSecondary,
-    },
-    modeTextActive: {
-        color: colors.white,
-    },
-    actionBar: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-    },
-    selectAllBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 5,
-        paddingHorizontal: 8,
-        paddingVertical: 5,
-        backgroundColor: colors.background,
-        borderRadius: 6,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    selectAllText: {
-        fontSize: 11,
-        fontWeight: '600',
-        color: colors.primary,
-    },
-    bulkBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 5,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        backgroundColor: colors.primary,
-        borderRadius: 8,
-    },
-    bulkBtnActive: {
-        backgroundColor: colors.leave,
-    },
-    bulkBtnText: {
-        fontSize: 11,
-        fontWeight: '700',
-        color: 'white',
-    },
-    bulkActionBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 5,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        backgroundColor: '#10B981',
-        borderRadius: 8,
-    },
-    bulkActionText: {
-        fontSize: 11,
-        fontWeight: '700',
-        color: 'white',
-    },
-    buttonDisabled: {
-        backgroundColor: '#9CA3AF',
-    },
-
-    quickStats: {
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-        paddingHorizontal: 12,
-        paddingVertical: 10,
         backgroundColor: colors.surface,
         borderBottomWidth: 1,
         borderBottomColor: colors.border,
     },
-    statItem: { alignItems: 'center' },
-    statNumber: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
-    statLabel: { fontSize: 9, color: colors.textSecondary, marginTop: 1, fontWeight: '500' },
-
-    attendanceItem: {
+    toolbarHint: { fontSize: 12, color: colors.textSecondary },
+    toolbarLink: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    toolbarLinkText: { fontSize: 12, fontWeight: '600', color: colors.primary },
+    toolbarButtons: { flexDirection: 'row', gap: 6 },
+    toolbarButton: {
         flexDirection: 'row',
         alignItems: 'center',
+        gap: 5,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        backgroundColor: colors.background,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: colors.primary,
+    },
+    toolbarButtonPrimary: { backgroundColor: colors.primary },
+    toolbarButtonText: { fontSize: 12, fontWeight: '600', color: colors.primary },
+
+    scrollContent: { padding: 12, paddingBottom: 20, flexGrow: 1 },
+    attendanceItem: {
         backgroundColor: colors.surface,
-        marginHorizontal: 12,
-        marginVertical: 5,
+        marginBottom: 10,
         padding: 12,
         borderRadius: 10,
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.08,
-        shadowRadius: 4,
         borderWidth: 1,
         borderColor: colors.borderLight,
+        ...SHADOW,
     },
+    itemSelected: { borderColor: colors.primary, backgroundColor: '#F5F7FF' },
+    itemHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     checkbox: {
         width: 20,
         height: 20,
-        borderRadius: 10,
-        borderWidth: 2,
+        borderRadius: 5,
+        borderWidth: 1.5,
         borderColor: colors.primary,
         alignItems: 'center',
         justifyContent: 'center',
-        marginRight: 10,
     },
-    checkboxSelected: { backgroundColor: colors.primary },
-    employeeInfo: { flex: 1 },
+    checkboxChecked: { backgroundColor: colors.primary },
+    checkboxDisabled: { borderColor: colors.border },
     employeeName: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
     employeeId: { fontSize: 11, color: colors.textSecondary, marginTop: 1 },
-
-    timeContainer: { marginTop: 6, gap: 3 },
-    timeInfo: { flexDirection: 'row', alignItems: 'center' },
-    timeText: { fontSize: 11, color: '#374151', marginLeft: 6, fontWeight: '500' },
-
-    leaveContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginTop: 6,
-        paddingVertical: 6,
-        paddingHorizontal: 10,
-        backgroundColor: '#FEF3C7',
-        borderRadius: 6,
-        borderWidth: 1,
-        borderColor: '#FCD34D',
-    },
-    leaveText: {
-        fontSize: 11,
-        color: '#D97706',
-        marginLeft: 6,
-        fontWeight: '600',
-    },
-
-    statusContainer: { flexDirection: 'row', marginTop: 6, gap: 4 },
-    statusBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8 },
-    statusText: { fontSize: 9, color: 'white', fontWeight: '600' },
-
-    actionButtons: { flexDirection: 'column', gap: 4, marginLeft: 6 },
+    badgesContainer: { flexDirection: 'row', gap: 4, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', flexShrink: 1 },
+    badge: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 10 },
+    badgeText: { fontSize: 9.5, color: colors.white, fontWeight: '600' },
+    badgeLate: { backgroundColor: STATUS_COLORS.late },
+    badgeDraft: { backgroundColor: colors.textSecondary },
+    badgeSubmitted: { backgroundColor: STATUS_COLORS.present },
+    divider: { height: 1, backgroundColor: colors.border, marginVertical: 8 },
+    timeContainer: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16, rowGap: 4 },
+    timeInfo: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    timeText: { fontSize: 12, color: '#374151', fontWeight: '500' },
+    missingText: { color: STATUS_COLORS.absent },
+    pendingText: { color: STATUS_COLORS.late },
+    noteText: { fontSize: 12, color: colors.textSecondary },
+    actionRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
     actionButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 7,
-        paddingVertical: 5,
-        borderRadius: 6,
-        minWidth: 62,
+        gap: 5,
+        paddingHorizontal: 12,
+        paddingVertical: 7,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: colors.primary,
+        backgroundColor: colors.background,
     },
-    buttonText: { color: 'white', fontSize: 9, fontWeight: '600', marginLeft: 3 },
+    actionPrimary: { backgroundColor: colors.primary },
+    actionSubmit: { borderColor: STATUS_COLORS.present },
+    actionText: { fontSize: 12, fontWeight: '600', color: colors.primary },
+    actionTextLight: { color: colors.white },
+    actionTextSubmit: { color: STATUS_COLORS.present },
 
-    loadingContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingVertical: 30,
-    },
-    loadingText: { marginTop: 10, fontSize: 14, color: '#6B7280' },
+    loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 30 },
+    loadingText: { marginTop: 10, fontSize: 14, color: colors.textSecondary },
+    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 50 },
+    emptyTitle: { fontSize: 18, fontWeight: '600', color: colors.textSecondary, marginTop: 12 },
+    emptyText: { fontSize: 13, color: colors.textMuted, textAlign: 'center', marginTop: 6, paddingHorizontal: 32 },
 
-    emptyContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingVertical: 30,
+    // dialogs (same look as the pop-ups on the approval screens)
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center', padding: 16 },
+    modalContent: {
+        backgroundColor: colors.surface,
+        borderRadius: 14,
+        padding: 16,
+        width: '100%',
+        maxWidth: 400,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 10,
     },
-    emptyTitle: { fontSize: 18, fontWeight: '600', color: '#6B7280', marginTop: 12 },
-    emptyText: {
-        fontSize: 13,
-        color: '#9CA3AF',
-        textAlign: 'center',
-        marginTop: 6,
-        paddingHorizontal: 32,
-    },
-
-    menuOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        justifyContent: 'flex-end',
-    },
-    menuContent: {
-        backgroundColor: 'white',
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
-        padding: 20,
-    },
-    menuTitle: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: '#111827',
-        textAlign: 'center',
-    },
-    menuSubtitle: {
-        fontSize: 13,
-        color: '#6B7280',
-        textAlign: 'center',
-        marginTop: 3,
-    },
-    menuItem: {
+    modalTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, textAlign: 'center' },
+    modalSubtitle: { fontSize: 12, color: colors.textSecondary, textAlign: 'center', marginTop: 2, marginBottom: 12 },
+    modalNote: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
+    inputContainer: { marginBottom: 12 },
+    inputLabel: { fontSize: 12, fontWeight: '600', color: colors.textSecondary, marginBottom: 6 },
+    timeFieldRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    timeField: {
         flexDirection: 'row',
         alignItems: 'center',
+        gap: 10,
+        paddingHorizontal: 14,
         paddingVertical: 12,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: colors.border,
+        backgroundColor: colors.background,
     },
-    menuItemTitle: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#111827',
-    },
-    menuItemDesc: {
-        fontSize: 12,
-        color: '#6B7280',
-        marginTop: 2,
-    },
-
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        justifyContent: 'center',
+    timeFieldText: { fontSize: 15, fontWeight: '600', color: colors.textPrimary },
+    placeholder: { color: colors.textMuted, fontWeight: '500' },
+    clearButton: {
+        width: 40,
+        height: 44,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: colors.border,
         alignItems: 'center',
+        justifyContent: 'center',
     },
-    modalContent: {
-        backgroundColor: 'white',
-        borderRadius: 14,
-        padding: 20,
-        margin: 16,
-        width: '90%',
-        maxWidth: 400,
-    },
-    modalTitle: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: '#111827',
-        textAlign: 'center',
-    },
-    modalSubtitle: {
-        fontSize: 13,
-        color: '#6B7280',
-        textAlign: 'center',
-        marginTop: 3,
-        marginBottom: 6,
-    },
-    timeInputContainer: { marginTop: 10 },
-    inputLabel: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: '#374151',
-        marginBottom: 6,
-    },
-
-    modalButtons: { flexDirection: 'row', gap: 10, marginTop: 16 },
-    modalButton: {
+    segmentRow: { flexDirection: 'row', gap: 6 },
+    segment: {
         flex: 1,
-        paddingVertical: 11,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 5,
+        paddingVertical: 9,
         borderRadius: 8,
-        alignItems: 'center',
-        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: colors.border,
+        backgroundColor: colors.background,
     },
-    cancelButton: { backgroundColor: '#F3F4F6' },
-    cancelButtonText: { color: '#6B7280', fontWeight: '600', fontSize: 14 },
-    confirmButton: { backgroundColor: '#6366F1' },
-    confirmButtonText: { color: 'white', fontWeight: '600', fontSize: 14 },
+    segmentActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+    segmentText: { fontSize: 12, fontWeight: '700', color: colors.textPrimary },
+    segmentTextActive: { color: colors.white },
+    modalButtons: { flexDirection: 'row', gap: 10, marginTop: 14 },
+    modalButton: { flex: 1, paddingVertical: 11, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+    cancelButton: { borderWidth: 1, borderColor: colors.border },
+    cancelButtonText: { fontSize: 14, fontWeight: '600', color: colors.textSecondary },
+    confirmButton: { backgroundColor: colors.primary },
+    confirmButtonText: { fontSize: 14, fontWeight: '700', color: colors.white },
 });
 
 export default ManualCheckInOutScreen;
