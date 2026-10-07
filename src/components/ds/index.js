@@ -93,23 +93,27 @@ export const KeyboardSafeView = ({ style, children }) => {
 };
 
 // ------------------------------------------------------------------ layout
-export const Screen = ({ children, scroll = true, refreshing = false, onRefresh, contentStyle, footer, keyboardShouldPersistTaps }) => (
-    <View style={s.screen}>
-        {scroll ? (
-            <ScrollView
-                contentContainerStyle={[s.screenContent, contentStyle]}
-                showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps={keyboardShouldPersistTaps || 'handled'}
-                refreshControl={onRefresh ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[color.accent]} /> : undefined}
-            >
-                {children}
-            </ScrollView>
-        ) : (
-            children
-        )}
-        {footer ? <View style={s.footer}>{footer}</View> : null}
-    </View>
-);
+export const Screen = ({ children, scroll = true, refreshing = false, onRefresh, contentStyle, footer, keyboardShouldPersistTaps }) => {
+    // the bottom bar clears the phone's navigation / gesture bar (bottom safe area) plus some breathing room
+    const insets = useSafeAreaInsets();
+    return (
+        <View style={s.screen}>
+            {scroll ? (
+                <ScrollView
+                    contentContainerStyle={[s.screenContent, contentStyle]}
+                    showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps={keyboardShouldPersistTaps || 'handled'}
+                    refreshControl={onRefresh ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[color.accent]} /> : undefined}
+                >
+                    {children}
+                </ScrollView>
+            ) : (
+                children
+            )}
+            {footer ? <View style={[s.footer, { paddingBottom: space.xl + insets.bottom }]}>{footer}</View> : null}
+        </View>
+    );
+};
 
 // A titled group of rows in one white container; rows are separated by hairline dividers.
 export const Group = ({ title, action, onAction, footer, children, style, flush }) => {
@@ -426,10 +430,20 @@ export const Sheet = (props) => (
 // translucent Modal doesn't resize (useKeyboardOverlap); iOS uses KeyboardAvoidingView as before.
 const SheetBody = ({ title, subtitle, onClose, children, footer, dismissable = true }) => {
     const [ref, overlap] = useKeyboardOverlap({ lifts: true });
+    const insets = useSafeAreaInsets();
     return (
         <KeyboardAvoidingView style={s.sheetWrap} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
             <Pressable style={s.sheetBackdrop} onPress={() => dismissable && onClose?.()} />
-            <View ref={ref} collapsable={false} style={[s.sheet, Platform.OS === 'android' && overlap > 0 && { marginBottom: overlap }]}>
+            <View
+                ref={ref}
+                collapsable={false}
+                style={[
+                    s.sheet,
+                    // clear the navigation / gesture bar; while the keyboard is up it covers that area anyway
+                    { paddingBottom: space.xl + (overlap > 0 ? 0 : insets.bottom) },
+                    Platform.OS === 'android' && overlap > 0 && { marginBottom: overlap },
+                ]}
+            >
                 <View style={s.sheetHandle} />
                 {title ? <Text style={s.sheetTitle}>{title}</Text> : null}
                 {subtitle ? <Text style={s.sheetSubtitle}>{subtitle}</Text> : null}
