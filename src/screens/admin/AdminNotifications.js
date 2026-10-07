@@ -4,7 +4,8 @@
 // send a new notification. Unread items carry an accent dot and a bolder title.
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import ApiService from '../../services/api.service';
+import ApiService, { getApiErrorMessage } from '../../services/api.service';
+import showToast from '../../utils/Toast';
 import { useAuth } from '../../context/AuthContext';
 import {
     Screen,
@@ -23,6 +24,8 @@ const AdminNotifications = ({ navigation }) => {
     const [notifications, setNotifications] = useState([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    // message of the last failed load; the inbox already on screen stays
+    const [loadError, setLoadError] = useState(null);
 
     const fetchNotifications = useCallback(async () => {
         if (!employee?.name) {
@@ -40,9 +43,16 @@ const AdminNotifications = ({ navigation }) => {
             if (response.success && response.data?.message?.status === 'success') {
                 const message = response.data.message;
                 setNotifications(message.notifications || []);
+                setLoadError(null);
+            } else {
+                const reason = getApiErrorMessage(response, 'Check your connection and try again.');
+                setLoadError(reason);
+                showToast({ type: 'error', text1: 'Could not load notifications', text2: reason });
             }
         } catch (error) {
             console.error('Error fetching notifications:', error);
+            setLoadError('Check your connection and try again.');
+            showToast({ type: 'error', text1: 'Could not load notifications', text2: 'Check your connection and try again.' });
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -80,7 +90,15 @@ const AdminNotifications = ({ navigation }) => {
                 onRefresh={onRefresh}
                 footer={<Button title="Send a notification" onPress={handleCreateNotification} />}
             >
-                {notifications.length === 0 ? (
+                {notifications.length === 0 && loadError ? (
+                    <EmptyState
+                        icon="alert-circle"
+                        title="Could not load notifications"
+                        message={loadError}
+                        action="Try again"
+                        onAction={fetchNotifications}
+                    />
+                ) : notifications.length === 0 ? (
                     <EmptyState icon="bell" title="No notifications" message="New notifications will appear here." />
                 ) : (
                     <Group>
@@ -94,9 +112,9 @@ const AdminNotifications = ({ navigation }) => {
                                             {unread ? <View style={styles.dot} /> : null}
                                         </View>
                                     )}
-                                    title={unread ? <Text style={styles.unreadTitle}>{item.title}</Text> : item.title}
+                                    title={unread ? <Text style={styles.unreadTitle}>{item.title || 'Notification'}</Text> : item.title || 'Notification'}
                                     titleLines={2}
-                                    subtitle={item.message}
+                                    subtitle={item.message || undefined}
                                     subtitleLines={0}
                                     meta={item.time_ago ? <Text style={styles.time}>{item.time_ago}</Text> : null}
                                 />

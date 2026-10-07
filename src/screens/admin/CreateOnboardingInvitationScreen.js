@@ -6,7 +6,7 @@
 //
 // On success the backend emails the new hire a magic link AND returns the link in the API
 // response so the admin can share it directly (in case the SMTP relay drops the message).
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { View, Text, StyleSheet, Share, Platform } from 'react-native';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import showToast from '../../utils/Toast';
@@ -25,10 +25,10 @@ import {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// 'YYYY-MM-DD[ HH:mm:ss]' shown as '06 Oct 2026' (parsed as a local date; raw value if unparseable)
+// 'YYYY-MM-DD[ HH:mm:ss]' shown as '06 Oct 2026' (parsed as a local date); '' if unparseable
 const formatDate = (s) => {
     const [y, m, d] = String(s || '').slice(0, 10).split('-').map(Number);
-    return y && m && d ? formatShortDate(new Date(y, m - 1, d)) : s;
+    return y && m && d ? formatShortDate(new Date(y, m - 1, d)) : '';
 };
 
 const CreateOnboardingInvitationScreen = ({ navigation }) => {
@@ -39,6 +39,8 @@ const CreateOnboardingInvitationScreen = ({ navigation }) => {
     const [company, setCompany] = useState('');
     const [department, setDepartment] = useState('');
     const [busy, setBusy] = useState(false);
+    // blocks a second tap that lands before the button re-renders as disabled
+    const busyRef = useRef(false);
 
     // After-create state: the result returned by the API so the admin can copy/share
     const [created, setCreated] = useState(null); // { name, invitation_link, expires_on }
@@ -49,6 +51,10 @@ const CreateOnboardingInvitationScreen = ({ navigation }) => {
             showToast({ type: 'error', text1: 'Invalid email', text2: 'Enter a valid email address for the new hire' });
             return;
         }
+        if (busyRef.current) {
+            return;
+        }
+        busyRef.current = true;
         setBusy(true);
         try {
             const response = await apiService.createOnboardingInvitation({
@@ -63,7 +69,7 @@ const CreateOnboardingInvitationScreen = ({ navigation }) => {
                 showToast({ type: 'error', text1: 'Invitation not sent', text2: getApiErrorMessage(response, 'Failed to send invitation') });
                 return;
             }
-            const result = extractFrappeData(response, {});
+            const result = extractFrappeData(response, {}) || {};
             setCreated({
                 name: result.name,
                 invitation_link: result.invitation_link,
@@ -74,6 +80,7 @@ const CreateOnboardingInvitationScreen = ({ navigation }) => {
         } catch (err) {
             showToast({ type: 'error', text1: 'Invitation not sent', text2: err?.message || 'Failed to send invitation' });
         } finally {
+            busyRef.current = false;
             setBusy(false);
         }
     };
@@ -82,10 +89,12 @@ const CreateOnboardingInvitationScreen = ({ navigation }) => {
         if (!created?.invitation_link) {
             return;
         }
+        // expires_on is a server datetime ('2026-10-14 10:30:00.123456'); show it as a date
+        const expiry = formatDate(created.expires_on);
         try {
             await Share.share({
                 title: 'Onboarding link',
-                message: `Hi, please complete your onboarding form using this link (expires ${created.expires_on || 'in 7 days'}):\n\n${created.invitation_link}`,
+                message: `Hi, please complete your onboarding form using this link (expires ${expiry ? `on ${expiry}` : 'in 7 days'}):\n\n${created.invitation_link}`,
             });
         } catch (e) {
             // Share dialog dismissed: no-op
@@ -105,7 +114,7 @@ const CreateOnboardingInvitationScreen = ({ navigation }) => {
                     <Text style={styles.sentTitle}>Invitation sent</Text>
                     <Text style={styles.sentText}>
                         {`Emailed to ${created.invitation_email}.`}
-                        {created.expires_on ? ` The link expires on ${formatDate(created.expires_on)}.` : ''}
+                        {formatDate(created.expires_on) ? ` The link expires on ${formatDate(created.expires_on)}.` : ''}
                     </Text>
                 </View>
 
@@ -202,7 +211,8 @@ const CreateOnboardingInvitationScreen = ({ navigation }) => {
 
 const styles = StyleSheet.create({
     flex: { flex: 1 },
-    pair: { flexDirection: 'row', gap: space.sm },
+    // bottom-aligned so the two inputs stay level if a label wraps at large text sizes
+    pair: { flexDirection: 'row', alignItems: 'flex-end', gap: space.sm },
     lastField: { marginBottom: 0 },
     sent: { alignItems: 'center', paddingTop: space.xl, paddingBottom: space.xxl, paddingHorizontal: space.xl },
     sentTitle: { ...type.title, marginTop: space.md },

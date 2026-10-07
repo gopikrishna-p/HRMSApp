@@ -44,10 +44,10 @@ const stripHtml = (html) => {
         .trim();
 };
 
-// 'YYYY-MM-DD' as a local date, so the day never shifts with the phone's timezone
+// 'YYYY-MM-DD' as a local date, so the day never shifts with the phone's timezone; null if not a date
 const parseDay = (value) => {
     const [y, m, d] = String(value || '').slice(0, 10).split('-').map(Number);
-    return y && m && d ? new Date(y, m - 1, d) : new Date(value);
+    return y && m && d ? new Date(y, m - 1, d) : null;
 };
 
 // Helper functions for date formatting
@@ -58,7 +58,7 @@ const getMonthName = (date) => MONTHS[date.getMonth()].slice(0, 3);
 const getDaysUntil = (date) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const diff = Math.ceil((date - today) / (1000 * 60 * 60 * 24));
+    const diff = Math.round((date - today) / (1000 * 60 * 60 * 24));
 
     if (diff === 0) {
         return 'Today';
@@ -91,6 +91,7 @@ const HolidayListScreen = ({ navigation }) => {
 
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [loadError, setLoadError] = useState(null); // shown when no holidays have loaded yet
     const [holidays, setHolidays] = useState([]);
     const [activeTab, setActiveTab] = useState('upcoming'); // 'upcoming' or 'all'
     const [viewMode, setViewMode] = useState('calendar'); // 'list' or 'calendar' - DEFAULT: calendar
@@ -125,7 +126,8 @@ const HolidayListScreen = ({ navigation }) => {
                     text1: 'Could not load holidays',
                     text2: errorMsg,
                 });
-                setHolidays([]);
+                // the holidays already on screen stay (a failed refresh does not blank the screen)
+                setLoadError(errorMsg);
                 return;
             }
 
@@ -134,7 +136,7 @@ const HolidayListScreen = ({ navigation }) => {
 
             // Handle nested structure - data might be in 'data' key or direct
             const holidayData = extractedData.data || extractedData;
-            const holidaysList = holidayData.holidays || extractedData.holidays || [];
+            const holidaysList = (holidayData.holidays || extractedData.holidays || []).filter((h) => parseDay(h?.holiday_date));
             const statistics = holidayData.statistics || extractedData.statistics || {};
 
             // Process holidays
@@ -180,6 +182,7 @@ const HolidayListScreen = ({ navigation }) => {
 
             // Use statistics from API or calculate as fallback
             setHolidays(processedHolidays);
+            setLoadError(null);
             setStats({
                 total: statistics.total || processedHolidays.length,
                 upcoming: statistics.upcoming || processedHolidays.filter(h => h.isFuture).length,
@@ -195,7 +198,7 @@ const HolidayListScreen = ({ navigation }) => {
                 text1: 'Could not load holidays',
                 text2: 'Pull down to try again.',
             });
-            setHolidays([]);
+            setLoadError(error?.message || 'Could not load holidays');
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -280,11 +283,14 @@ const HolidayListScreen = ({ navigation }) => {
         return days;
     };
 
+    // Always the 1st: moving from the 31st with setMonth() would skip a shorter month
     const changeMonth = (offset) => {
-        const newDate = new Date(selectedMonth);
-        newDate.setMonth(newDate.getMonth() + offset);
-        setSelectedMonth(newDate);
+        setSelectedMonth(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + offset, 1));
     };
+    // Only this year's holidays are loaded, so the calendar stays inside this year
+    const loadedYear = new Date().getFullYear();
+    const canGoBack = selectedMonth.getFullYear() > loadedYear || (selectedMonth.getFullYear() === loadedYear && selectedMonth.getMonth() > 0);
+    const canGoForward = selectedMonth.getFullYear() < loadedYear || (selectedMonth.getFullYear() === loadedYear && selectedMonth.getMonth() < 11);
 
     // ------------------------------------------------------------------ derived (display)
     const publicHolidays = useMemo(() => holidays.filter(h => !h.isWeeklyOff), [holidays]);
@@ -324,9 +330,9 @@ const HolidayListScreen = ({ navigation }) => {
                     <View style={styles.calendar}>
                         {/* Month Navigator */}
                         <View style={styles.monthNav}>
-                            <IconButton name="chevron-left" onPress={() => changeMonth(-1)} label="Previous month" />
-                            <Text style={styles.monthTitle}>{monthName}</Text>
-                            <IconButton name="chevron-right" onPress={() => changeMonth(1)} label="Next month" />
+                            <IconButton name="chevron-left" onPress={() => changeMonth(-1)} disabled={!canGoBack} label="Previous month" />
+                            <Text style={styles.monthTitle} numberOfLines={1}>{monthName}</Text>
+                            <IconButton name="chevron-right" onPress={() => changeMonth(1)} disabled={!canGoForward} label="Next month" />
                         </View>
 
                         {/* Day Headers */}
@@ -430,20 +436,34 @@ const HolidayListScreen = ({ navigation }) => {
 
             {loading ? (
                 <Loading />
+            ) : holidays.length === 0 && loadError ? (
+                <Screen refreshing={refreshing} onRefresh={onRefresh}>
+                    <EmptyState
+                        icon="alert-circle"
+                        title="Could not load holidays"
+                        message={loadError}
+                        action="Try again"
+                        onAction={() => {
+                            setLoading(true);
+                            fetchHolidays();
+                        }}
+                    />
+                </Screen>
             ) : (
                 <Screen refreshing={refreshing} onRefresh={onRefresh}>
                     <Group title={String(new Date().getFullYear())}>
+                        {/* three numbers: a fourth ("Weekly offs") did not fit 320 dp at 1.3x text; its count is on the switch row */}
                         <StatStrip
                             style={styles.flatStrip}
                             items={[
                                 { label: 'Holidays', value: stats.regularHolidays },
                                 { label: 'Upcoming', value: publicHolidays.filter(h => h.isFuture).length },
                                 { label: 'This month', value: publicHolidays.filter(h => h.isThisMonth).length },
-                                { label: 'Weekly offs', value: stats.weeklyOffs },
                             ]}
                         />
                         <Row
                             title="Show weekly offs"
+                            subtitle={stats.weeklyOffs ? `${stats.weeklyOffs} this year` : null}
                             right={(
                                 <Switch
                                     value={showWeeklyOffs}
@@ -477,7 +497,7 @@ const styles = StyleSheet.create({
 
     calendar: { paddingHorizontal: space.sm, paddingBottom: space.md },
     monthNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: space.xs },
-    monthTitle: { ...type.title, fontSize: 16 },
+    monthTitle: { ...type.title, fontSize: 16, flexShrink: 1, textAlign: 'center' },
     weekRow: { flexDirection: 'row', marginBottom: space.xs },
     weekday: { ...type.caption, flex: 1, textAlign: 'center' },
     grid: { flexDirection: 'row', flexWrap: 'wrap' },
@@ -493,7 +513,7 @@ const styles = StyleSheet.create({
 
     none: { ...type.secondary, paddingHorizontal: space.lg, paddingVertical: space.lg },
 
-    day: { width: 36, alignItems: 'center', marginRight: space.md },
+    day: { minWidth: 36, alignItems: 'center', marginRight: space.md },
     dayNumber: { fontSize: 17, fontWeight: '600', color: color.text, fontVariant: ['tabular-nums'] },
     dayName: { fontSize: 12, color: color.textTertiary, marginTop: 1 },
     muted: { color: color.textTertiary },

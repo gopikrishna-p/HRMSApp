@@ -3,7 +3,7 @@
 // Leave applications for HR: approve or reject open requests, browse decided ones, a summary
 // by status / leave type / department, and applying leave on behalf of an employee.
 // Approve and reject remarks are included in the notification the employee receives.
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Switch, Platform } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
@@ -73,6 +73,13 @@ const leaveDays = (leave) => {
     return Number(leave.total_leave_days) === 0.5 ? 'Half day' : [days, 'incl. half day'].filter(Boolean).join(', ');
 };
 const shortDept = (dept) => String(dept || '').replace(' - DG', '');
+// whole calendar days from `from` to `to`, inclusive (time of day ignored)
+const daysBetween = (from, to) => {
+    const a = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+    const b = new Date(to.getFullYear(), to.getMonth(), to.getDate());
+    return Math.round((b - a) / 86400000) + 1;
+};
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 const STATUS_OPTIONS = [
     { value: '', label: 'All statuses' },
@@ -83,8 +90,15 @@ const STATUS_OPTIONS = [
 
 const LeaveApprovalsScreen = ({ navigation, route }) => {
     // State
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true); // first load runs on mount
     const [refreshing, setRefreshing] = useState(false);
+    const [tabLoading, setTabLoading] = useState(false); // a tab or filter change is fetching
+    const [errors, setErrors] = useState({}); // tab -> message of its last failed load
+    const [acting, setActing] = useState(false); // approve / reject request running
+    const [submitting, setSubmitting] = useState(false); // apply-on-behalf request running
+    const actingRef = useRef(false); // block a second tap before the busy state renders
+    const submittingRef = useRef(false);
+    const seq = useRef({ pending: 0, history: 0, statistics: 0 }); // ignore responses of superseded loads
 
     // Tab state — deep-links from EmployeeManagement can pass route.params.tab
     // (e.g. 'history') to land directly on the right tab.
@@ -187,7 +201,10 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
         setEmployees(await loadAllEmployees());
     };
 
+    const setTabError = (tab, message) => setErrors((all) => (all[tab] === message ? all : { ...all, [tab]: message }));
+
     const fetchPendingLeaves = async () => {
+        const id = ++seq.current.pending;
         try {
             const filters = {
                 status: 'Open',
@@ -196,23 +213,32 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             };
 
             const response = await apiService.getAllLeaves(filters);
+            if (id !== seq.current.pending) {
+                return;
+            }
 
             if (isApiSuccess(response)) {
                 const result = extractFrappeData(response, { applications: [] });
-                setPendingLeaves(Array.isArray(result.applications) ? result.applications : []);
+                setPendingLeaves(Array.isArray(result?.applications) ? result.applications : []);
+                setTabError('pending', '');
             } else {
                 const msg = getApiErrorMessage(response, 'Failed to fetch pending leaves');
                 console.error('Failed to fetch pending leaves:', msg);
                 showToast({ type: 'error', text1: 'Could not load pending requests', text2: msg });
                 setPendingLeaves([]);
+                setTabError('pending', msg);
             }
         } catch (error) {
             console.error('Error fetching pending leaves:', error);
-            setPendingLeaves([]);
+            if (id === seq.current.pending) {
+                setPendingLeaves([]);
+                setTabError('pending', error?.message || 'Please try again.');
+            }
         }
     };
 
     const fetchHistoryLeaves = async () => {
+        const id = ++seq.current.history;
         try {
             const filters = {
                 status: historyStatusFilter || null,
@@ -221,24 +247,32 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             };
 
             const response = await apiService.getAllLeaves(filters);
+            if (id !== seq.current.history) {
+                return;
+            }
 
             if (isApiSuccess(response)) {
                 const result = extractFrappeData(response, { applications: [] });
                 // Filter history to exclude pending
-                const applications = Array.isArray(result.applications) ? result.applications : [];
+                const applications = Array.isArray(result?.applications) ? result.applications : [];
                 const history = applications.filter(
                     app => ['Approved', 'Rejected', 'Cancelled'].includes(app.status)
                 );
                 setHistoryLeaves(history);
+                setTabError('history', '');
             } else {
                 const msg = getApiErrorMessage(response, 'Failed to fetch leave history');
                 console.error('Failed to fetch leave history:', msg);
                 showToast({ type: 'error', text1: 'Could not load leave history', text2: msg });
                 setHistoryLeaves([]);
+                setTabError('history', msg);
             }
         } catch (error) {
             console.error('Error fetching leave history:', error);
-            setHistoryLeaves([]);
+            if (id === seq.current.history) {
+                setHistoryLeaves([]);
+                setTabError('history', error?.message || 'Please try again.');
+            }
         }
     };
 
@@ -262,27 +296,41 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
     }, [activeTab, selectedDepartment, selectedEmployee, historyStatusFilter]);
 
     const fetchStatistics = async () => {
+        const id = ++seq.current.statistics;
         try {
             const response = await apiService.getLeaveStatistics(selectedDepartment || null);
+            if (id !== seq.current.statistics) {
+                return;
+            }
             if (isApiSuccess(response)) {
                 const data = extractFrappeData(response, null);
-                setStatistics(data);
+                setStatistics(data && typeof data === 'object' ? data : null);
+                setTabError('statistics', '');
             } else {
                 setStatistics(null);
+                setTabError('statistics', getApiErrorMessage(response, 'Please try again.'));
             }
         } catch (error) {
             console.error('Error fetching statistics:', error);
-            setStatistics(null);
+            if (id === seq.current.statistics) {
+                setStatistics(null);
+                setTabError('statistics', error?.message || 'Please try again.');
+            }
         }
     };
 
     useEffect(() => {
+        let fetcher = null;
         if (activeTab === 'pending') {
-            fetchPendingLeaves();
+            fetcher = fetchPendingLeaves;
         } else if (activeTab === 'history') {
-            fetchHistoryLeaves();
+            fetcher = fetchHistoryLeaves;
         } else if (activeTab === 'statistics') {
-            fetchStatistics();
+            fetcher = fetchStatistics;
+        }
+        if (fetcher) {
+            setTabLoading(true);
+            fetcher().finally(() => setTabLoading(false));
         }
         // Refetch when the tab or a filter changes; the fetch functions read exactly this state.
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -296,13 +344,15 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
         setShowActionModal(true);
     };
 
+    // The sheet stays open (button spinner) while the request runs, so a failure can be retried
+    // and the list is never replaced by a spinner; it closes on success.
     const handleApprove = async () => {
-        if (!selectedLeave) {
+        if (!selectedLeave || actingRef.current) {
             return;
         }
 
-        setLoading(true);
-        setShowActionModal(false);
+        actingRef.current = true;
+        setActing(true);
 
         try {
             const response = await apiService.approveLeave(
@@ -312,8 +362,9 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
 
             if (response.success) {
                 showToast({ type: 'success', text1: 'Leave approved', text2: selectedLeave.employee_name });
-                fetchPendingLeaves();
+                setShowActionModal(false);
                 setRemarks('');
+                await fetchPendingLeaves();
             } else {
                 showToast({ type: 'error', text1: 'Not approved', text2: response.message || 'Failed to approve leave' });
             }
@@ -321,13 +372,13 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             console.error('Error approving leave:', error);
             showToast({ type: 'error', text1: 'Not approved', text2: error.message || 'Failed to approve leave' });
         } finally {
-            setLoading(false);
-            setSelectedLeave(null);
+            actingRef.current = false;
+            setActing(false);
         }
     };
 
     const handleReject = async () => {
-        if (!selectedLeave) {
+        if (!selectedLeave || actingRef.current) {
             return;
         }
 
@@ -336,8 +387,8 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             return;
         }
 
-        setLoading(true);
-        setShowActionModal(false);
+        actingRef.current = true;
+        setActing(true);
 
         try {
             const response = await apiService.rejectLeave(
@@ -347,8 +398,9 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
 
             if (response.success) {
                 showToast({ type: 'success', text1: 'Leave rejected', text2: selectedLeave.employee_name });
-                fetchPendingLeaves();
+                setShowActionModal(false);
                 setRejectionReason('');
+                await fetchPendingLeaves();
             } else {
                 showToast({ type: 'error', text1: 'Not rejected', text2: response.message || 'Failed to reject leave' });
             }
@@ -356,8 +408,8 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             console.error('Error rejecting leave:', error);
             showToast({ type: 'error', text1: 'Not rejected', text2: error.message || 'Failed to reject leave' });
         } finally {
-            setLoading(false);
-            setSelectedLeave(null);
+            actingRef.current = false;
+            setActing(false);
         }
     };
 
@@ -451,7 +503,8 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
         // Check balance if available
         const balance = leaveBalances[applyLeaveType];
         if (balance && balance.balance_leaves !== undefined) {
-            const requestedDays = Math.ceil((applyToDate - applyFromDate) / (1000 * 60 * 60 * 24)) + 1;
+            // calendar days (the two dates carry different times of day), less half a day for a half day
+            const requestedDays = daysBetween(applyFromDate, applyToDate) - (applyIsHalfDay ? 0.5 : 0);
             if (balance.balance_leaves < requestedDays && !applyAutoApprove) {
                 // Confirmed in the low-balance sheet, which calls submitAdminLeave on "Submit anyway".
                 setLowBalance({ remaining: balance.balance_leaves, requestedDays });
@@ -463,7 +516,11 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
     };
 
     const submitAdminLeave = async () => {
-        setLoading(true);
+        if (submittingRef.current) {
+            return;
+        }
+        submittingRef.current = true;
+        setSubmitting(true);
         try {
             const leaveData = {
                 employee: applyForEmployee,
@@ -482,8 +539,8 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
                 const rawResult = response.data.message;
                 const result = rawResult?.data?.message || rawResult;
                 const selectedEmployeeName = employees.find(e => e.name === applyForEmployee)?.employee_name || applyForEmployee;
-                const days = result.total_leave_days ?? 'N/A';
-                const remainingBalance = result.leave_balance ?? '';
+                const days = result?.total_leave_days ?? 'N/A';
+                const remainingBalance = result?.leave_balance ?? '';
 
                 showToast({
                     type: 'success',
@@ -512,7 +569,8 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             console.error('Error submitting leave:', error);
             showToast({ type: 'error', text1: 'Leave not submitted', text2: error.message || 'Failed to submit leave application' });
         } finally {
-            setLoading(false);
+            submittingRef.current = false;
+            setSubmitting(false);
         }
     };
 
@@ -596,9 +654,9 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             <Field label={`${applyLeaveType} balance`}>
                 <StatStrip
                     items={[
-                        { label: 'Allocated', value: balance.allocated_leaves || 0 },
-                        { label: 'Remaining', value: balance.balance_leaves || 0 },
-                        { label: 'Used', value: (balance.allocated_leaves || 0) - (balance.balance_leaves || 0) },
+                        { label: 'Allocated', value: round2(balance.allocated_leaves) },
+                        { label: 'Remaining', value: round2(balance.balance_leaves) },
+                        { label: 'Used', value: round2((Number(balance.allocated_leaves) || 0) - (Number(balance.balance_leaves) || 0)) },
                     ]}
                 />
             </Field>
@@ -657,6 +715,7 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             left={<Avatar name={leave.employee_name} />}
             title={leave.employee_name}
             subtitle={`${[leave.leave_type, leaveDays(leave)].filter(Boolean).join('  ·  ')}\n${dateRange(leave.from_date, leave.to_date)}`}
+            subtitleLines={3}
             right={activeTab === 'history' ? <StatusText label={leave.status} /> : null}
             onPress={() => openActionModal(leave, '')}
         />
@@ -668,7 +727,11 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             onRefresh={onRefresh}
             footer={<Button title="Apply leave on behalf" onPress={() => setActiveTab('apply')} />}
         >
-            {pendingLeaves.length === 0 ? (
+            {pendingLeaves.length === 0 && tabLoading && !refreshing ? (
+                <Loading />
+            ) : pendingLeaves.length === 0 && errors.pending ? (
+                <EmptyState icon="alert-circle" title="Could not load requests" message={errors.pending} action="Try again" onAction={onRefresh} />
+            ) : pendingLeaves.length === 0 ? (
                 <EmptyState
                     icon="check-circle"
                     title="No pending requests"
@@ -682,7 +745,11 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
 
     const renderHistoryTab = () => (
         <Screen refreshing={refreshing} onRefresh={onRefresh}>
-            {historyLeaves.length === 0 ? (
+            {historyLeaves.length === 0 && tabLoading && !refreshing ? (
+                <Loading />
+            ) : historyLeaves.length === 0 && errors.history ? (
+                <EmptyState icon="alert-circle" title="Could not load leave history" message={errors.history} action="Try again" onAction={onRefresh} />
+            ) : historyLeaves.length === 0 ? (
                 <EmptyState
                     icon="clock"
                     title="No leave history"
@@ -709,8 +776,16 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
 
     const renderStatisticsTab = () => (
         <Screen refreshing={refreshing} onRefresh={onRefresh}>
-            {!statistics ? (
-                <EmptyState icon="bar-chart-2" title="No summary available" message="Pull down to try again." />
+            {!statistics && tabLoading && !refreshing ? (
+                <Loading />
+            ) : !statistics ? (
+                <EmptyState
+                    icon="bar-chart-2"
+                    title={errors.statistics ? 'Could not load the summary' : 'No summary available'}
+                    message={errors.statistics || undefined}
+                    action="Try again"
+                    onAction={onRefresh}
+                />
             ) : (
                 <>
                     <StatStrip
@@ -740,7 +815,7 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
                     <Button
                         title={applyAutoApprove ? 'Submit and approve' : 'Submit for approval'}
                         onPress={handleAdminSubmitLeave}
-                        loading={loading}
+                        loading={submitting}
                         disabled={!applyForEmployee || !applyLeaveType}
                     />
                 )}
@@ -767,14 +842,14 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
                         icon="calendar"
                         value={formatShortDate(applyFromDate)}
                         onPress={() => setShowApplyFromDatePicker(true)}
-                        style={styles.flex}
+                        style={styles.dateField}
                     />
                     <SelectField
                         label="To"
                         icon="calendar"
                         value={formatShortDate(applyToDate)}
                         onPress={() => setShowApplyToDatePicker(true)}
-                        style={styles.flex}
+                        style={styles.dateField}
                     />
                 </View>
                 {showApplyFromDatePicker && (
@@ -875,16 +950,16 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
         if (actionType === 'approve') {
             return (
                 <>
-                    <Button title="Back" variant="secondary" onPress={() => setActionType('')} style={styles.flex} />
-                    <Button title="Approve" onPress={handleApprove} style={styles.flex} />
+                    <Button title="Back" variant="secondary" onPress={() => setActionType('')} disabled={acting} style={styles.flex} />
+                    <Button title="Approve" onPress={handleApprove} loading={acting} style={styles.flex} />
                 </>
             );
         }
         if (actionType === 'reject') {
             return (
                 <>
-                    <Button title="Back" variant="secondary" onPress={() => setActionType('')} style={styles.flex} />
-                    <Button title="Reject" variant="dangerSolid" onPress={handleReject} disabled={!rejectionReason.trim()} style={styles.flex} />
+                    <Button title="Back" variant="secondary" onPress={() => setActionType('')} disabled={acting} style={styles.flex} />
+                    <Button title="Reject" variant="dangerSolid" onPress={handleReject} loading={acting} disabled={!rejectionReason.trim()} style={styles.flex} />
                 </>
             );
         }
@@ -906,7 +981,8 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
             subtitle={actionType
                 ? [selectedLeave?.employee_name, selectedLeave?.leave_type].filter(Boolean).join('  ·  ')
                 : selectedLeave?.leave_type}
-            onClose={() => setShowActionModal(false)}
+            onClose={() => !acting && setShowActionModal(false)}
+            dismissable={!acting}
             footer={renderActionSheetFooter()}
         >
             {selectedLeave ? (
@@ -923,6 +999,7 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
                                 hint="Included in the employee's notification."
                                 value={remarks}
                                 onChangeText={setRemarks}
+                                editable={!acting}
                                 multiline
                                 numberOfLines={3}
                                 style={styles.actionField}
@@ -934,6 +1011,7 @@ const LeaveApprovalsScreen = ({ navigation, route }) => {
                                 hint="Included in the employee's notification."
                                 value={rejectionReason}
                                 onChangeText={setRejectionReason}
+                                editable={!acting}
                                 multiline
                                 numberOfLines={3}
                                 style={styles.actionField}
@@ -1078,6 +1156,7 @@ const PickerSheet = ({ config, query, onQuery, onSelect, onClose }) => {
                         <Row
                             key={o.value || 'all'}
                             title={o.label}
+                            titleLines={2}
                             subtitle={o.subtitle}
                             value={o.detail}
                             chevron={false}
@@ -1111,7 +1190,8 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 4,
-        height: 32,
+        minHeight: 32,
+        paddingVertical: 4,
         maxWidth: 200,
         paddingHorizontal: 10,
         borderRadius: 8,
@@ -1121,7 +1201,7 @@ const styles = StyleSheet.create({
     chipPressed: { opacity: 0.7 },
     chipText: { fontSize: 13, fontWeight: '500', color: color.textSecondary, flexShrink: 1 },
     chipTextActive: { color: color.accent },
-    clear: { height: 32, justifyContent: 'center', paddingHorizontal: space.xs },
+    clear: { minHeight: 32, justifyContent: 'center', paddingHorizontal: space.xs },
     clearText: { fontSize: 13, fontWeight: '600', color: color.accent },
 
     formBar: {
@@ -1135,14 +1215,16 @@ const styles = StyleSheet.create({
         borderBottomColor: color.border,
     },
     formTitle: { ...type.title, flex: 1 },
-    dates: { flexDirection: 'row', gap: space.md },
+    // side by side from 360 dp; stacked on a 320 dp phone, where two dates would be cut off at large text
+    dates: { flexDirection: 'row', flexWrap: 'wrap', columnGap: space.md },
+    dateField: { flexGrow: 1, flexBasis: 140 },
     strip: { marginBottom: space.xl },
 
     infoList: { marginBottom: space.sm },
     info: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.lg, paddingVertical: 11 },
     infoStacked: { flexDirection: 'column', alignItems: 'stretch', gap: 4 },
     infoDivider: { height: StyleSheet.hairlineWidth, backgroundColor: color.divider },
-    infoLabel: { ...type.secondary, lineHeight: 21 },
+    infoLabel: { ...type.secondary, lineHeight: 21, flexShrink: 1, maxWidth: '45%' },
     infoValue: { ...type.body, flex: 1, textAlign: 'right', lineHeight: 21 },
     infoValueStacked: { flex: 0, textAlign: 'left' },
     infoMuted: { color: color.textTertiary },

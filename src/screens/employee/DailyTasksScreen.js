@@ -4,7 +4,7 @@
 // can be started, edited or deleted; tasks in progress can be marked complete. New tasks are
 // added from the footer button.
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, Alert } from 'react-native';
 import ApiService from '../../services/api.service';
 import showToast from '../../utils/Toast';
 import {
@@ -39,12 +39,20 @@ const statusLabel = (status) => (status === 'In Progress' ? 'In progress' : stat
 const toOptions = (values) => values.map((v) => ({ value: v, label: statusLabel(v) }));
 // "Took 2 Days" -> "Took 2 days"
 const sentenceCase = (text) => (text ? text.charAt(0) + text.slice(1).toLowerCase() : text);
+// 2.3456 -> "2.35 h"
+const hoursLabel = (hours) => `${Math.round(Number(hours) * 100) / 100} h`;
 
 const DailyTasksScreen = () => {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [tasks, setTasks] = useState([]);
+    const [loadError, setLoadError] = useState(null);
+    // each load gets a number; a reply for a date or tab the user has already left is dropped
+    const requestId = useRef(0);
     const statusBusy = useRef(false);
+    const createBusy = useRef(false);
+    const editBusy = useRef(false);
+    const deleteBusy = useRef(false);
     const [summary, setSummary] = useState({});
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [activeTab, setActiveTab] = useState('All');
@@ -92,31 +100,39 @@ const DailyTasksScreen = () => {
     };
 
     const fetchTasks = useCallback(async () => {
+        const id = ++requestId.current;
         try {
             const dateStr = formatDate(selectedDate);
             const filter = activeTab === 'All' ? null : activeTab;
             const response = await ApiService.getMyDailyTasks(dateStr, filter);
-            if (response?.success && response?.data?.message) {
-                const result = response.data.message;
-                if (result.status === 'success' && result.data) {
-                    setTasks(result.data.tasks || []);
-                    setSummary(result.data.summary || {});
-                } else {
-                    setTasks([]);
-                    setSummary({});
-                }
+            if (id !== requestId.current) {
+                return;
+            }
+            const result = response?.data?.message;
+            if (response?.success && result?.status === 'success' && result.data) {
+                setTasks(Array.isArray(result.data.tasks) ? result.data.tasks : []);
+                setSummary(result.data.summary || {});
+                setLoadError(null);
             } else {
+                // a failed load must not read as "no tasks", nor leave another day's tasks on screen;
+                // the API wrapper never throws and puts the server's message on response.message
                 setTasks([]);
                 setSummary({});
+                setLoadError(response?.message || result?.message || 'Check your connection and try again.');
             }
         } catch (error) {
             console.error('Fetch tasks error:', error);
+            if (id !== requestId.current) {
+                return;
+            }
             setTasks([]);
             setSummary({});
-            showToast({ type: 'error', text1: 'Could not load tasks', text2: error?.message || 'Check your connection and try again' });
+            setLoadError(error?.message || 'Check your connection and try again.');
         } finally {
-            setLoading(false);
-            setRefreshing(false);
+            if (id === requestId.current) {
+                setLoading(false);
+                setRefreshing(false);
+            }
         }
     }, [selectedDate, activeTab]);
 
@@ -141,6 +157,10 @@ const DailyTasksScreen = () => {
             showToast({ type: 'error', text1: 'Title is required', text2: 'Enter a task title' });
             return;
         }
+        if (createBusy.current) {
+            return;
+        }
+        createBusy.current = true;
         setCreating(true);
         try {
             const response = await ApiService.createDailyTask({
@@ -154,13 +174,14 @@ const DailyTasksScreen = () => {
                 setNewTitle('');
                 setNewDescription('');
                 setNewPriority('Medium');
-                fetchTasks();
+                await fetchTasks();
             } else {
-                showToast({ type: 'error', text1: 'Task not added', text2: response?.data?.message?.message || 'Failed to create task' });
+                showToast({ type: 'error', text1: 'Task not added', text2: response?.message || response?.data?.message?.message || 'Failed to create task' });
             }
         } catch (error) {
-            showToast({ type: 'error', text1: 'Task not added', text2: 'Failed to create task' });
+            showToast({ type: 'error', text1: 'Task not added', text2: error?.message || 'Failed to create task' });
         } finally {
+            createBusy.current = false;
             setCreating(false);
         }
     };
@@ -175,12 +196,14 @@ const DailyTasksScreen = () => {
             const response = await ApiService.updateTaskStatus({ task_name: taskName, new_status: newStatus });
             if (response?.success && response?.data?.message?.status === 'success') {
                 showToast({ type: 'success', text1: 'Task updated', text2: response.data.message.message });
-                fetchTasks();
+                // keep the busy flag until the list shows the new status, so the old button
+                // can't be tapped again
+                await fetchTasks();
             } else {
-                showToast({ type: 'error', text1: 'Not updated', text2: response?.data?.message?.message || 'Update failed' });
+                showToast({ type: 'error', text1: 'Not updated', text2: response?.message || response?.data?.message?.message || 'Update failed' });
             }
         } catch (error) {
-            showToast({ type: 'error', text1: 'Not updated', text2: 'Update failed' });
+            showToast({ type: 'error', text1: 'Not updated', text2: error?.message || 'Update failed' });
         } finally {
             statusBusy.current = false;
         }
@@ -188,9 +211,9 @@ const DailyTasksScreen = () => {
 
     const openEditModal = (task) => {
         setEditTask(task);
-        setEditTitle(task.task_title);
+        setEditTitle(task.task_title || '');
         setEditDescription(task.task_description || '');
-        setEditPriority(task.priority);
+        setEditPriority(task.priority || 'Medium');
         setEditRemarks(task.remarks || '');
         setShowEditModal(true);
     };
@@ -200,6 +223,10 @@ const DailyTasksScreen = () => {
             showToast({ type: 'error', text1: 'Title is required', text2: 'Enter a task title' });
             return;
         }
+        if (editBusy.current || !editTask) {
+            return;
+        }
+        editBusy.current = true;
         setSaving(true);
         try {
             const response = await ApiService.updateDailyTask({
@@ -213,28 +240,35 @@ const DailyTasksScreen = () => {
                 showToast({ type: 'success', text1: 'Task updated' });
                 setShowEditModal(false);
                 setEditTask(null);
-                fetchTasks();
+                await fetchTasks();
             } else {
-                showToast({ type: 'error', text1: 'Not updated', text2: response?.data?.message?.message || 'Update failed' });
+                showToast({ type: 'error', text1: 'Not updated', text2: response?.message || response?.data?.message?.message || 'Update failed' });
             }
         } catch (error) {
-            showToast({ type: 'error', text1: 'Not updated', text2: 'Update failed' });
+            showToast({ type: 'error', text1: 'Not updated', text2: error?.message || 'Update failed' });
         } finally {
+            editBusy.current = false;
             setSaving(false);
         }
     };
 
     const handleDelete = async (taskName) => {
+        if (deleteBusy.current) {
+            return;
+        }
+        deleteBusy.current = true;
         try {
             const response = await ApiService.deleteDailyTask(taskName);
             if (response?.success && response?.data?.message?.status === 'success') {
                 showToast({ type: 'success', text1: 'Task deleted' });
-                fetchTasks();
+                await fetchTasks();
             } else {
-                showToast({ type: 'error', text1: 'Not deleted', text2: response?.data?.message?.message || 'Delete failed' });
+                showToast({ type: 'error', text1: 'Not deleted', text2: response?.message || response?.data?.message?.message || 'Delete failed' });
             }
         } catch (error) {
-            showToast({ type: 'error', text1: 'Not deleted', text2: 'Delete failed' });
+            showToast({ type: 'error', text1: 'Not deleted', text2: error?.message || 'Delete failed' });
+        } finally {
+            deleteBusy.current = false;
         }
     };
 
@@ -242,10 +276,20 @@ const DailyTasksScreen = () => {
     // delete button used to be shown for)
     const deleteFromSheet = () => {
         const taskName = editTask?.name;
-        setShowEditModal(false);
-        if (taskName) {
-            handleDelete(taskName);
+        if (!taskName) {
+            return;
         }
+        Alert.alert('Delete this task?', editTask?.task_title || '', [
+            { text: 'Keep', style: 'cancel' },
+            {
+                text: 'Delete',
+                style: 'destructive',
+                onPress: () => {
+                    setShowEditModal(false);
+                    handleDelete(taskName);
+                },
+            },
+        ]);
     };
 
     // ------------------------------------------------------------------ list
@@ -260,7 +304,7 @@ const DailyTasksScreen = () => {
         const facts = [
             priorityTag ? null : item.priority ? `${item.priority} priority` : null,
             item.assigned_by_name ? `From ${item.assigned_by_name}` : null,
-            isCompleted && item.time_taken_hours > 0 ? `${item.time_taken_hours}h` : null,
+            isCompleted && Number(item.time_taken_hours) > 0 ? hoursLabel(item.time_taken_hours) : null,
             isCompleted ? sentenceCase(item.completion_label) : null,
         ].filter(Boolean).join('  ·  ');
         const subtitle = [item.task_description, facts].filter(Boolean).join('\n');
@@ -319,6 +363,9 @@ const DailyTasksScreen = () => {
         if (loading) {
             return <Loading />;
         }
+        if (loadError) {
+            return <EmptyState icon="alert-circle" title="Could not load tasks" message={loadError} action="Try again" onAction={onRefresh} />;
+        }
         if (tasks.length === 0) {
             const which = activeTab === 'All' ? '' : `${statusLabel(activeTab).toLowerCase()} `;
             return <EmptyState icon="check-square" title="No tasks" message={`No ${which}tasks for ${getDisplayDate(selectedDate)}.`} />;
@@ -343,10 +390,14 @@ const DailyTasksScreen = () => {
 
     // ------------------------------------------------------------------ sheets
 
+    // the server always adds new tasks to today's list, whichever day is on screen
+    const viewingToday = formatDate(selectedDate) === formatDate(new Date());
+
     const renderCreateSheet = () => (
         <Sheet
             visible={showCreateModal}
             title="New task"
+            subtitle={viewingToday ? undefined : "Goes on today's list"}
             onClose={() => !creating && setShowCreateModal(false)}
             dismissable={!creating}
             footer={(

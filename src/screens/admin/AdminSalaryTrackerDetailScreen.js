@@ -3,7 +3,7 @@
 // One Employee Salary Tracker record: the salary worked out for the month, what has been
 // paid against it, the attendance it was based on and every payment entry. Records an
 // employee submitted themselves ("Pending Review") are approved or rejected here.
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import ApiService from '../../services/api.service';
@@ -64,6 +64,24 @@ const inr = (value) => {
 };
 const minus = (value) => (Number(value) > 0 ? `−${inr(value)}` : inr(value));
 
+// The API wrapper never throws on HTTP errors; the server's message is in `response.message`
+// (a frappe.throw comes back as HTTP 417 with no `status` in the body).
+const failMessage = (resp, result, fallback = 'Failed') => {
+    const msg = resp?.message || result?.message;
+    return typeof msg === 'string' && msg.trim() ? msg.trim() : fallback;
+};
+
+// a real calendar date typed as 'YYYY-MM-DD' (read as a local date, never through the Date parser)
+const isValidYMD = (value) => {
+    const text = String(value || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+        return false;
+    }
+    const [y, m, d] = text.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
+};
+
 // 'YYYY-MM-DD' -> '05 Mar 2026'
 const dateLabel = (value) => {
     const [y, m, d] = String(value || '').slice(0, 10).split('-').map(Number);
@@ -76,6 +94,11 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [approving, setApproving] = useState(null); // 'approve' | 'reject' while the request runs
+    const [loadError, setLoadError] = useState(null);
+    const [deleting, setDeleting] = useState(false);
+    // blocks a second approve / payment / delete before the buttons re-render as busy
+    const busy = useRef(false);
+    const loadRequest = useRef(0);
 
     // Payment sheet
     const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -120,26 +143,34 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
         }
     };
 
-    useEffect(() => {
-        loadDetail();
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
-    }, []);
-
+    // loads on mount too (focus), so no separate mount effect
     useFocusEffect(
         // eslint-disable-next-line react-hooks/exhaustive-deps -- reload on every focus
         useCallback(() => { loadDetail(); }, [])
     );
 
+    // Full-screen loading is only for the first load; reloads keep the record on screen.
     const loadDetail = async () => {
-        setLoading(true);
+        const requestId = ++loadRequest.current;
         try {
             const resp = await ApiService.getSalaryTrackerDetail({ tracker_id: trackerId });
+            if (requestId !== loadRequest.current) {
+                return;
+            }
             const result = resp?.data?.message || resp?.data;
-            setData(result?.data || null);
+            const record = resp?.success ? result?.data || null : null;
+            setData(record);
+            setLoadError(record ? null : failMessage(resp, null, 'Could not load this record'));
         } catch (err) {
             console.error('Load tracker detail error:', err);
+            if (requestId === loadRequest.current) {
+                setData(null);
+                setLoadError('Could not load this record');
+            }
         } finally {
-            setLoading(false);
+            if (requestId === loadRequest.current) {
+                setLoading(false);
+            }
         }
     };
 
@@ -156,20 +187,25 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
                 action: action,
             });
             const result = resp?.data?.message || resp?.data;
-            if (result?.status === 'success') {
+            if (resp?.success && result?.status === 'success') {
                 showToast({ type: 'success', text1: action === 'approve' ? 'Approved' : 'Rejected', text2: result.message });
-                loadDetail();
+                await loadDetail();
             } else {
-                showToast({ type: 'error', text1: 'Not updated', text2: result?.message || 'Failed' });
+                showToast({ type: 'error', text1: 'Not updated', text2: failMessage(resp, result) });
             }
         } catch (err) {
-            showToast({ type: 'error', text1: 'Not updated', text2: err.message });
+            showToast({ type: 'error', text1: 'Not updated', text2: err.message || 'Failed' });
         }
     };
 
     const decide = async (action) => {
+        if (busy.current) {
+            return;
+        }
+        busy.current = true;
         setApproving(action);
         await handleApprove(action);
+        busy.current = false;
         setApproving(null);
     };
 
@@ -178,35 +214,48 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
             showToast({ type: 'error', text1: 'Check the amount', text2: 'Enter a valid amount' });
             return;
         }
+        if (!isValidYMD(payDate)) {
+            showToast({ type: 'error', text1: 'Check the date', text2: 'Enter the payment date as YYYY-MM-DD' });
+            return;
+        }
+        if (busy.current) {
+            return;
+        }
+        busy.current = true;
         setPayLoading(true);
         try {
             const resp = await ApiService.recordSalaryPayment({
                 tracker_id: trackerId,
                 amount: parseFloat(payAmount),
-                payment_date: payDate,
+                payment_date: payDate.trim(),
                 payment_mode: payMode,
                 reference: payRef,
                 remarks: payRemarks,
             });
             const result = resp?.data?.message || resp?.data;
-            if (result?.status === 'success') {
+            if (resp?.success && result?.status === 'success') {
                 showToast({ type: 'success', text1: 'Payment recorded', text2: result.message });
                 setShowPaymentModal(false);
                 setPayAmount('');
+                setPayPreset('custom');
                 setPayRef('');
                 setPayRemarks('');
                 loadDetail();
             } else {
-                showToast({ type: 'error', text1: 'Not recorded', text2: result?.message || 'Failed' });
+                showToast({ type: 'error', text1: 'Not recorded', text2: failMessage(resp, result) });
             }
         } catch (err) {
-            showToast({ type: 'error', text1: 'Not recorded', text2: err.message });
+            showToast({ type: 'error', text1: 'Not recorded', text2: err.message || 'Failed' });
         } finally {
+            busy.current = false;
             setPayLoading(false);
         }
     };
 
     const handleDeletePayment = (rowIdx) => {
+        if (busy.current) {
+            return;
+        }
         Alert.alert(
             'Delete payment',
             'This payment entry will be removed and the pending amount updated.',
@@ -214,20 +263,29 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
                 { text: 'Cancel', style: 'cancel' },
                 {
                     text: 'Delete', style: 'destructive', onPress: async () => {
+                        // row indexes shift after a delete: never run two at once
+                        if (busy.current) {
+                            return;
+                        }
+                        busy.current = true;
+                        setDeleting(true);
                         try {
                             const resp = await ApiService.deleteSalaryPayment({
                                 tracker_id: trackerId,
                                 row_idx: rowIdx,
                             });
                             const result = resp?.data?.message || resp?.data;
-                            if (result?.status === 'success') {
+                            if (resp?.success && result?.status === 'success') {
                                 showToast({ type: 'success', text1: 'Payment deleted', text2: result.message });
-                                loadDetail();
+                                await loadDetail();
                             } else {
-                                showToast({ type: 'error', text1: 'Not deleted', text2: result?.message || 'Failed' });
+                                showToast({ type: 'error', text1: 'Not deleted', text2: failMessage(resp, result) });
                             }
                         } catch (err) {
-                            showToast({ type: 'error', text1: 'Not deleted', text2: err.message });
+                            showToast({ type: 'error', text1: 'Not deleted', text2: err.message || 'Failed' });
+                        } finally {
+                            busy.current = false;
+                            setDeleting(false);
                         }
                     },
                 },
@@ -240,11 +298,11 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
         try {
             const resp = await ApiService.recalculateSalaryTracker({ tracker_id: trackerId });
             const result = resp?.data?.message || resp?.data;
-            if (result?.status === 'success') {
+            if (resp?.success && result?.status === 'success') {
                 showToast({ type: 'success', text1: 'Recalculated', text2: result.message });
                 loadDetail();
             } else {
-                showToast({ type: 'error', text1: 'Not recalculated', text2: result?.message || 'Failed' });
+                showToast({ type: 'error', text1: 'Not recalculated', text2: failMessage(resp, result) });
             }
         } catch (err) {
             showToast({ type: 'error', text1: 'Not recalculated', text2: err.message });
@@ -262,12 +320,19 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
     if (!data) {
         return (
             <Screen refreshing={refreshing} onRefresh={onRefresh}>
-                <EmptyState icon="file-text" title="Record not found" message="Pull down to try again." />
+                <EmptyState
+                    icon="file-text"
+                    title="Could not load this record"
+                    message={loadError || 'Pull down to try again.'}
+                    action="Try again"
+                    onAction={onRefresh}
+                />
             </Screen>
         );
     }
 
-    const paidPct = data.salary_to_pay > 0 ? ((data.total_paid / data.salary_to_pay) * 100) : 0;
+    const salaryToPay = Number(data.salary_to_pay) || 0;
+    const paidPct = salaryToPay > 0 ? Math.max(0, ((Number(data.total_paid) || 0) / salaryToPay) * 100) : 0;
     const payments = data.payments || [];
     const isPendingReview = data.status === 'Pending Review';
     const pendingAmount = Number(data.pending_amount || 0);
@@ -276,14 +341,15 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
         : ((data.present_days || 0) + (data.wfh_days || 0) + (data.onsite_days || 0));
     const officeDays = data.office_days != null ? data.office_days : data.present_days;
 
+    const canRecordPayment = data.status === 'Approved' && Number(data.pending_amount) > 0;
     const footer = isPendingReview ? (
         <View style={styles.footerRow}>
             <Button title="Reject" variant="danger" onPress={() => decide('reject')} loading={approving === 'reject'} disabled={Boolean(approving)} style={styles.flex} />
             <Button title="Approve" onPress={() => decide('approve')} loading={approving === 'approve'} disabled={Boolean(approving)} style={styles.flex} />
         </View>
-    ) : (
+    ) : canRecordPayment ? (
         <Button title="Record payment" onPress={() => setShowPaymentModal(true)} />
-    );
+    ) : null;
 
     return (
         <View style={styles.screen}>
@@ -291,9 +357,10 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
                 <Group>
                     <Row
                         left={<Avatar name={data.employee_name} size={40} />}
-                        title={data.employee_name}
+                        title={data.employee_name || data.employee}
+                        titleLines={2}
                         subtitle={[
-                            [data.salary_month || `${data.month} ${data.year}`, data.employee].filter(Boolean).join('  ·  '),
+                            [data.salary_month || [data.month, data.year].filter(Boolean).join(' '), data.employee].filter(Boolean).join('  ·  '),
                             [data.designation, String(data.department || '').replace(' - DG', '')].filter(Boolean).join('  ·  '),
                         ].filter(Boolean).join('\n')}
                     />
@@ -312,12 +379,12 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
                     <Row title="Total deductions" value={minus(data.total_deductions)} />
                 </Group>
                 <Group>
-                    <Row title="Salary to pay" right={<Text style={styles.total}>{inr(data.salary_to_pay)}</Text>} />
+                    <Row title="Salary to pay" titleLines={2} right={<Text style={styles.total} numberOfLines={1}>{inr(data.salary_to_pay)}</Text>} />
                 </Group>
 
                 <Group
                     title="Payment"
-                    action={isPendingReview ? 'Record payment' : undefined}
+                    action={undefined}
                     onAction={() => setShowPaymentModal(true)}
                 >
                     <Row title="Paid" value={inr(data.total_paid)} />
@@ -370,23 +437,26 @@ function AdminSalaryTrackerDetailScreen({ route, navigation }) {
                                 ? rawRemarks.replace(/^\[employee\]\s*/, '')
                                 : rawRemarks;
                             return (
+                                // amount as the title: a value column next to the delete button
+                                // left too little room for the payment details on narrow phones
                                 <Row
-                                    key={index}
-                                    title={p.payment_mode || 'Payment'}
+                                    key={p.idx ?? `p-${index}`}
+                                    title={inr(p.amount)}
                                     subtitle={[
-                                        [dateLabel(p.payment_date), p.reference ? `Ref ${p.reference}` : null].filter(Boolean).join('  ·  '),
+                                        [p.payment_mode, dateLabel(p.payment_date)].filter(Boolean).join('  ·  '),
+                                        p.reference ? `Ref ${p.reference}` : null,
                                         displayRemarks,
                                         p.recorded_by ? `By ${p.recorded_by}` : null,
-                                    ].filter(Boolean).join('\n')}
-                                    subtitleLines={4}
+                                    ].filter(Boolean).join('\n') || undefined}
+                                    subtitleLines={5}
                                     meta={isEmployeeRecorded ? <Tag label="Recorded by employee" tone="info" /> : null}
-                                    value={inr(p.amount)}
                                     right={(
                                         <IconButton
                                             name="trash-2"
                                             size={18}
                                             color={color.textTertiary}
                                             label="Delete payment"
+                                            disabled={deleting}
                                             onPress={() => handleDeletePayment(p.idx)}
                                         />
                                     )}

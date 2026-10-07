@@ -2,7 +2,7 @@
 //
 // Tasks of one project (hrms.api.admin_tasks). Tapping a task opens its work logs; new tasks
 // are created from the sheet behind the footer button.
-import React, { useCallback, useLayoutEffect, useMemo, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { useFocusEffect, useRoute, useNavigation } from '@react-navigation/native';
 import showToast from '../../utils/Toast';
@@ -47,26 +47,29 @@ const taskTone = (status) => {
     return { working: 'warning', 'pending review': 'purple', overdue: 'danger', open: 'info' }[s] || 'neutral';
 };
 
+const isDone = (status) => ['completed', 'closed', 'done'].includes(String(status).toLowerCase());
+
 const TaskRow = ({ task, onPress }) => {
     const status = task.status || 'Open';
-    const progress = Number(task.progress || 0);
+    const progress = Number(task.progress) || 0;
     const due = shortDate(task.exp_end_date);
     const subtitle = [task.priority ? `${task.priority} priority` : null, due ? `Due ${due}` : null].filter(Boolean).join('  ·  ');
 
     return (
+        // status sits on the progress line (as on the projects list) so a long subject keeps the row's width
         <Row
-            title={task.subject}
+            title={task.subject || task.name}
             titleLines={2}
             subtitle={subtitle || undefined}
             meta={(
                 <View style={styles.metaLine}>
+                    <StatusText label={status} tone={taskTone(status)} />
                     <View style={styles.bar}>
                         <ProgressBar value={progress} tone={taskTone(status) === 'success' ? 'success' : 'accent'} />
                     </View>
-                    <Text style={styles.percent}>{Math.round(progress)}%</Text>
+                    <Text style={styles.percent} numberOfLines={1}>{`${Math.round(progress)}%`}</Text>
                 </View>
             )}
-            right={<StatusText label={status} tone={taskTone(status)} />}
             onPress={onPress}
         />
     );
@@ -86,8 +89,13 @@ const ProjectTasksScreen = () => {
     const [desc, setDesc] = useState('');
     const [priority, setPriority] = useState('Medium');
     const [saving, setSaving] = useState(false);
+    const [error, setError] = useState(null);
+    const busy = useRef(false);
+    const loadRequest = useRef(0);
 
-    const headerTitle = projectName || detail?.project?.project_name || 'Project';
+    // my_project_summary returns the project fields at the top level
+    const detailName = detail?.project?.project_name || detail?.project_name;
+    const headerTitle = projectName || detailName || 'Project';
 
     useLayoutEffect(() => {
         navigation.setOptions({ title: headerTitle });
@@ -95,23 +103,41 @@ const ProjectTasksScreen = () => {
 
     const counts = useMemo(() => {
         const total = tasks.length;
-        const done = tasks.filter((t) => ['Completed', 'Closed', 'Done'].includes(String(t.status))).length;
-        const open = total - done;
+        const done = tasks.filter((t) => isDone(t.status)).length;
+        // cancelled tasks are neither open nor done
+        const open = tasks.filter((t) => !isDone(t.status) && String(t.status).toLowerCase() !== 'cancelled').length;
         return { total, open, done };
     }, [tasks]);
 
     const fetch = useCallback(async () => {
+        const requestId = ++loadRequest.current;
         setLoading(true);
         try {
             const [d, t] = await Promise.all([getProjectDetail(projectId), adminListTasks(projectId)]);
-            setDetail(d);
-            setTasks(Array.isArray(t) ? t : []);
+            if (requestId !== loadRequest.current) {
+                return;
+            }
+            if (d) {
+                setDetail(d);
+            }
+            // project.service returns null (it does not throw) when the server call fails
+            if (Array.isArray(t)) {
+                setTasks(t);
+                setError(null);
+            } else {
+                setTasks([]);
+                setError('Could not load tasks. Pull down to try again.');
+            }
         } catch (e) {
             console.warn('Project tasks fetch error', e);
-            setTasks([]);
-            showToast({ type: 'error', text1: 'Could not load tasks', text2: e?.message });
+            if (requestId === loadRequest.current) {
+                setTasks([]);
+                setError(e?.message || 'Could not load tasks. Pull down to try again.');
+            }
         } finally {
-            setLoading(false);
+            if (requestId === loadRequest.current) {
+                setLoading(false);
+            }
         }
     }, [projectId]);
 
@@ -131,12 +157,17 @@ const ProjectTasksScreen = () => {
     };
 
     const addTask = async () => {
-        if (!title.trim()) {
+        if (!title.trim() || busy.current) {
             return;
         }
+        busy.current = true;
         setSaving(true);
         try {
-            await createTask(projectId, title.trim(), desc.trim(), { priority });
+            // project.service returns null (it does not throw) when the server call fails
+            const created = await createTask(projectId, title.trim(), desc.trim(), { priority });
+            if (!created) {
+                throw new Error('The server did not accept the task. Try again.');
+            }
             setNewVisible(false);
             setTitle('');
             setDesc('');
@@ -144,8 +175,9 @@ const ProjectTasksScreen = () => {
             fetch();
         } catch (e) {
             console.warn('Task create error', e);
-            showToast({ type: 'error', text1: 'Task not created', text2: e?.message });
+            showToast({ type: 'error', text1: 'Task not created', text2: e?.message || 'Try again' });
         } finally {
+            busy.current = false;
             setSaving(false);
         }
     };
@@ -153,7 +185,7 @@ const ProjectTasksScreen = () => {
     const openTask = (item) =>
         navigation.navigate('ProjectLogsScreen', {
             projectId,
-            projectName: detail?.project?.project_name || projectName,
+            projectName: detailName || projectName,
             taskId: item.name,
             taskSubject: item.subject,
             taskProgress: item.progress || 0,
@@ -168,6 +200,8 @@ const ProjectTasksScreen = () => {
             >
                 {loading && !refreshing && tasks.length === 0 ? (
                     <Loading />
+                ) : error && tasks.length === 0 ? (
+                    <EmptyState icon="alert-circle" title="Could not load tasks" message={error} action="Try again" onAction={fetch} />
                 ) : tasks.length === 0 ? (
                     <EmptyState icon="check-square" title="No tasks yet" message="Add the first task for this project." />
                 ) : (
@@ -193,7 +227,7 @@ const ProjectTasksScreen = () => {
                 visible={newVisible}
                 title="New task"
                 subtitle={headerTitle}
-                onClose={() => setNewVisible(false)}
+                onClose={() => !saving && setNewVisible(false)}
                 dismissable={!saving}
                 footer={(
                     <>
@@ -202,7 +236,7 @@ const ProjectTasksScreen = () => {
                     </>
                 )}
             >
-                <TextField label="Title" placeholder="What needs to be done" value={title} onChangeText={setTitle} />
+                <TextField label="Title" placeholder="What needs to be done" value={title} onChangeText={setTitle} maxLength={140} />
                 <TextField
                     label="Description"
                     placeholder="Optional"

@@ -3,7 +3,7 @@
 // Review Work From Home requests. Approving a request lets the employee work from home on
 // the requested dates only; their standing arrangement is set in WFH Settings. The server
 // notifies the employee of the decision.
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import ApiService from '../../services/api.service';
 import showToast from '../../utils/Toast';
@@ -18,6 +18,7 @@ import {
     EmptyState,
     Loading,
     StatusText,
+    Notice,
     Icon,
     color,
     space,
@@ -63,6 +64,8 @@ const WFHApprovalsScreen = ({ route }) => {
     const [employeeFilter, setEmployeeFilter] = useState(route?.params?.preselectEmployee || '');
     const [selected, setSelected] = useState(null);
     const [processing, setProcessing] = useState(null); // 'approve' | 'reject'
+    const [loadError, setLoadError] = useState('');
+    const busy = useRef(false); // blocks a second tap while a decision is being sent
 
     const load = useCallback(async (isRefresh = false) => {
         isRefresh ? setRefreshing(true) : setLoading(true);
@@ -71,9 +74,14 @@ const WFHApprovalsScreen = ({ route }) => {
             setPending(listOf(pendingRes));
             setHistory(listOf(allRes).filter((r) => ['approved', 'rejected'].includes(String(r.status).toLowerCase())));
             if (!pendingRes.success || !allRes.success) {
-                showToast({ type: 'error', text1: 'Could not load all requests', text2: pendingRes.message || allRes.message || 'Please try again' });
+                const msg = (!pendingRes.success && pendingRes.message) || (!allRes.success && allRes.message) || 'Please try again';
+                setLoadError(msg);
+                showToast({ type: 'error', text1: 'Could not load all requests', text2: msg });
+            } else {
+                setLoadError('');
             }
         } catch (error) {
+            setLoadError(error.message || 'Please try again');
             showToast({ type: 'error', text1: 'Could not load WFH requests', text2: error.message });
         } finally {
             isRefresh ? setRefreshing(false) : setLoading(false);
@@ -99,15 +107,20 @@ const WFHApprovalsScreen = ({ route }) => {
             const since = new Date();
             since.setHours(0, 0, 0, 0);
             since.setDate(since.getDate() - (range === 'week' ? 7 : 30));
-            list = list.filter((r) => new Date(String(r.modified).replace(' ', 'T')) >= since);
+            // compare calendar days, read from the digits (Hermes can't parse 'YYYY-MM-DD HH:MM:SS.ffffff')
+            list = list.filter((r) => {
+                const day = toDate(r.modified);
+                return day ? day >= since : false;
+            });
         }
         return employeeFilter ? list.filter((r) => r.employee === employeeFilter) : list;
     }, [tab, range, pending, history, employeeFilter]);
 
     const decide = async (action) => {
-        if (!selected) {
+        if (!selected || busy.current) {
             return;
         }
+        busy.current = true;
         setProcessing(action);
         try {
             const res = action === 'approve'
@@ -121,13 +134,14 @@ const WFHApprovalsScreen = ({ route }) => {
                     text2: `${selected.employee_name} has been notified`,
                 });
                 setSelected(null);
-                load(true);
+                await load(true);
             } else {
                 showToast({ type: 'error', text1: 'Not updated', text2: body.message || res.message || 'Please try again' });
             }
         } catch (error) {
             showToast({ type: 'error', text1: 'Not updated', text2: error.message });
         } finally {
+            busy.current = false;
             setProcessing(null);
         }
     };
@@ -150,7 +164,7 @@ const WFHApprovalsScreen = ({ route }) => {
                 ) : null}
                 {employeeFilter ? (
                     <Pressable style={styles.filterChip} onPress={() => setEmployeeFilter('')} hitSlop={6}>
-                        <Text style={styles.filterChipText}>Employee {employeeFilter}</Text>
+                        <Text style={styles.filterChipText} numberOfLines={1}>Employee {employeeFilter}</Text>
                         <Icon name="x" size={14} color={color.textSecondary} />
                     </Pressable>
                 ) : null}
@@ -160,7 +174,14 @@ const WFHApprovalsScreen = ({ route }) => {
                 <Loading />
             ) : (
                 <Screen refreshing={refreshing} onRefresh={() => load(true)}>
-                    {visible.length === 0 ? (
+                    {loadError && visible.length > 0 ? (
+                        <Notice tone="danger" icon="alert-circle" title="Could not load all requests" onPress={() => load(true)}>
+                            {`${loadError} Tap to try again.`}
+                        </Notice>
+                    ) : null}
+                    {loadError && visible.length === 0 ? (
+                        <EmptyState icon="alert-circle" title="Could not load requests" message={loadError} action="Try again" onAction={() => load(false)} />
+                    ) : visible.length === 0 ? (
                         <EmptyState
                             icon={tab === 'pending' ? 'check-circle' : 'clock'}
                             title={tab === 'pending' ? 'No pending requests' : 'No decisions yet'}
@@ -174,6 +195,7 @@ const WFHApprovalsScreen = ({ route }) => {
                                     left={<Avatar name={r.employee_name} />}
                                     title={r.employee_name}
                                     subtitle={r.reason ? `${dateRange(r.from_date, r.to_date)}\n${r.reason}` : dateRange(r.from_date, r.to_date)}
+                                    subtitleLines={3}
                                     right={tab === 'history' ? <StatusText label={r.status} /> : null}
                                     onPress={() => setSelected(r)}
                                 />
@@ -202,7 +224,7 @@ const WFHApprovalsScreen = ({ route }) => {
                     <>
                         <Detail label="Dates" value={dateRange(selected.from_date, selected.to_date)} />
                         <Detail label="Reason" value={selected.reason || 'No reason given'} />
-                        <Detail label="Employee ID" value={selected.employee} />
+                        <Detail label="Employee ID" value={selected.employee || '-'} />
                         {!isPending ? <Detail label="Status" value={<StatusText label={selected.status} size={15} />} /> : null}
                         {isPending ? (
                             <Text style={styles.sheetNote}>
@@ -237,6 +259,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         alignSelf: 'flex-start',
+        maxWidth: '100%',
         gap: 6,
         marginTop: space.sm,
         paddingHorizontal: 10,
@@ -244,7 +267,7 @@ const styles = StyleSheet.create({
         borderRadius: 14,
         backgroundColor: color.neutralSoft,
     },
-    filterChipText: { fontSize: 13, color: color.textSecondary, fontWeight: '500' },
+    filterChipText: { fontSize: 13, color: color.textSecondary, fontWeight: '500', flexShrink: 1 },
     detail: { marginBottom: space.lg },
     detailLabel: { ...type.caption, marginBottom: 4 },
     sheetNote: { ...type.caption, lineHeight: 17, marginBottom: space.sm },

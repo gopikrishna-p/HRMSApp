@@ -27,6 +27,7 @@ import {
     StatStrip,
     StatusText,
     Tag,
+    Notice,
     Sheet,
     Button,
     Field,
@@ -88,7 +89,7 @@ const stageOf = (claim) => claim?.stage || statusLabel(claim?.approval_status);
 const typesLabel = (claim) => {
     const types = [...new Set((claim.expenses || []).map((e) => e.expense_type).filter(Boolean))];
     if (types.length === 0) {
-        return claim.total_expenses ? `${claim.total_expenses} items` : '';
+        return claim.total_expenses ? `${claim.total_expenses} ${Number(claim.total_expenses) === 1 ? 'item' : 'items'}` : '';
     }
     return types.length === 1 ? types[0] : `${types[0]} +${types.length - 1}`;
 };
@@ -148,6 +149,8 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
     const [activeTab, setActiveTab] = useState(route?.params?.tab || 'pending'); // pending, apply, history, statistics
     const [loading, setLoading] = useState(true); // claims are fetched on mount
     const [refreshing, setRefreshing] = useState(false);
+    const [loadError, setLoadError] = useState(''); // message of the last failed list load
+    const loadSeq = useRef(0); // only the latest list load may update the screen (tabs can change mid-load)
 
     // Data states
     const [claims, setClaims] = useState([]);
@@ -168,6 +171,7 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
     const [applyRemark, setApplyRemark] = useState('');
     const [showDatePicker, setShowDatePicker] = useState({ show: false, index: -1 });
     const [submitting, setSubmitting] = useState(false);
+    const submittingRef = useRef(false);
 
     // Review sheet: the list row, its detail (lines, photos, payments) loaded fresh on open
     const [sheetOpen, setSheetOpen] = useState(false);
@@ -181,6 +185,7 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
     const [processing, setProcessing] = useState(null); // 'approve' | 'reject' while the request runs
     const [sheetError, setSheetError] = useState('');
     const openClaimId = useRef(null); // ignores a detail response for a claim that is no longer open
+    const processingRef = useRef(false); // blocks a second tap before the busy state renders
 
     // Pickers for the apply form
     const [picker, setPicker] = useState(null); // { kind: 'employee' | 'type', index, open }
@@ -232,8 +237,12 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
         }
     };
 
-    const loadClaims = async () => {
-        setLoading(true);
+    // `quiet` reloads keep the current list on screen (used after a decision)
+    const loadClaims = async (quiet = false) => {
+        const id = ++loadSeq.current;
+        if (!quiet) {
+            setLoading(true);
+        }
         try {
             let filters = { limit: 500 };
 
@@ -246,28 +255,42 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
             }
 
             const response = await apiService.getAdminExpenseClaims(filters);
+            if (id !== loadSeq.current) {
+                return;
+            }
 
             if (isApiSuccess(response)) {
-                const data = extractFrappeData(response, { claims: [], statistics: {} });
-                setClaims(data.claims || []);
+                const data = extractFrappeData(response, { claims: [], statistics: {} }) || {};
+                const rows = Array.isArray(data.claims) ? data.claims : [];
+                // History = reviewed claims; pending (Draft) ones belong to the Pending tab
+                setClaims(activeTab === 'history' ? rows.filter((c) => c.approval_status !== 'Draft') : rows);
                 setStatistics(data.statistics || {});
+                setLoadError('');
             } else {
                 console.error('Failed to load expense claims:', response);
+                const msg = getApiErrorMessage(response, 'Please try again.');
                 setClaims([]);
                 setStatistics({});
+                setLoadError(msg);
+                showToast({ type: 'error', text1: 'Could not load expense claims', text2: msg });
             }
         } catch (error) {
             console.error('Error loading expense claims:', error);
-            setClaims([]);
-            setStatistics({});
+            if (id === loadSeq.current) {
+                setClaims([]);
+                setStatistics({});
+                setLoadError(error?.message || 'Please try again.');
+            }
         } finally {
-            setLoading(false);
+            if (id === loadSeq.current) {
+                setLoading(false);
+            }
         }
     };
 
     const onRefresh = async () => {
         setRefreshing(true);
-        await loadClaims();
+        await loadClaims(true);
         setRefreshing(false);
     };
 
@@ -326,18 +349,18 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
         setSheetOpen(false);
     };
 
-    const finishReview = (toast) => {
+    const finishReview = async (toast) => {
         showToast({ type: 'success', ...toast });
         openClaimId.current = null;
         setSheetOpen(false);
-        loadClaims();
+        await loadClaims(true);
     };
 
     const setLineAmount = (idx, text) => setAmounts((all) => ({ ...all, [idx]: sanitizeAmount(text) }));
 
     const handleApprove = async () => {
         const claim = detail;
-        if (!claim) {
+        if (!claim || processingRef.current) {
             return;
         }
         setSheetError('');
@@ -361,12 +384,13 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
             return;
         }
 
+        processingRef.current = true;
         setProcessing('approve');
         try {
             // claims are no longer posted to the ledger, so no payable account is sent
             const response = await apiService.approveExpenseClaim(claim.name, remarks, sanctionedAmounts, null);
             if (isApiSuccess(response)) {
-                finishReview({ text1: 'Claim approved', text2: `${claim.employee_name}  ·  ${formatINR(totalSanctioned)} approved` });
+                await finishReview({ text1: 'Claim approved', text2: `${claim.employee_name}  ·  ${formatINR(totalSanctioned)} approved` });
             } else {
                 setSheetError(getApiErrorMessage(response, 'Failed to approve expense claim'));
             }
@@ -374,13 +398,14 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
             console.error('approve claim error:', error);
             setSheetError(error.message || 'Failed to approve claim');
         } finally {
+            processingRef.current = false;
             setProcessing(null);
         }
     };
 
     const handleReject = async () => {
         const claim = detail || selected;
-        if (!claim) {
+        if (!claim || processingRef.current) {
             return;
         }
         setSheetError('');
@@ -388,11 +413,12 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
             setSheetError('Add a reason for rejecting this claim.');
             return;
         }
+        processingRef.current = true;
         setProcessing('reject');
         try {
             const response = await apiService.rejectExpenseClaim(claim.name, reason);
             if (response.success) {
-                finishReview({ text1: 'Claim rejected', text2: claim.employee_name });
+                await finishReview({ text1: 'Claim rejected', text2: claim.employee_name });
             } else {
                 setSheetError(getApiErrorMessage(response, 'Failed to reject expense claim'));
             }
@@ -400,6 +426,7 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
             console.error('reject claim error:', error);
             setSheetError(error.message || 'Failed to reject claim');
         } finally {
+            processingRef.current = false;
             setProcessing(null);
         }
     };
@@ -516,10 +543,11 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
     };
 
     const handleApplySubmit = async () => {
-        if (!validateApplyForm()) {
+        if (submittingRef.current || !validateApplyForm()) {
             return;
         }
 
+        submittingRef.current = true;
         setSubmitting(true);
         try {
             const expenseItems = applyExpenses.map(exp => ({
@@ -541,7 +569,7 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
                 showToast({
                     type: 'success',
                     text1: 'Claim created',
-                    text2: `${data.claim_id || 'N/A'}  ·  ${formatINR(data.total_claimed_amount || calculateApplyTotal())}`,
+                    text2: [data.claim_id, formatINR(data.total_claimed_amount || calculateApplyTotal())].filter(Boolean).join('  ·  '),
                 });
                 // Reset form (the photos are now on the claim)
                 setApplyEmployee('');
@@ -556,6 +584,7 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
             console.error('Submit expense claim error:', error);
             showToast({ type: 'error', text1: 'Claim not created', text2: error.message || 'Failed to create expense claim' });
         } finally {
+            submittingRef.current = false;
             setSubmitting(false);
         }
     };
@@ -602,6 +631,9 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
 
     // ------------------------------------------------------------------ list tabs
     const renderClaims = () => {
+        if (displayedClaims.length === 0 && loadError) {
+            return <EmptyState icon="alert-circle" title="Could not load expense claims" message={loadError} action="Try again" onAction={() => loadClaims()} />;
+        }
         if (displayedClaims.length === 0) {
             const isPendingTab = activeTab === 'pending';
             return (
@@ -622,6 +654,7 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
                         left={<Avatar name={claim.employee_name} />}
                         title={claim.employee_name}
                         subtitle={[dateLabel(claim.posting_date), typesLabel(claim), photosLabel(claim.receipt_count)].filter(Boolean).join('  ·  ')}
+                        subtitleLines={3}
                         right={<AmountCell amount={listAmount(claim)} stage={activeTab === 'history' ? stageOf(claim) : null} />}
                         onPress={() => openClaim(claim)}
                     />
@@ -635,6 +668,11 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
         const byDepartment = Object.entries(statistics.by_department || {});
         return (
             <>
+                {loadError ? (
+                    <Notice tone="danger" icon="alert-circle" title="Could not load the summary" onPress={() => loadClaims()}>
+                        {`${loadError} Tap to try again.`}
+                    </Notice>
+                ) : null}
                 <StatStrip
                     style={styles.stats}
                     items={[
@@ -650,7 +688,7 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
                 {byDepartment.length > 0 ? (
                     <Group title="By department">
                         {byDepartment.map(([dept, count]) => (
-                            <Row key={dept} title={dept} value={String(count)} />
+                            <Row key={dept} title={String(dept).replace(' - DG', '')} value={String(count)} />
                         ))}
                     </Group>
                 ) : null}
@@ -990,19 +1028,16 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
             ) : (
                 <>
                     <View style={styles.toolbar}>
-                        <View style={styles.toolbarRow}>
-                            <Segmented
-                                value={activeTab}
-                                onChange={setActiveTab}
-                                style={styles.flex}
-                                options={[
-                                    { value: 'pending', label: 'Pending', count: pendingCount || undefined },
-                                    { value: 'history', label: 'History' },
-                                    { value: 'statistics', label: 'Summary' },
-                                ]}
-                            />
-                            <Button title="New claim" size="sm" onPress={openApply} />
-                        </View>
+                        {/* "New claim" lives in the footer: next to three segments it squeezed them off a 320 dp phone */}
+                        <Segmented
+                            value={activeTab}
+                            onChange={setActiveTab}
+                            options={[
+                                { value: 'pending', label: 'Pending', count: pendingCount || undefined },
+                                { value: 'history', label: 'History' },
+                                { value: 'statistics', label: 'Summary' },
+                            ]}
+                        />
                         {activeTab === 'history' ? (
                             <Segmented
                                 value={filterStatus || 'all'}
@@ -1013,13 +1048,17 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
                         ) : null}
                         {isListTab && preselectFilter ? (
                             <Pressable style={styles.filterChip} onPress={() => setPreselectFilter('')} hitSlop={6}>
-                                <Text style={styles.filterChipText}>Employee {preselectFilter}</Text>
+                                <Text style={styles.filterChipText} numberOfLines={1}>Employee {preselectFilter}</Text>
                                 <Icon name="x" size={14} color={color.textSecondary} />
                             </Pressable>
                         ) : null}
                     </View>
 
-                    <Screen refreshing={refreshing} onRefresh={onRefresh}>
+                    <Screen
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                        footer={<Button title="New claim on behalf" icon="plus" onPress={openApply} />}
+                    >
                         {loading && !refreshing ? (
                             <Loading />
                         ) : activeTab === 'statistics' ? (
@@ -1064,8 +1103,9 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
                             ? pickerOptions.map((emp) => (
                                 <Row
                                     key={emp.name}
-                                    left={<Avatar name={emp.employee_name} size={32} />}
-                                    title={emp.employee_name}
+                                    left={<Avatar name={emp.employee_name || emp.name} size={32} />}
+                                    title={emp.employee_name || emp.name}
+                                    titleLines={2}
                                     subtitle={emp.name}
                                     right={<Check on={emp.name === applyEmployee} />}
                                     chevron={false}
@@ -1076,6 +1116,7 @@ const ExpenseClaimApprovalScreen = ({ navigation, route }) => {
                                 <Row
                                     key={t.name}
                                     title={t.name}
+                                    titleLines={2}
                                     right={<Check on={picker?.kind === 'type' && applyExpenses[picker.index]?.expense_type === t.name} />}
                                     chevron={false}
                                     onPress={() => pick(t.name)}
@@ -1097,12 +1138,12 @@ const styles = StyleSheet.create({
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: color.border,
     },
-    toolbarRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
     subControl: { marginTop: space.sm },
     filterChip: {
         flexDirection: 'row',
         alignItems: 'center',
         alignSelf: 'flex-start',
+        maxWidth: '100%',
         gap: 6,
         marginTop: space.sm,
         paddingHorizontal: 10,
@@ -1110,9 +1151,10 @@ const styles = StyleSheet.create({
         borderRadius: 14,
         backgroundColor: color.neutralSoft,
     },
-    filterChipText: { fontSize: 13, color: color.textSecondary, fontWeight: '500' },
+    filterChipText: { fontSize: 13, color: color.textSecondary, fontWeight: '500', flexShrink: 1 },
 
-    amountCell: { alignItems: 'flex-end', gap: 3, marginLeft: space.sm },
+    // the amount never shrinks; a long stage label ellipsizes instead of squeezing the name
+    amountCell: { alignItems: 'flex-end', gap: 3, marginLeft: space.sm, maxWidth: '45%' },
     amountText: { ...type.bodyStrong, fontVariant: ['tabular-nums'] },
     totalValue: { ...type.bodyStrong, fontWeight: '600', fontVariant: ['tabular-nums'] },
     stats: { marginBottom: space.xl },

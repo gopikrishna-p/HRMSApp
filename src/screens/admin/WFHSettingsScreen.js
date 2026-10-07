@@ -5,7 +5,7 @@
 //   WFH allowed   - may work from home any day
 //   Permanent WFH - works from home permanently; no WFH deduction
 // Payroll deducts 30% of a day's pay for every WFH day, except for permanent WFH.
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import AttendanceService from '../../services/attendance.service';
@@ -23,9 +23,11 @@ import {
     Loading,
     Notice,
     Tag,
+    StatStrip,
     Icon,
     color,
     space,
+    radius,
     type,
 } from '../../components/ds';
 
@@ -47,18 +49,31 @@ const WFHSettingsScreen = () => {
     const [editing, setEditing] = useState(null); // employee row being changed
     const [choice, setChoice] = useState('office');
     const [saving, setSaving] = useState(false);
+    const [error, setError] = useState('');
+    const loaded = useRef(false); // after the first load, coming back to the screen reloads quietly
 
     const load = useCallback(async (isRefresh = false) => {
-        isRefresh ? setRefreshing(true) : setLoading(true);
+        if (isRefresh) {
+            setRefreshing(true);
+        } else if (!loaded.current) {
+            setLoading(true);
+        }
         try {
             const res = await AttendanceService.getEmployeeWFHList();
             if (res.success && Array.isArray(res.data?.message)) {
                 setRows(res.data.message);
+                setError('');
+                loaded.current = true;
             } else {
-                showToast({ type: 'error', text1: 'Could not load employees', text2: res.message || 'Please try again' });
+                const msg = res.message || 'Please try again';
+                setError(msg);
+                showToast({ type: 'error', text1: 'Could not load employees', text2: msg });
             }
+        } catch (err) {
+            setError(err?.message || 'Please try again');
         } finally {
-            isRefresh ? setRefreshing(false) : setLoading(false);
+            setRefreshing(false);
+            setLoading(false);
         }
     }, []);
 
@@ -88,6 +103,9 @@ const WFHSettingsScreen = () => {
     };
 
     const save = async () => {
+        if (saving) {
+            return;
+        }
         if (!editing || choice === modeOf(editing)) {
             setEditing(null);
             return;
@@ -118,14 +136,15 @@ const WFHSettingsScreen = () => {
     return (
         <View style={styles.flex}>
             <View style={styles.toolbar}>
+                {/* no counts on these four segments: they overflow a 320-360 dp phone at large text (counts are in the strip below) */}
                 <Segmented
                     value={filter}
                     onChange={setFilter}
                     options={[
-                        { value: 'all', label: 'All', count: counts.all },
-                        { value: 'office', label: 'Office', count: counts.office },
-                        { value: 'allowed', label: 'WFH', count: counts.allowed },
-                        { value: 'permanent', label: 'Permanent', count: counts.permanent },
+                        { value: 'all', label: 'All' },
+                        { value: 'office', label: 'Office' },
+                        { value: 'allowed', label: 'WFH' },
+                        { value: 'permanent', label: 'Permanent' },
                     ]}
                 />
                 <SearchField value={query} onChangeText={setQuery} placeholder="Search employees" style={styles.search} />
@@ -135,14 +154,31 @@ const WFHSettingsScreen = () => {
                 <Loading />
             ) : (
                 <Screen refreshing={refreshing} onRefresh={() => load(true)}>
-                    {filter === 'all' && !query ? (
-                        <Notice tone="neutral" icon="info">
-                            Anyone can request WFH for specific dates; an approved request covers those dates only.
-                            Every WFH day is deducted at 30% of a day's pay, except for permanent WFH.
+                    {error && rows.length > 0 ? (
+                        <Notice tone="danger" icon="alert-circle" title="Could not refresh" onPress={() => load(true)}>
+                            {`${error} Tap to try again.`}
                         </Notice>
                     ) : null}
+                    {filter === 'all' && !query && rows.length > 0 ? (
+                        <>
+                            <StatStrip
+                                style={styles.stats}
+                                items={[
+                                    { label: 'Office', value: counts.office },
+                                    { label: 'WFH allowed', value: counts.allowed, tone: counts.allowed ? 'purple' : undefined },
+                                    { label: 'Permanent WFH', value: counts.permanent, tone: counts.permanent ? 'purple' : undefined },
+                                ]}
+                            />
+                            <Notice tone="neutral" icon="info">
+                                Anyone can request WFH for specific dates; an approved request covers those dates only.
+                                Every WFH day is deducted at 30% of a day's pay, except for permanent WFH.
+                            </Notice>
+                        </>
+                    ) : null}
 
-                    {visible.length === 0 ? (
+                    {error && rows.length === 0 ? (
+                        <EmptyState icon="alert-circle" title="Could not load employees" message={error} action="Try again" onAction={() => load(false)} />
+                    ) : visible.length === 0 ? (
                         <EmptyState icon="users" title="No employees" message={query ? `No one matches “${query}”.` : 'No one in this group.'} />
                     ) : (
                         <Group title={`${visible.length} ${visible.length === 1 ? 'employee' : 'employees'}`}>
@@ -211,12 +247,13 @@ const styles = StyleSheet.create({
         borderBottomColor: color.border,
     },
     search: { marginTop: space.md },
+    stats: { marginBottom: space.lg },
     option: {
         flexDirection: 'row',
         alignItems: 'flex-start',
         gap: space.md,
         padding: space.md,
-        borderRadius: 10,
+        borderRadius: radius.md,
         borderWidth: 1,
         borderColor: color.border,
         marginBottom: space.sm,
@@ -227,7 +264,7 @@ const styles = StyleSheet.create({
     radioActive: { borderColor: color.accent },
     radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: color.accent },
     sheetNote: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: space.xs, marginBottom: space.sm },
-    sheetNoteText: { ...type.caption },
+    sheetNoteText: { ...type.caption, flex: 1 },
 });
 
 export default WFHSettingsScreen;

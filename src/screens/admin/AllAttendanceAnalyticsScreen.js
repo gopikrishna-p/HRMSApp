@@ -83,6 +83,11 @@ const presetRange = (preset) => {
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const formatDisplayDate = (date) =>
     date ? `${String(date.getDate()).padStart(2, '0')} ${MONTHS[date.getMonth()]} ${date.getFullYear()}` : 'Select';
+// the two date fields share one row: the year is left out when it is this year, so they fit on narrow phones
+const formatFieldDate = (date) =>
+    date && date.getFullYear() === new Date().getFullYear()
+        ? `${String(date.getDate()).padStart(2, '0')} ${MONTHS[date.getMonth()]}`
+        : formatDisplayDate(date);
 
 // Indian grouping: 1,50,000
 const inr = (value) => {
@@ -113,7 +118,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
     const [isFullMonth, setIsFullMonth] = useState(false);
 
     const [loadingEmployees, setLoadingEmployees] = useState(false);
-    const [loadingAttendance, setLoadingAttendance] = useState(false);
+    const [attendanceError, setAttendanceError] = useState(null);
     const [refreshing, setRefreshing] = useState(false);
     const [exporting, setExporting] = useState(null); // e.g. 'employee-pdf'
     const [showStartPicker, setShowStartPicker] = useState(false);
@@ -121,6 +126,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
     const [showExport, setShowExport] = useState(false);
 
     const requestId = useRef(0);
+    const exportingRef = useRef(false); // blocks a second tap before the re-render disables the rows
 
     // ------------------------------------------------------------------ lifecycle
     useEffect(() => {
@@ -170,11 +176,13 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                 list.sort((a, b) => idNum(a.name) - idNum(b.name) || String(a.name).localeCompare(String(b.name)));
                 setEmployees(list);
                 if (list.length === 0) {
-                    showToast({ type: 'warning', text1: 'No Active Employees', text2: 'No active employees found' });
+                    showToast({ type: 'warning', text1: 'No active employees', text2: 'No active employees found' });
                 }
+            } else {
+                showToast({ type: 'error', text1: 'Could not load employees', text2: response.message || 'Please try again' });
             }
         } catch (error) {
-            showToast({ type: 'error', text1: 'Error', text2: 'Failed to load employees' });
+            showToast({ type: 'error', text1: 'Could not load employees', text2: error?.message || 'Please try again' });
         } finally {
             setLoadingEmployees(false);
         }
@@ -191,15 +199,21 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
         }
     };
 
-    const loadAttendance = useCallback(async () => {
+    // a pull-to-refresh keeps the current numbers on screen; a new employee or period clears them first
+    // (the screen shows Loading while there are no numbers), so the previous employee's figures are
+    // never shown under the new name
+    const loadAttendance = useCallback(async (isRefresh = false) => {
         const id = ++requestId.current; // ignore answers to older requests
-        if (!selectedEmployee || !dateRange.startDate || !dateRange.endDate) {
+        if (!isRefresh) {
             setAttendance([]);
             setSummaryStats(null);
             setSalary(null);
+            setIsFullMonth(false);
+        }
+        setAttendanceError(null);
+        if (!selectedEmployee || !dateRange.startDate || !dateRange.endDate) {
             return;
         }
-        setLoadingAttendance(true);
         try {
             const response = await ApiService.getEmployeeAttendanceHistory({
                 employee_id: selectedEmployee,
@@ -210,7 +224,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
             const data = response.data?.message;
             if (response.success && data?.status === 'success') {
                 setAttendance(data.attendance_records || []);
-                setSummaryStats(data.summary_stats || null);
+                setSummaryStats(data.summary_stats || {});
                 setSalary(data.salary || null);
                 setIsFullMonth(Boolean(data.is_full_month));
             } else {
@@ -221,11 +235,8 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
             setAttendance([]);
             setSummaryStats(null);
             setSalary(null);
-            showToast({ type: 'error', text1: 'Error', text2: error.message || 'Failed to load attendance records' });
-        } finally {
-            if (id === requestId.current) {
-                setLoadingAttendance(false);
-            }
+            setIsFullMonth(false);
+            setAttendanceError(error?.message || 'Failed to load attendance records');
         }
     }, [selectedEmployee, dateRange]);
 
@@ -235,7 +246,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
 
     const onRefresh = async () => {
         setRefreshing(true);
-        await Promise.all([loadEmployees(), loadAttendance()]);
+        await Promise.all([loadEmployees(), loadAttendance(true), departments.length ? null : loadDepartments()]);
         setRefreshing(false);
     };
 
@@ -290,8 +301,8 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
             if (Platform.OS === 'ios') {
                 const filePath = `${RNFS.DocumentDirectoryPath}/${fileName}`;
                 await RNFS.writeFile(filePath, base64Content, 'base64');
-                Alert.alert('Export Successful', `Saved: ${fileName}\nUse the Share sheet to send it elsewhere.`);
-                showToast({ type: 'success', text1: 'Export Complete', text2: fileName });
+                Alert.alert('Export successful', `Saved: ${fileName}\nUse the Share sheet to send it elsewhere.`);
+                showToast({ type: 'success', text1: 'Export complete', text2: fileName });
                 return filePath;
             }
 
@@ -326,7 +337,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                 }
 
                 Alert.alert(
-                    'Export Successful',
+                    'Export successful',
                     `Saved to Downloads:\n${fileName}\n\nOpen any file manager (or the Files / Downloads app) to find it.`,
                     [{ text: 'OK' }]
                 );
@@ -349,7 +360,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                 if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
                     const fp = await writeToFallback();
                     Alert.alert(
-                        'Saved to App Storage',
+                        'Saved to app storage',
                         `Storage permission was denied, so we saved the file to the app's private folder instead:\n\n${fileName}`,
                     );
                     showToast({ type: 'warning', text1: 'Saved to app storage', text2: fileName });
@@ -366,7 +377,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
             await RNFS.writeFile(filePath, base64Content, 'base64');
 
             Alert.alert(
-                'Export Successful',
+                'Export successful',
                 `Saved to Downloads:\n${fileName}\n\nOpen any file manager (or the Files / Downloads app) to find it.`,
                 [{ text: 'OK' }]
             );
@@ -378,7 +389,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
             try {
                 const filePath = await writeToFallback();
                 Alert.alert(
-                    'Saved to App Storage',
+                    'Saved to app storage',
                     `Could not save to the public Downloads folder. Saved to the app's private folder instead:\n${fileName}`,
                 );
                 showToast({ type: 'warning', text1: 'Saved to app storage', text2: fileName });
@@ -392,13 +403,17 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
 
     const runExport = async (scope, format) => {
         if (!dateRange.startDate || !dateRange.endDate) {
-            showToast({ type: 'warning', text1: 'Select Dates', text2: 'Please select a date range first' });
+            showToast({ type: 'warning', text1: 'Select dates', text2: 'Please select a date range first' });
             return;
         }
         if (scope === 'employee' && !selectedEmployee) {
-            showToast({ type: 'warning', text1: 'Select Employee', text2: 'Please select an employee first' });
+            showToast({ type: 'warning', text1: 'Select an employee', text2: 'Please select an employee first' });
             return;
         }
+        if (exportingRef.current) {
+            return;
+        }
+        exportingRef.current = true;
         setExporting(`${scope}-${format}`);
         try {
             const params = {
@@ -419,8 +434,9 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
             setShowExport(false);
             await downloadFile(result.content, result.file_name, result.content_type);
         } catch (error) {
-            showToast({ type: 'error', text1: 'Export Failed', text2: error.message || 'Could not create the file' });
+            showToast({ type: 'error', text1: 'Export failed', text2: error?.message || 'Could not create the file' });
         } finally {
+            exportingRef.current = false;
             setExporting(null);
         }
     };
@@ -478,7 +494,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                 </View>
                 <View style={styles.rate}>
                     <View style={styles.rateHeader}>
-                        <Text style={type.secondary}>
+                        <Text style={styles.rateText}>
                             {`${s.attended_days_so_far ?? 0} of ${s.working_days_so_far ?? 0} working days attended${rangeIncludesToday() ? ', today not counted yet' : ''}`}
                         </Text>
                         <Text style={styles.rateValue}>{pct == null ? '\u2013' : `${num(pct)}%`}</Text>
@@ -501,25 +517,28 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
         if (!salary) {
             return null;
         }
-        if (!(salary.earnings || []).length) {
-            return <Notice tone="neutral" icon="info" title="No salary data">{salary.source_label}</Notice>;
+        const earnings = salary.earnings || [];
+        const deductions = salary.deductions || [];
+        if (!earnings.length) {
+            return <Notice tone="neutral" icon="info" title="No salary data">{salary.source_label || null}</Notice>;
         }
         const isSlip = salary.source === 'slip';
-        const footer = `${salary.source_label}${!isSlip && !salary.month_complete ? '. Month in progress: absent and WFH days so far.' : ''}`;
+        const footer = [salary.source_label, !isSlip && !salary.month_complete ? 'Month in progress: absent and WFH days so far.' : null]
+            .filter(Boolean).join('. ') || undefined;
         return (
             <>
-                <Group title="Earnings" action={isSlip ? 'From payslip' : 'Estimate'}>
-                    {salary.earnings.map((r) => <Row key={`e-${r.component}`} title={r.component} value={inr(r.amount)} />)}
-                    <Row title="Gross pay" value={inr(salary.gross_pay)} right={null} />
+                <Group title={isSlip ? 'Earnings (from payslip)' : 'Earnings (estimate)'}>
+                    {earnings.map((r, i) => <Row key={`e-${r.component}-${i}`} title={r.component} titleLines={2} value={inr(r.amount)} />)}
+                    <Row title="Gross pay" value={inr(salary.gross_pay)} />
                 </Group>
                 <Group title="Deductions">
-                    {salary.deductions.length
-                        ? salary.deductions.map((r) => <Row key={`d-${r.component}`} title={r.component} value={`\u2212${inr(r.amount)}`} />)
+                    {deductions.length
+                        ? deductions.map((r, i) => <Row key={`d-${r.component}-${i}`} title={r.component} titleLines={2} value={`\u2212${inr(r.amount)}`} />)
                         : <Row title="No deductions" />}
                     <Row title="Total deductions" value={`\u2212${inr(salary.total_deduction)}`} />
                 </Group>
                 <Group footer={footer}>
-                    <Row title="Net pay" right={<Text style={styles.netPay}>{inr(salary.net_pay)}</Text>} />
+                    <Row title="Net pay" right={<Text style={styles.netPay} numberOfLines={1}>{inr(salary.net_pay)}</Text>} />
                 </Group>
             </>
         );
@@ -556,9 +575,9 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                 />
                 <Segmented options={PRESETS} value={activePreset} onChange={applyPreset} style={styles.presets} />
                 <View style={styles.dateRow}>
-                    <SelectField value={formatDisplayDate(dateRange.startDate)} icon="calendar" onPress={() => setShowStartPicker(true)} style={[styles.flex, styles.noMargin]} />
+                    <SelectField value={formatFieldDate(dateRange.startDate)} icon="calendar" onPress={() => setShowStartPicker(true)} style={[styles.flex, styles.noMargin]} />
                     <Text style={styles.dateDash}>{'\u2013'}</Text>
-                    <SelectField value={formatDisplayDate(dateRange.endDate)} icon="calendar" onPress={() => setShowEndPicker(true)} style={[styles.flex, styles.noMargin]} />
+                    <SelectField value={formatFieldDate(dateRange.endDate)} icon="calendar" onPress={() => setShowEndPicker(true)} style={[styles.flex, styles.noMargin]} />
                 </View>
             </View>
 
@@ -571,8 +590,14 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                         action="Choose employee"
                         onAction={() => setPickEmployee(true)}
                     />
-                ) : loadingAttendance && !summaryStats ? (
-                    <Loading label="Loading attendance" />
+                ) : attendanceError ? (
+                    <EmptyState
+                        icon="alert-circle"
+                        title="Could not load attendance"
+                        message={attendanceError}
+                        action="Try again"
+                        onAction={() => loadAttendance()}
+                    />
                 ) : summaryStats ? (
                     <>
                         {renderAttendance()}
@@ -583,7 +608,9 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                             <EmptyState icon="calendar" title="No records" message="Nothing to show for this period." />
                         )}
                     </>
-                ) : null}
+                ) : (
+                    <Loading label="Loading attendance" />
+                )}
             </Screen>
 
             {/* employee picker */}
@@ -591,6 +618,10 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                 <SearchField value={employeeQuery} onChangeText={setEmployeeQuery} placeholder="Search by name or ID" style={styles.sheetSearch} />
                 {loadingEmployees && employees.length === 0 ? (
                     <Loading />
+                ) : employees.length === 0 ? (
+                    <EmptyState icon="users" title="No employees" message="No active employees were loaded." action="Try again" onAction={loadEmployees} />
+                ) : pickerList.length === 0 ? (
+                    <EmptyState icon="search" title="No match" message={`No employee matches \u201C${employeeQuery.trim()}\u201D.`} />
                 ) : (
                     <Group>
                         {pickerList.map((e) => (
@@ -598,6 +629,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                                 key={e.name}
                                 left={<Avatar name={e.employee_name} />}
                                 title={e.employee_name || e.name}
+                                titleLines={2}
                                 subtitle={e.name}
                                 selected={e.name === selectedEmployee}
                                 right={e.name === selectedEmployee ? <Icon name="check" size={18} color={color.accent} /> : null}
@@ -639,6 +671,7 @@ function AllAttendanceAnalyticsScreen({ navigation, route }) {
                         <Row
                             key={d.name || 'all'}
                             title={d.department_name || d.name}
+                            titleLines={2}
                             right={exportDepartment === d.name ? <Icon name="check" size={18} color={color.accent} /> : null}
                             chevron={false}
                             onPress={() => {
@@ -696,6 +729,7 @@ const styles = StyleSheet.create({
     stripDivider: { height: StyleSheet.hairlineWidth, backgroundColor: color.divider, marginHorizontal: space.lg },
     rate: { paddingHorizontal: space.lg, paddingVertical: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.divider },
     rateHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: space.sm, marginBottom: 6 },
+    rateText: { ...type.secondary, flex: 1 },
     rateValue: { fontSize: 15, fontWeight: '600', color: color.text, fontVariant: ['tabular-nums'] },
     netPay: { fontSize: 17, fontWeight: '700', color: color.text, fontVariant: ['tabular-nums'] },
     sheetSearch: { marginBottom: space.md },

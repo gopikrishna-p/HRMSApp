@@ -1,8 +1,8 @@
 // src/screens/admin/OnSiteApprovalsScreen.js
 //
-// Review on-site work requests. Approving a request also turns on the employee's on-site
-// eligibility (the same flag as in On-site settings).
-import React, { useState, useEffect } from 'react';
+// Review on-site work requests. Approving a request allows on-site check-in on the requested
+// dates only; standing on-site eligibility is changed in On-site settings.
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import ApiService from '../../services/api.service';
 import showToast from '../../utils/Toast';
@@ -17,6 +17,7 @@ import {
     EmptyState,
     Loading,
     StatusText,
+    Notice,
     Icon,
     color,
     space,
@@ -71,6 +72,8 @@ const OnSiteApprovalsScreen = ({ route }) => {
     const [selected, setSelected] = useState(null); // request shown in the sheet
     // Deep-link from EmployeeManagement Quick Actions.
     const [preselectFilter, setPreselectFilter] = useState(route?.params?.preselectEmployee || '');
+    const [loadError, setLoadError] = useState('');
+    const deciding = useRef(false); // blocks a second tap while a decision is being sent
 
     useEffect(() => {
         loadRequests();
@@ -95,7 +98,10 @@ const OnSiteApprovalsScreen = ({ route }) => {
             const pendingResponse = await ApiService.getPendingOnSiteRequests();
 
             let pendingData = [];
-            if (pendingResponse.success) {
+            const problems = [];
+            if (!pendingResponse.success) {
+                problems.push(pendingResponse.message || 'Pending requests did not load');
+            } else {
                 if (pendingResponse.data?.message && Array.isArray(pendingResponse.data.message)) {
                     pendingData = pendingResponse.data.message;
                 } else if (Array.isArray(pendingResponse.data)) {
@@ -109,7 +115,9 @@ const OnSiteApprovalsScreen = ({ route }) => {
             const allResponse = await ApiService.getAllOnSiteRequestsForAdmin();
 
             let historyData = [];
-            if (allResponse.success) {
+            if (!allResponse.success) {
+                problems.push(allResponse.message || 'History did not load');
+            } else {
                 let allData = [];
                 if (allResponse.data?.message && Array.isArray(allResponse.data.message)) {
                     allData = allResponse.data.message;
@@ -126,12 +134,17 @@ const OnSiteApprovalsScreen = ({ route }) => {
 
             setAllHistoryRequests(historyData);
             applyDateFilter(historyData, selectedDateFilter);
+            setLoadError(problems.join(' '));
+            if (problems.length) {
+                showToast({ type: 'error', text1: 'Could not load all requests', text2: problems[0] });
+            }
         } catch (error) {
             console.error('Error loading on-site requests:', error);
+            setLoadError(error?.message || 'Please try again');
             showToast({
                 type: 'error',
                 text1: 'Could not load on-site requests',
-                text2: 'Please try again',
+                text2: error?.message || 'Please try again',
             });
         } finally {
             isRefresh ? setRefreshing(false) : setLoading(false);
@@ -141,28 +154,27 @@ const OnSiteApprovalsScreen = ({ route }) => {
     const applyDateFilter = (data, filter) => {
         const now = new Date();
         const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        // the day a request was decided, read from the digits of `modified`: Hermes can't parse
+        // 'YYYY-MM-DD HH:MM:SS.ffffff', and every bound below is a local midnight
+        const decidedOn = (req) => toDate(req.modified);
 
         let filtered = data;
 
         if (filter === 'today') {
-            filtered = data.filter(req => {
-                const modifiedDate = new Date(String(req.modified).replace(' ', 'T'));
-                const reqDate = new Date(modifiedDate.getFullYear(), modifiedDate.getMonth(), modifiedDate.getDate());
-                return reqDate.getTime() === today.getTime();
-            });
+            filtered = data.filter(req => decidedOn(req)?.getTime() === today.getTime());
         } else if (filter === 'week') {
             const weekAgo = new Date(today);
             weekAgo.setDate(weekAgo.getDate() - 7);
             filtered = data.filter(req => {
-                const modifiedDate = new Date(String(req.modified).replace(' ', 'T'));
-                return modifiedDate >= weekAgo;
+                const day = decidedOn(req);
+                return day ? day >= weekAgo : false;
             });
         } else if (filter === 'month') {
             const monthAgo = new Date(today);
             monthAgo.setMonth(monthAgo.getMonth() - 1);
             filtered = data.filter(req => {
-                const modifiedDate = new Date(String(req.modified).replace(' ', 'T'));
-                return modifiedDate >= monthAgo;
+                const day = decidedOn(req);
+                return day ? day >= monthAgo : false;
             });
         }
 
@@ -192,6 +204,7 @@ const OnSiteApprovalsScreen = ({ route }) => {
     const processRequest = async (requestId, action, requestData) => {
         try {
             setProcessingRequest(requestId);
+            deciding.current = true;
 
             let response;
             if (action === 'approve') {
@@ -231,12 +244,13 @@ const OnSiteApprovalsScreen = ({ route }) => {
                 text2: error.message || `Failed to ${action} request`,
             });
         } finally {
+            deciding.current = false;
             setProcessingRequest(null);
         }
     };
 
     const decide = async (action) => {
-        if (!selected) {
+        if (!selected || deciding.current) {
             return;
         }
         setProcessingAction(action);
@@ -265,7 +279,7 @@ const OnSiteApprovalsScreen = ({ route }) => {
                 ) : null}
                 {preselectFilter ? (
                     <Pressable style={styles.filterChip} onPress={() => setPreselectFilter('')} hitSlop={6}>
-                        <Text style={styles.filterChipText}>Employee {preselectFilter}</Text>
+                        <Text style={styles.filterChipText} numberOfLines={1}>Employee {preselectFilter}</Text>
                         <Icon name="x" size={14} color={color.textSecondary} />
                     </Pressable>
                 ) : null}
@@ -275,7 +289,14 @@ const OnSiteApprovalsScreen = ({ route }) => {
                 <Loading />
             ) : (
                 <Screen refreshing={refreshing} onRefresh={() => loadRequests(true)}>
-                    {visible.length === 0 ? (
+                    {loadError && visible.length > 0 ? (
+                        <Notice tone="danger" icon="alert-circle" title="Could not load all requests" onPress={() => loadRequests(true)}>
+                            {`${loadError} Tap to try again.`}
+                        </Notice>
+                    ) : null}
+                    {loadError && visible.length === 0 ? (
+                        <EmptyState icon="alert-circle" title="Could not load requests" message={loadError} action="Try again" onAction={() => loadRequests(false)} />
+                    ) : visible.length === 0 ? (
                         <EmptyState
                             icon={activeTab === 'pending' ? 'check-circle' : 'clock'}
                             title={activeTab === 'pending' ? 'No pending requests' : 'No decisions yet'}
@@ -295,6 +316,7 @@ const OnSiteApprovalsScreen = ({ route }) => {
                                         left={<Avatar name={r.employee_name} />}
                                         title={r.employee_name}
                                         subtitle={second ? `${dateRange(r.from_date, r.to_date)}\n${second}` : dateRange(r.from_date, r.to_date)}
+                                        subtitleLines={3}
                                         right={activeTab === 'history' ? <StatusText label={statusLabel(r.status)} /> : null}
                                         onPress={() => setSelected(r)}
                                     />
@@ -325,12 +347,12 @@ const OnSiteApprovalsScreen = ({ route }) => {
                         <Detail label="Dates" value={dateRange(selected.from_date, selected.to_date)} />
                         {placeOf(selected) ? <Detail label="Location" value={placeOf(selected)} /> : null}
                         <Detail label="Reason" value={selected.reason || 'No reason given'} />
-                        <Detail label="Employee ID" value={selected.employee} />
+                        <Detail label="Employee ID" value={selected.employee || '-'} />
                         {!isPending ? <Detail label="Status" value={<StatusText label={statusLabel(selected.status)} size={15} />} /> : null}
                         {!isPending && selected.approved_by ? <Detail label="Approved by" value={selected.approved_by} /> : null}
                         {isPending ? (
                             <Text style={styles.sheetNote}>
-                                Approving also turns on on-site check-in for this employee. It stays on until you turn it off in On-site settings.
+                                Approving allows on-site check-in on these dates only. To let someone check in on site any day, turn it on in On-site settings.
                             </Text>
                         ) : null}
                     </>
@@ -361,6 +383,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         alignSelf: 'flex-start',
+        maxWidth: '100%',
         gap: 6,
         marginTop: space.sm,
         paddingHorizontal: 10,
@@ -368,7 +391,7 @@ const styles = StyleSheet.create({
         borderRadius: 14,
         backgroundColor: color.neutralSoft,
     },
-    filterChipText: { fontSize: 13, color: color.textSecondary, fontWeight: '500' },
+    filterChipText: { fontSize: 13, color: color.textSecondary, fontWeight: '500', flexShrink: 1 },
     detail: { marginBottom: space.lg },
     detailLabel: { ...type.caption, marginBottom: 4 },
     sheetNote: { ...type.caption, lineHeight: 17, marginBottom: space.sm },

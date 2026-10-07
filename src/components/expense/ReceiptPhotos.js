@@ -9,7 +9,7 @@
 //
 // ReceiptPicker is controlled: pass `value` (array) and `onChange` = a React state setter (it is called with
 // updater functions while uploads progress). Helpers: receiptIds(), photosUploading(), photosFailed().
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
     View,
     Text,
@@ -61,10 +61,16 @@ const askCameraPermission = async () => {
 
 export const ReceiptPicker = ({ value = [], onChange, employee, disabled }) => {
     const [viewerIndex, setViewerIndex] = useState(null);
+    const uploading = useRef(new Set()); // photo keys with an upload in flight (a double tap on Retry uploads once)
+    const picking = useRef(false); // the camera or gallery is open (a double tap opens it once)
 
     const patch = (key, changes) => onChange((list) => list.map((p) => (p.key === key ? { ...p, ...changes } : p)));
 
     const upload = async (item) => {
+        if (uploading.current.has(item.key)) {
+            return;
+        }
+        uploading.current.add(item.key);
         patch(item.key, { status: 'uploading', progress: 0, error: null });
         try {
             const res = await ApiService.uploadExpenseReceipt(item.asset, {
@@ -86,6 +92,8 @@ export const ReceiptPicker = ({ value = [], onChange, employee, disabled }) => {
             }
         } catch (err) {
             patch(item.key, { status: 'error', error: err?.message || 'Upload failed' });
+        } finally {
+            uploading.current.delete(item.key);
         }
     };
 
@@ -115,17 +123,29 @@ export const ReceiptPicker = ({ value = [], onChange, employee, disabled }) => {
         addAssets(result?.assets);
     };
 
-    const takePhoto = async () => {
-        if (!(await askCameraPermission())) {
-            showToast({ type: 'warning', text1: 'Camera permission needed', text2: 'Allow it in Settings, or choose from the gallery' });
+    const pick = async (open) => {
+        if (picking.current) {
             return;
         }
-        handleResult(await launchCamera({ ...PICKER_OPTIONS, cameraType: 'back' }));
+        picking.current = true;
+        try {
+            handleResult(await open());
+        } catch (err) {
+            showToast({ type: 'error', text1: 'Could not open the photo', text2: err?.message || undefined });
+        } finally {
+            picking.current = false;
+        }
     };
 
-    const chooseFromGallery = async () => {
-        handleResult(await launchImageLibrary(PICKER_OPTIONS));
-    };
+    const takePhoto = () => pick(async () => {
+        if (!(await askCameraPermission())) {
+            showToast({ type: 'warning', text1: 'Camera permission needed', text2: 'Allow it in Settings, or choose from the gallery' });
+            return { didCancel: true };
+        }
+        return launchCamera({ ...PICKER_OPTIONS, cameraType: 'back' });
+    });
+
+    const chooseFromGallery = () => pick(() => launchImageLibrary(PICKER_OPTIONS));
 
     const remove = (item) => {
         onChange((list) => list.filter((p) => p.key !== item.key));
@@ -145,7 +165,7 @@ export const ReceiptPicker = ({ value = [], onChange, employee, disabled }) => {
                     return (
                         <View key={item.key} style={styles.thumbWrap}>
                             <Pressable
-                                onPress={() => (item.status === 'error' ? upload(item) : doneIndex >= 0 && setViewerIndex(doneIndex))}
+                                onPress={() => (item.status === 'error' ? !disabled && upload(item) : doneIndex >= 0 && setViewerIndex(doneIndex))}
                                 style={styles.thumb}
                                 accessibilityLabel={item.status === 'error' ? 'Retry upload' : 'View receipt'}
                             >
@@ -153,13 +173,13 @@ export const ReceiptPicker = ({ value = [], onChange, employee, disabled }) => {
                                 {item.status === 'uploading' ? (
                                     <View style={styles.overlay}>
                                         <ActivityIndicator color="#FFFFFF" size="small" />
-                                        <Text style={styles.overlayText}>{`${Math.round((item.progress || 0) * 100)}%`}</Text>
+                                        <Text style={styles.overlayText} numberOfLines={1}>{`${Math.round((item.progress || 0) * 100)}%`}</Text>
                                     </View>
                                 ) : null}
                                 {item.status === 'error' ? (
                                     <View style={[styles.overlay, styles.overlayError]}>
                                         <Icon name="refresh-cw" size={16} color="#FFFFFF" />
-                                        <Text style={styles.overlayText}>Retry</Text>
+                                        <Text style={styles.overlayText} numberOfLines={1}>Retry</Text>
                                     </View>
                                 ) : null}
                                 {item.status === 'done' && item.duplicateClaims?.length ? (
@@ -180,11 +200,11 @@ export const ReceiptPicker = ({ value = [], onChange, employee, disabled }) => {
                     <>
                         <Pressable onPress={takePhoto} style={({ pressed }) => [styles.addTile, pressed && styles.pressed]} accessibilityLabel="Take a photo">
                             <Icon name="camera" size={20} color={color.accent} />
-                            <Text style={styles.addText}>Camera</Text>
+                            <Text style={styles.addText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>Camera</Text>
                         </Pressable>
                         <Pressable onPress={chooseFromGallery} style={({ pressed }) => [styles.addTile, pressed && styles.pressed]} accessibilityLabel="Choose from gallery">
                             <Icon name="image" size={20} color={color.accent} />
-                            <Text style={styles.addText}>Gallery</Text>
+                            <Text style={styles.addText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>Gallery</Text>
                         </Pressable>
                     </>
                 ) : null}
@@ -241,10 +261,17 @@ export const ReceiptViewer = ({ photos = [], index, onClose }) => {
         }
     }).current;
 
+    // open on the tapped photo; also keeps "n of m" in range when the photo list got shorter
+    useEffect(() => {
+        if (visible) {
+            setCurrent(Math.min(index || 0, photos.length - 1));
+        }
+    }, [visible, index, photos.length]);
+
     const photo = photos[current] || photos[0];
 
     return (
-        <Modal visible={visible} animationType="fade" onRequestClose={onClose} statusBarTranslucent onShow={() => setCurrent(index || 0)}>
+        <Modal visible={visible} animationType="fade" onRequestClose={onClose} statusBarTranslucent>
             <StatusBar barStyle="light-content" backgroundColor="#000000" />
             <View style={styles.viewer}>
                 <FlatList
@@ -268,7 +295,7 @@ export const ReceiptViewer = ({ photos = [], index, onClose }) => {
                     <Pressable onPress={onClose} hitSlop={12} style={styles.viewerButton} accessibilityLabel="Close">
                         <Icon name="x" size={22} color="#FFFFFF" />
                     </Pressable>
-                    <Text style={styles.viewerCount}>{photos.length > 1 ? `${current + 1} of ${photos.length}` : ''}</Text>
+                    <Text style={styles.viewerCount} numberOfLines={1}>{photos.length > 1 ? `${Math.min(current, photos.length - 1) + 1} of ${photos.length}` : ''}</Text>
                     {photo?.url?.startsWith('http') ? (
                         <Pressable onPress={() => Linking.openURL(photo.url)} hitSlop={12} style={styles.viewerButton} accessibilityLabel="Open in browser to zoom">
                             <Icon name="external-link" size={20} color="#FFFFFF" />
@@ -302,7 +329,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     overlayError: { backgroundColor: 'rgba(217, 45, 32, 0.75)' },
-    overlayText: { fontSize: 11, fontWeight: '600', color: '#FFFFFF', marginTop: 2 },
+    overlayText: { fontSize: 11, fontWeight: '600', color: '#FFFFFF', marginTop: 2, maxWidth: TILE - 8 },
     removeButton: {
         position: 'absolute',
         top: -6,
@@ -339,7 +366,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     pressed: { backgroundColor: color.surfaceMuted },
-    addText: { ...type.caption, color: color.accent, fontWeight: '500', marginTop: 4 },
+    addText: { ...type.caption, color: color.accent, fontWeight: '500', marginTop: 4, maxWidth: TILE - 8, textAlign: 'center' },
     none: { ...type.secondary, color: color.textTertiary },
     dupNote: { flexDirection: 'row', alignItems: 'center', marginTop: space.sm },
     dupText: { ...type.secondary, color: color.warning, marginLeft: space.xs, flex: 1 },

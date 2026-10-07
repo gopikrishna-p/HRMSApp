@@ -3,10 +3,10 @@
 // The employee's own on-site (client / site visit) requests: the list (requested today / all),
 // the request form in a bottom sheet, and a detail sheet that can delete a pending request.
 // An approved request covers the requested dates only; standing on-site work is set by HR.
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Alert, Platform } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import ApiService, { extractFrappeData } from '../../services/api.service';
+import ApiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import showToast from '../../utils/Toast';
 import {
     Screen,
@@ -47,6 +47,8 @@ const dayCount = (from, to) => {
     return a && b ? Math.round((b - a) / 86400000) + 1 : 1;
 };
 const daysLabel = (n) => `${n} ${n === 1 ? 'day' : 'days'}`;
+// 'YYYY-MM-DD' of a Date in local time: picker dates carry a time of day, so compare these instead
+const dayKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 // compact range for list rows: "Wed, 8 Oct", "8–10 Oct", "28 Oct – 2 Nov"
 const rangeLabel = (from, to) => {
     const a = toDay(from);
@@ -78,6 +80,8 @@ const OnSiteRequestScreen = ({ navigation }) => {
     const [loading, setLoading] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
+    const [loadError, setLoadError] = useState(null); // shown when no requests have loaded yet
+    const busy = useRef(false); // blocks a second submit / delete while one is being sent
     const [deleting, setDeleting] = useState(null);
 
     // Form state
@@ -92,10 +96,11 @@ const OnSiteRequestScreen = ({ navigation }) => {
     const [myRequests, setMyRequests] = useState([]);
     // The list is always shown; false while the request form sheet is open.
     const [showHistory, setShowHistory] = useState(true);
-    const [historyFilter, setHistoryFilter] = useState('today');
+    const [historyFilter, setHistoryFilter] = useState('all'); // all requests first; "Requested today" is a filter
 
     // Presentation only: the request shown in the detail sheet
     const [selectedId, setSelectedId] = useState(null);
+    const lastSelected = useRef(null); // keeps the detail sheet filled while it slides out
 
     useEffect(() => {
         loadMyRequests();
@@ -112,6 +117,14 @@ const OnSiteRequestScreen = ({ navigation }) => {
 
             const response = await ApiService.getOnSiteRequests();
 
+            // The wrapper does not throw on HTTP errors; keep the list on screen and say why
+            if (!isApiSuccess(response)) {
+                const message = getApiErrorMessage(response, 'Pull down to try again');
+                setLoadError(message);
+                showToast({ type: 'error', text1: 'Could not load your requests', text2: message });
+                return;
+            }
+
             // Use helper function to extract data
             const requestsData = extractFrappeData(response, []);
 
@@ -119,6 +132,7 @@ const OnSiteRequestScreen = ({ navigation }) => {
             const requests = Array.isArray(requestsData) ? requestsData : [];
 
             setMyRequests(requests);
+            setLoadError(null);
         } catch (error) {
             console.error('Error loading On Site requests:', error);
             showToast({
@@ -136,7 +150,8 @@ const OnSiteRequestScreen = ({ navigation }) => {
         setShowFromDatePicker(Platform.OS === 'ios');
         if (selectedDate) {
             setFromDate(selectedDate);
-            if (toDate < selectedDate) {
+            // Auto-adjust to_date if it's before from_date
+            if (dayKey(toDate) < dayKey(selectedDate)) {
                 setToDate(selectedDate);
             }
         }
@@ -145,7 +160,7 @@ const OnSiteRequestScreen = ({ navigation }) => {
     const handleToDateChange = (event, selectedDate) => {
         setShowToDatePicker(Platform.OS === 'ios');
         if (selectedDate) {
-            if (selectedDate >= fromDate) {
+            if (dayKey(selectedDate) >= dayKey(fromDate)) {
                 setToDate(selectedDate);
             } else {
                 showToast({
@@ -174,7 +189,7 @@ const OnSiteRequestScreen = ({ navigation }) => {
             return false;
         }
 
-        if (toDate < fromDate) {
+        if (dayKey(toDate) < dayKey(fromDate)) {
             showToast({
                 type: 'warning',
                 text1: 'Check the dates',
@@ -235,13 +250,14 @@ const OnSiteRequestScreen = ({ navigation }) => {
 
     // The form sheet is the confirmation, so a valid form is sent straight away.
     const handleSubmit = () => {
-        if (!validateForm()) {
+        if (busy.current || !validateForm()) {
             return;
         }
         submitRequest();
     };
 
     const submitRequest = async () => {
+        busy.current = true;
         try {
             setSubmitting(true);
 
@@ -297,6 +313,7 @@ const OnSiteRequestScreen = ({ navigation }) => {
                 text2: error.message || 'Failed to submit On Site request. Please try again.',
             });
         } finally {
+            busy.current = false;
             setSubmitting(false);
         }
     };
@@ -317,6 +334,10 @@ const OnSiteRequestScreen = ({ navigation }) => {
     };
 
     const deleteRequest = async (requestId) => {
+        if (busy.current) {
+            return;
+        }
+        busy.current = true;
         try {
             setDeleting(requestId);
 
@@ -354,6 +375,7 @@ const OnSiteRequestScreen = ({ navigation }) => {
                 text2: error.message || 'Failed to delete On Site request. Please try again.',
             });
         } finally {
+            busy.current = false;
             setDeleting(null);
         }
     };
@@ -391,13 +413,28 @@ const OnSiteRequestScreen = ({ navigation }) => {
 
     // The detail sheet follows the list, so it closes by itself once a deleted request is gone.
     const selected = selectedId ? myRequests.find((r) => r.name === selectedId) || null : null;
-    const selectedPending = selected?.status?.toLowerCase() === 'pending';
+    if (selected) {
+        lastSelected.current = selected;
+    }
+    const detail = selected || lastSelected.current;
+    const selectedPending = detail?.status?.toLowerCase() === 'pending';
     const days = calculateDuration();
 
     const renderList = () => {
         const filteredRequests = getFilteredRequests();
         if (loading && myRequests.length === 0) {
             return <Loading />;
+        }
+        if (myRequests.length === 0 && loadError) {
+            return (
+                <EmptyState
+                    icon="alert-circle"
+                    title="Could not load your requests"
+                    message={loadError}
+                    action="Try again"
+                    onAction={() => loadMyRequests()}
+                />
+            );
         }
         if (myRequests.length === 0) {
             return (
@@ -533,8 +570,8 @@ const OnSiteRequestScreen = ({ navigation }) => {
             {/* Request detail */}
             <Sheet
                 visible={Boolean(selected)}
-                title={selected ? rangeLabel(selected.from_date, selected.to_date) : ''}
-                subtitle={selected ? `On-site  ·  ${daysLabel(dayCount(selected.from_date, selected.to_date))}` : undefined}
+                title={detail ? rangeLabel(detail.from_date, detail.to_date) : ''}
+                subtitle={detail ? `On-site  ·  ${daysLabel(dayCount(detail.from_date, detail.to_date))}` : undefined}
                 onClose={() => !deleting && setSelectedId(null)}
                 dismissable={!deleting}
                 footer={selectedPending ? (
@@ -542,8 +579,8 @@ const OnSiteRequestScreen = ({ navigation }) => {
                         <Button
                             title="Delete request"
                             variant="danger"
-                            onPress={() => handleDeleteRequest(selected.name, fullRange(selected.from_date, selected.to_date))}
-                            loading={deleting === selected.name}
+                            onPress={() => handleDeleteRequest(detail.name, fullRange(detail.from_date, detail.to_date))}
+                            loading={deleting === detail.name}
                             disabled={Boolean(deleting)}
                             style={styles.flex}
                         />
@@ -553,14 +590,14 @@ const OnSiteRequestScreen = ({ navigation }) => {
                     <Button title="Close" variant="secondary" onPress={() => setSelectedId(null)} style={styles.flex} />
                 )}
             >
-                {selected ? (
+                {detail ? (
                     <>
-                        <Detail label="Status" value={<StatusText label={statusLabel(selected.status)} size={15} />} />
-                        <Detail label="Dates" value={fullRange(selected.from_date, selected.to_date)} />
-                        <Detail label="Client or site" value={placeOf(selected) || 'Not given'} />
-                        {selected.reason ? <Detail label="Notes" value={selected.reason} /> : null}
-                        {selected.creation ? <Detail label="Requested on" value={dayLabel(selected.creation)} /> : null}
-                        {selected.approved_by ? <Detail label="Reviewed by" value={selected.approved_by} /> : null}
+                        <Detail label="Status" value={<StatusText label={statusLabel(detail.status)} size={15} />} />
+                        <Detail label="Dates" value={fullRange(detail.from_date, detail.to_date)} />
+                        <Detail label="Client or site" value={placeOf(detail) || 'Not given'} />
+                        {detail.reason ? <Detail label="Notes" value={detail.reason} /> : null}
+                        {detail.creation ? <Detail label="Requested on" value={dayLabel(detail.creation)} /> : null}
+                        {detail.approved_by ? <Detail label="Reviewed by" value={detail.approved_by} /> : null}
                     </>
                 ) : null}
             </Sheet>
@@ -585,8 +622,9 @@ const styles = StyleSheet.create({
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: color.border,
     },
-    dateRow: { flexDirection: 'row', gap: space.md },
-    dateField: { flex: 1 },
+    // side by side when both fit (150 dp each: 360 dp phones and wider), stacked on 320 dp phones
+    dateRow: { flexDirection: 'row', flexWrap: 'wrap', columnGap: space.md },
+    dateField: { flexGrow: 1, flexShrink: 1, flexBasis: 150 },
     formNote: { ...type.caption, lineHeight: 17, marginTop: -space.xs, marginBottom: space.sm },
     detail: { marginBottom: space.lg },
     detailLabel: { ...type.caption, marginBottom: 4 },

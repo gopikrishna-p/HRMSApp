@@ -2,7 +2,7 @@
 //
 // Travel requests for admins: pending approvals, decided history, a summary of counts,
 // and a form to create a request on behalf of an employee.
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, Pressable, Switch, ActivityIndicator, Platform } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import apiService from '../../services/api.service';
@@ -87,11 +87,37 @@ const money = (value) => `₹${(Number(value) || 0).toLocaleString('en-IN', { mi
 const labelOf = (options, value) => options.find((o) => o.value === value)?.label || value;
 const joinDot = (parts) => parts.filter(Boolean).join('  ·  ');
 
+// form rows carry a `key` so removing a leg or a cost keeps every other row's inputs in place
+let rowSeq = 1;
+const newLeg = () => ({
+    key: `leg-${rowSeq++}`,
+    travel_from: '',
+    travel_to: '',
+    mode_of_travel: '',
+    departure_date: new Date(),
+    arrival_date: new Date(),
+    lodging_required: false,
+    preferred_area_for_lodging: '',
+});
+const newCost = () => ({
+    key: `cost-${rowSeq++}`,
+    expense_type: '',
+    sponsored_amount: '',
+    funded_amount: '',
+    total_amount: '',
+    comments: '',
+});
+
 const TravelRequestApproval = ({ navigation, route }) => {
     // Main states
     const [activeTab, setActiveTab] = useState(route?.params?.tab || 'pending'); // pending, apply, history, statistics
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true); // the list is fetched on mount
     const [refreshing, setRefreshing] = useState(false);
+    const [loadError, setLoadError] = useState(''); // message of the last failed list load
+    const [acting, setActing] = useState(false); // approve / reject request running
+    const [submitting, setSubmitting] = useState(false); // apply-on-behalf request running
+    const busy = useRef(false); // blocks a second tap before the busy state renders
+    const loadSeq = useRef(0); // only the latest list load may update the screen (tabs can change mid-load)
     const [requests, setRequests] = useState([]);
     const [statistics, setStatistics] = useState({});
     const [filterStatus, setFilterStatus] = useState('');
@@ -140,26 +166,12 @@ const TravelRequestApproval = ({ navigation, route }) => {
     });
 
     // Itinerary states
-    const [itinerary, setItinerary] = useState([{
-        travel_from: '',
-        travel_to: '',
-        mode_of_travel: '',
-        departure_date: new Date(),
-        arrival_date: new Date(),
-        lodging_required: false,
-        preferred_area_for_lodging: '',
-    }]);
+    const [itinerary, setItinerary] = useState(() => [newLeg()]);
     const [showDeparturePicker, setShowDeparturePicker] = useState({ show: false, index: -1 });
     const [showArrivalPicker, setShowArrivalPicker] = useState({ show: false, index: -1 });
 
     // Costings states
-    const [costings, setCostings] = useState([{
-        expense_type: '',
-        sponsored_amount: '',
-        funded_amount: '',
-        total_amount: '',
-        comments: '',
-    }]);
+    const [costings, setCostings] = useState(() => [newCost()]);
     const [expenseTypes, setExpenseTypes] = useState([]);
 
     const loadInitialData = useCallback(async () => {
@@ -197,8 +209,12 @@ const TravelRequestApproval = ({ navigation, route }) => {
         ]);
     }, []);
 
-    const loadRequests = useCallback(async () => {
-        setLoading(true);
+    // `quiet` reloads keep the current list on screen (used after a decision)
+    const loadRequests = useCallback(async (quiet = false) => {
+        const id = ++loadSeq.current;
+        if (quiet !== true) {
+            setLoading(true);
+        }
         try {
             const filters = { limit: 500 };
 
@@ -209,23 +225,36 @@ const TravelRequestApproval = ({ navigation, route }) => {
             }
 
             const response = await apiService.getAdminTravelRequests(filters);
+            if (id !== loadSeq.current) {
+                return;
+            }
 
             if (response.success && response.data?.message) {
                 const data = response.data.message;
-                setRequests(data.requests || []);
+                setRequests(Array.isArray(data.requests) ? data.requests : []);
                 setStatistics(data.statistics || {});
+                setLoadError('');
             } else if (response.data?.requests) {
                 setRequests(response.data.requests || []);
                 setStatistics(response.data.statistics || {});
+                setLoadError('');
             } else {
+                const msg = response.message || 'Please try again.';
                 setRequests([]);
                 setStatistics({});
+                setLoadError(msg);
+                showToast({ type: 'error', text1: 'Could not load travel requests', text2: msg });
             }
         } catch (error) {
             console.error('[Admin] Load requests error:', error);
-            setRequests([]);
+            if (id === loadSeq.current) {
+                setRequests([]);
+                setLoadError(error?.message || 'Please try again.');
+            }
         } finally {
-            setLoading(false);
+            if (id === loadSeq.current) {
+                setLoading(false);
+            }
         }
     }, [activeTab, filterStatus]);
 
@@ -250,26 +279,24 @@ const TravelRequestApproval = ({ navigation, route }) => {
 
     const onRefresh = useCallback(async () => {
         setRefreshing(true);
-        await loadRequests();
+        await loadRequests(true);
         setRefreshing(false);
     }, [loadRequests]);
 
+    // the tapped row shows a spinner (openingId) while the details load; the list stays
     const handleViewDetails = async (request) => {
         try {
-            setLoading(true);
             const response = await apiService.getTravelRequestDetails(request.name);
 
             if (response.success && response.data?.message?.data) {
                 setSelectedRequest(response.data.message.data);
                 setShowDetailsModal(true);
             } else {
-                showToast({ type: 'error', text1: 'Could not load request details' });
+                showToast({ type: 'error', text1: 'Could not load request details', text2: response.message || response.data?.message?.message });
             }
         } catch (error) {
             console.error('View details error:', error);
             showToast({ type: 'error', text1: 'Could not load request details', text2: error.message });
-        } finally {
-            setLoading(false);
         }
     };
 
@@ -295,13 +322,17 @@ const TravelRequestApproval = ({ navigation, route }) => {
     };
 
     const confirmAction = async () => {
+        if (!selectedRequest || busy.current) {
+            return;
+        }
         if (actionType === 'reject' && !actionReason.trim()) {
             setSheetError('Add a reason for rejecting this request');
             return;
         }
 
         setSheetError('');
-        setLoading(true);
+        busy.current = true;
+        setActing(true);
         try {
             let response;
             if (actionType === 'approve') {
@@ -319,7 +350,7 @@ const TravelRequestApproval = ({ navigation, route }) => {
                 setShowActionModal(false);
                 setSelectedRequest(null);
                 setActionReason('');
-                loadRequests();
+                await loadRequests(true);
             } else {
                 // server errors arrive on response.message (the API wrapper doesn't throw)
                 setSheetError(response.message || response.data?.message?.message || `Could not ${actionType} this request`);
@@ -328,63 +359,50 @@ const TravelRequestApproval = ({ navigation, route }) => {
             console.error('Action error:', error);
             setSheetError(`Could not ${actionType} this request. Check your connection and try again.`);
         } finally {
-            setLoading(false);
+            busy.current = false;
+            setActing(false);
         }
     };
 
     // Apply tab functions
     const addItineraryItem = () => {
-        setItinerary([...itinerary, {
-            travel_from: '',
-            travel_to: '',
-            mode_of_travel: '',
-            departure_date: new Date(),
-            arrival_date: new Date(),
-            lodging_required: false,
-            preferred_area_for_lodging: '',
-        }]);
+        setItinerary((list) => [...list, newLeg()]);
     };
 
     const removeItineraryItem = (index) => {
-        if (itinerary.length > 1) {
-            setItinerary(itinerary.filter((_, i) => i !== index));
-        }
+        setItinerary((list) => (list.length > 1 ? list.filter((_, i) => i !== index) : list));
+        // an open date picker belongs to a row index; close it so it can't land on another leg
+        setShowDeparturePicker({ show: false, index: -1 });
+        setShowArrivalPicker({ show: false, index: -1 });
     };
 
+    // copies the changed row instead of editing the state object in place
     const updateItineraryItem = (index, field, value) => {
-        const newItinerary = [...itinerary];
-        newItinerary[index][field] = value;
-        setItinerary(newItinerary);
+        setItinerary((list) => list.map((item, i) => (i === index ? { ...item, [field]: value } : item)));
     };
 
     const addCostingItem = () => {
-        setCostings([...costings, {
-            expense_type: '',
-            sponsored_amount: '',
-            funded_amount: '',
-            total_amount: '',
-            comments: '',
-        }]);
+        setCostings((list) => [...list, newCost()]);
     };
 
     const removeCostingItem = (index) => {
-        if (costings.length > 1) {
-            setCostings(costings.filter((_, i) => i !== index));
-        }
+        setCostings((list) => (list.length > 1 ? list.filter((_, i) => i !== index) : list));
     };
 
     const updateCostingItem = (index, field, value) => {
-        const newCostings = [...costings];
-        newCostings[index][field] = value;
-
-        // Auto-calculate total
-        if (field === 'sponsored_amount' || field === 'funded_amount') {
-            const sponsored = parseFloat(newCostings[index].sponsored_amount) || 0;
-            const funded = parseFloat(newCostings[index].funded_amount) || 0;
-            newCostings[index].total_amount = (sponsored + funded).toString();
-        }
-
-        setCostings(newCostings);
+        setCostings((list) => list.map((item, i) => {
+            if (i !== index) {
+                return item;
+            }
+            const next = { ...item, [field]: value };
+            // Auto-calculate total
+            if (field === 'sponsored_amount' || field === 'funded_amount') {
+                const sponsored = parseFloat(next.sponsored_amount) || 0;
+                const funded = parseFloat(next.funded_amount) || 0;
+                next.total_amount = (sponsored + funded).toString();
+            }
+            return next;
+        }));
     };
 
     const validateApplyForm = () => {
@@ -409,11 +427,12 @@ const TravelRequestApproval = ({ navigation, route }) => {
     };
 
     const handleApplySubmit = async () => {
-        if (!validateApplyForm()) {
+        if (busy.current || !validateApplyForm()) {
             return;
         }
 
-        setLoading(true);
+        busy.current = true;
+        setSubmitting(true);
         try {
             // Prepare itinerary
             const itineraryData = itinerary.map(item => ({
@@ -445,25 +464,28 @@ const TravelRequestApproval = ({ navigation, route }) => {
             const response = await apiService.submitTravelRequest(travelData);
 
             if (response.success && response.data?.message?.status === 'success') {
+                const requestId = response.data.message.request_id;
                 showToast({
                     type: 'success',
                     text1: 'Travel request created',
-                    text2: 'Request ID ' + response.data.message.request_id,
+                    text2: requestId ? `Request ID ${requestId}` : undefined,
                 });
                 resetApplyForm();
                 setActiveTab('pending'); // the tab effect reloads the pending list
             } else {
+                // server errors arrive on response.message (the API wrapper doesn't throw)
                 showToast({
                     type: 'error',
                     text1: 'Request not created',
-                    text2: response.data?.message?.message || 'Please try again',
+                    text2: response.message || response.data?.message?.message || 'Please try again',
                 });
             }
         } catch (error) {
             console.error('Submit travel request error:', error);
             showToast({ type: 'error', text1: 'Request not created', text2: error.message });
         } finally {
-            setLoading(false);
+            busy.current = false;
+            setSubmitting(false);
         }
     };
 
@@ -485,22 +507,8 @@ const TravelRequestApproval = ({ navigation, route }) => {
             address_of_organizer: '',
             other_details: '',
         });
-        setItinerary([{
-            travel_from: '',
-            travel_to: '',
-            mode_of_travel: '',
-            departure_date: new Date(),
-            arrival_date: new Date(),
-            lodging_required: false,
-            preferred_area_for_lodging: '',
-        }]);
-        setCostings([{
-            expense_type: '',
-            sponsored_amount: '',
-            funded_amount: '',
-            total_amount: '',
-            comments: '',
-        }]);
+        setItinerary([newLeg()]);
+        setCostings([newCost()]);
     };
 
     const calculateTotalCost = () => {
@@ -520,7 +528,7 @@ const TravelRequestApproval = ({ navigation, route }) => {
                     title: 'Employee',
                     searchable: true,
                     value: applyEmployee,
-                    options: employees.map((emp) => ({ value: emp.name, label: emp.employee_name, subtitle: emp.name, avatar: true })),
+                    options: employees.map((emp) => ({ value: emp.name, label: emp.employee_name || emp.name, subtitle: emp.name, avatar: true })),
                     onSelect: (v) => setApplyEmployee(v),
                 };
             case 'purpose':
@@ -579,7 +587,7 @@ const TravelRequestApproval = ({ navigation, route }) => {
         : applyEmployee;
 
     // ------------------------------------------------------------------ render
-    const listBusy = loading && !refreshing && !openingId && !showActionModal;
+    const listBusy = loading && !refreshing;
 
     const renderToolbar = () => {
         if (activeTab === 'apply') {
@@ -592,10 +600,8 @@ const TravelRequestApproval = ({ navigation, route }) => {
         }
         return (
             <View style={styles.toolbar}>
-                <View style={styles.toolbarRow}>
-                    <Segmented value={activeTab} onChange={setActiveTab} options={TABS} style={styles.flex} />
-                    <Button title="New request" size="sm" onPress={() => setActiveTab('apply')} style={styles.newButton} />
-                </View>
+                {/* "New request" lives in the footer: next to three segments it squeezed them off a 320 dp phone */}
+                <Segmented value={activeTab} onChange={setActiveTab} options={TABS} />
                 {activeTab === 'history' ? (
                     <Segmented
                         value={filterStatus || 'all'}
@@ -606,7 +612,7 @@ const TravelRequestApproval = ({ navigation, route }) => {
                 ) : null}
                 {preselectFilter && activeTab !== 'statistics' ? (
                     <Pressable style={styles.filterChip} onPress={() => setPreselectFilter('')} hitSlop={6}>
-                        <Text style={styles.filterChipText}>Employee {preselectFilter}</Text>
+                        <Text style={styles.filterChipText} numberOfLines={1}>Employee {preselectFilter}</Text>
                         <Icon name="x" size={14} color={color.textSecondary} />
                     </Pressable>
                 ) : null}
@@ -633,6 +639,7 @@ const TravelRequestApproval = ({ navigation, route }) => {
                 left={<Avatar name={request.employee_name} />}
                 title={request.employee_name}
                 subtitle={[trip, about].filter(Boolean).join('\n')}
+                subtitleLines={3}
                 value={activeTab === 'pending' && !opening ? dayLabel(request.creation) || undefined : undefined}
                 right={right}
                 chevron={!opening}
@@ -644,6 +651,9 @@ const TravelRequestApproval = ({ navigation, route }) => {
     const renderList = () => {
         if (listBusy) {
             return <Loading />;
+        }
+        if (displayedRequests.length === 0 && loadError) {
+            return <EmptyState icon="alert-circle" title="Could not load travel requests" message={loadError} action="Try again" onAction={() => loadRequests()} />;
         }
         if (displayedRequests.length === 0) {
             if (activeTab === 'pending') {
@@ -671,6 +681,11 @@ const TravelRequestApproval = ({ navigation, route }) => {
         }
         return (
             <>
+                {loadError ? (
+                    <Notice tone="danger" icon="alert-circle" title="Could not load the summary" onPress={() => loadRequests()}>
+                        {`${loadError} Tap to try again.`}
+                    </Notice>
+                ) : null}
                 <StatStrip
                     style={styles.stats}
                     items={[
@@ -703,10 +718,10 @@ const TravelRequestApproval = ({ navigation, route }) => {
             footer={(
                 <View style={styles.footerRow}>
                     <View style={styles.flex}>
-                        <Text style={type.caption}>Estimated total</Text>
-                        <Text style={styles.footerTotal}>{money(calculateTotalCost())}</Text>
+                        <Text style={type.caption} numberOfLines={1}>Estimated total</Text>
+                        <Text style={styles.footerTotal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{money(calculateTotalCost())}</Text>
                     </View>
-                    <Button title="Submit request" onPress={handleApplySubmit} loading={loading} />
+                    <Button title="Submit request" onPress={handleApplySubmit} loading={submitting} style={styles.footerButton} />
                 </View>
             )}
         >
@@ -750,7 +765,7 @@ const TravelRequestApproval = ({ navigation, route }) => {
 
             {itinerary.map((item, index) => (
                 <Group
-                    key={index}
+                    key={item.key}
                     title={itinerary.length > 1 ? `Leg ${index + 1}` : 'Itinerary'}
                     action={itinerary.length > 1 ? 'Remove' : undefined}
                     onAction={() => removeItineraryItem(index)}
@@ -778,20 +793,20 @@ const TravelRequestApproval = ({ navigation, route }) => {
                             placeholder="Not specified"
                             onPress={() => openPicker('mode', index)}
                         />
-                        <View style={styles.pair}>
+                        <View style={styles.datePair}>
                             <SelectField
                                 label="Departure"
                                 value={formatShortDate(item.departure_date)}
                                 icon="calendar"
                                 onPress={() => setShowDeparturePicker({ show: true, index })}
-                                style={styles.flex}
+                                style={styles.dateField}
                             />
                             <SelectField
                                 label="Arrival"
                                 value={formatShortDate(item.arrival_date)}
                                 icon="calendar"
                                 onPress={() => setShowArrivalPicker({ show: true, index })}
-                                style={styles.flex}
+                                style={styles.dateField}
                             />
                         </View>
                         {showDeparturePicker.show && showDeparturePicker.index === index ? (
@@ -822,7 +837,7 @@ const TravelRequestApproval = ({ navigation, route }) => {
                             />
                         ) : null}
                         <View style={styles.switchRow}>
-                            <Text style={type.body}>Lodging required</Text>
+                            <Text style={[type.body, styles.flexShrink]}>Lodging required</Text>
                             <Switch
                                 value={Boolean(item.lodging_required)}
                                 onValueChange={(value) => updateItineraryItem(index, 'lodging_required', value)}
@@ -845,7 +860,7 @@ const TravelRequestApproval = ({ navigation, route }) => {
 
             {costings.map((item, index) => (
                 <Group
-                    key={index}
+                    key={item.key}
                     title={costings.length > 1 ? `Cost ${index + 1}` : 'Costs'}
                     action={costings.length > 1 ? 'Remove' : undefined}
                     onAction={() => removeCostingItem(index)}
@@ -876,8 +891,8 @@ const TravelRequestApproval = ({ navigation, route }) => {
                             />
                         </View>
                         <View style={styles.totalRow}>
-                            <Text style={type.secondary}>Item total</Text>
-                            <Text style={styles.amount}>{money(item.total_amount)}</Text>
+                            <Text style={[type.secondary, styles.flexShrink]}>Item total</Text>
+                            <Text style={styles.amount} numberOfLines={1}>{money(item.total_amount)}</Text>
                         </View>
                     </View>
                 </Group>
@@ -889,9 +904,12 @@ const TravelRequestApproval = ({ navigation, route }) => {
     // One sheet for the request: details first, then the approve / reject step.
     const sheetMode = showActionModal ? 'action' : showDetailsModal && selectedRequest ? 'details' : null;
     const isPending = selectedRequest?.status_label === 'Pending';
-    const actionBusy = sheetMode === 'action' && loading;
+    const actionBusy = sheetMode === 'action' && acting;
 
     const closeSheet = () => {
+        if (actionBusy) {
+            return;
+        }
         if (sheetMode === 'action') {
             setShowActionModal(false);
         } else {
@@ -907,12 +925,12 @@ const TravelRequestApproval = ({ navigation, route }) => {
         sheetSubtitle = joinDot([selectedRequest?.employee_name, selectedRequest?.purpose_of_travel]);
         sheetFooter = (
             <>
-                <Button title="Cancel" variant="secondary" onPress={() => setShowActionModal(false)} disabled={loading} style={styles.flex} />
+                <Button title="Cancel" variant="secondary" onPress={() => setShowActionModal(false)} disabled={acting} style={styles.flex} />
                 <Button
                     title={actionType === 'approve' ? 'Approve' : 'Reject'}
                     variant={actionType === 'approve' ? 'primary' : 'dangerSolid'}
                     onPress={confirmAction}
-                    loading={loading}
+                    loading={acting}
                     style={styles.flex}
                 />
             </>
@@ -954,8 +972,9 @@ const TravelRequestApproval = ({ navigation, route }) => {
                     <Group title="Itinerary">
                         {legs.map((leg, idx) => (
                             <Row
-                                key={idx}
+                                key={leg.name || idx}
                                 title={routeLabel(leg.travel_from, leg.travel_to) || `Leg ${idx + 1}`}
+                                titleLines={2}
                                 subtitle={joinDot([
                                     leg.mode_of_travel,
                                     tripDates(leg.departure_date, leg.arrival_date, true),
@@ -974,7 +993,7 @@ const TravelRequestApproval = ({ navigation, route }) => {
                     <Group title="Costs">
                         {costs.map((cost, idx) => (
                             <Row
-                                key={idx}
+                                key={cost.name || idx}
                                 title={cost.expense_type || '-'}
                                 subtitle={`Sponsored ${money(cost.sponsored_amount)}  ·  Funded ${money(cost.funded_amount)}`}
                                 value={money(cost.total_amount)}
@@ -1000,6 +1019,7 @@ const TravelRequestApproval = ({ navigation, route }) => {
                     }
                 }}
                 placeholder={actionType === 'approve' ? 'Optional' : 'Required'}
+                editable={!acting}
                 multiline
                 numberOfLines={4}
                 autoFocus={actionType === 'reject'}
@@ -1012,7 +1032,11 @@ const TravelRequestApproval = ({ navigation, route }) => {
             {renderToolbar()}
 
             {activeTab === 'apply' ? renderApplyForm() : (
-                <Screen refreshing={refreshing} onRefresh={onRefresh}>
+                <Screen
+                    refreshing={refreshing}
+                    onRefresh={onRefresh}
+                    footer={<Button title="New travel request" icon="plus" onPress={() => setActiveTab('apply')} />}
+                >
                     {activeTab === 'statistics' ? renderStatistics() : renderList()}
                 </Screen>
             )}
@@ -1053,6 +1077,7 @@ const TravelRequestApproval = ({ navigation, route }) => {
                                     key={o.value || 'none'}
                                     left={o.avatar ? <Avatar name={o.label} size={32} /> : undefined}
                                     title={o.label}
+                                    titleLines={2}
                                     subtitle={o.subtitle}
                                     selected={active}
                                     right={active ? <Icon name="check" size={18} color={color.accent} /> : null}
@@ -1086,13 +1111,13 @@ const styles = StyleSheet.create({
         borderBottomColor: color.border,
     },
     toolbarRow: { flexDirection: 'row', alignItems: 'center' },
-    newButton: { marginLeft: space.sm },
     subControl: { marginTop: space.sm },
     formTitle: { ...type.title, flex: 1 },
     filterChip: {
         flexDirection: 'row',
         alignItems: 'center',
         alignSelf: 'flex-start',
+        maxWidth: '100%',
         gap: 6,
         marginTop: space.sm,
         paddingHorizontal: 10,
@@ -1100,27 +1125,34 @@ const styles = StyleSheet.create({
         borderRadius: 14,
         backgroundColor: color.neutralSoft,
     },
-    filterChipText: { fontSize: 13, color: color.textSecondary, fontWeight: '500' },
+    filterChipText: { fontSize: 13, color: color.textSecondary, fontWeight: '500', flexShrink: 1 },
     stats: { marginBottom: space.xl },
 
     panel: { paddingHorizontal: space.lg, paddingTop: space.lg },
     pair: { flexDirection: 'row', gap: space.md },
+    // side by side from 360 dp; stacked on a 320 dp phone, where two dates would be cut off at large text
+    datePair: { flexDirection: 'row', flexWrap: 'wrap', columnGap: space.md },
+    dateField: { flexGrow: 1, flexBasis: 140 },
+    flexShrink: { flexShrink: 1 },
     switchRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
+        gap: space.md,
         marginBottom: space.lg,
     },
     totalRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
+        gap: space.md,
         marginBottom: space.lg,
     },
     amount: { ...type.bodyStrong, fontVariant: ['tabular-nums'] },
     addButton: { alignSelf: 'flex-start', marginTop: -space.sm, marginBottom: space.xl },
     footerRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
     footerTotal: { ...type.title, fontVariant: ['tabular-nums'], marginTop: 2 },
+    footerButton: { flexShrink: 1 },
 
     detail: { marginBottom: space.lg },
     detailLabel: { ...type.caption, marginBottom: 4 },

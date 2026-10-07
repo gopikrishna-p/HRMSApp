@@ -4,7 +4,7 @@
 // on the server; the search box filters the loaded list by name, ID, department or
 // designation. "CTC" from the server is the monthly gross (sum of the structure's
 // earnings). Tapping an employee loads their full monthly breakdown.
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import apiService, { extractFrappeData, isApiSuccess } from '../../services/api.service';
 import showToast from '../../utils/Toast';
@@ -48,6 +48,12 @@ const dateLabel = (value) => {
 
 const deptLabel = (dept) => String(dept || '').replace(' - DG', '');
 
+// The API wrapper never throws on HTTP errors; the server's message is in `response.message`.
+const serverMessage = (response, fallback) => {
+    const msg = response?.message;
+    return typeof msg === 'string' && msg.trim() ? msg.trim() : fallback;
+};
+
 const componentNote = (c) => [
     c.abbr,
     c.formula && c.amount_based_on_formula ? c.formula : null,
@@ -75,6 +81,13 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
     const [showDetailModal, setShowDetailModal] = useState(false);
     const [employeeSalaryData, setEmployeeSalaryData] = useState(null);
     const [loadingDetail, setLoadingDetail] = useState(false);
+    const [detailError, setDetailError] = useState(null);
+
+    // Only the latest list request may write to state (filters can change while one is running);
+    // same for the detail sheet when another employee is opened before the first one loads.
+    const listRequest = useRef(0);
+    const detailRequest = useRef(0);
+    const firstFilterRun = useRef(true);
 
     useEffect(() => {
         loadInitialData();
@@ -82,6 +95,11 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
     }, []);
 
     useEffect(() => {
+        // the first run is the mount, which loadInitialData already covers
+        if (firstFilterRun.current) {
+            firstFilterRun.current = false;
+            return;
+        }
         loadSalaryStructures();
         // eslint-disable-next-line react-hooks/exhaustive-deps -- reload whenever a server-side filter changes
     }, [filterDepartment, filterStructure]);
@@ -92,8 +110,9 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
             // Load departments
             const deptResponse = await apiService.getDepartments();
             if (isApiSuccess(deptResponse)) {
-                const deptData = extractFrappeData(deptResponse, {});
-                setDepartments(deptData.departments || deptData || []);
+                const deptData = extractFrappeData(deptResponse, []);
+                const deptList = Array.isArray(deptData) ? deptData : deptData?.departments;
+                setDepartments(Array.isArray(deptList) ? deptList : []);
             }
 
             // Load structure list
@@ -101,7 +120,8 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
             if (isApiSuccess(structResponse)) {
                 const structData = extractFrappeData(structResponse, {});
                 // Handle both wrapped and unwrapped responses
-                setStructureList(structData.structures || structData.data?.structures || []);
+                const list = structData?.structures || structData?.data?.structures;
+                setStructureList(Array.isArray(list) ? list : []);
             }
 
             await loadSalaryStructures();
@@ -114,6 +134,14 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
     };
 
     const loadSalaryStructures = async () => {
+        const requestId = ++listRequest.current;
+        const isLatest = () => requestId === listRequest.current;
+        // a failed load must not leave the previous filter's list on screen
+        const fail = (message) => {
+            setAssignments([]);
+            setStatistics(null);
+            setError(message);
+        };
         try {
             setError(null);
             const filters = {};
@@ -125,6 +153,9 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
             }
 
             const response = await apiService.getAllSalaryStructureAssignments(filters);
+            if (!isLatest()) {
+                return;
+            }
 
             if (isApiSuccess(response)) {
                 // extractFrappeData already unwraps {status: 'success', data: {...}} to just the data
@@ -142,21 +173,21 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
                         setStatistics(data.data.statistics || null);
                         setStructures(data.data.structures || {});
                     } else if (data.status === 'error') {
-                        setError(data.message || 'Failed to load salary structures');
+                        fail(data.message || 'Failed to load salary structures');
                     } else {
-                        setError('No salary structure assignments found');
+                        fail('No salary structure assignments found');
                     }
                 } else {
-                    setError('Failed to load salary structures');
+                    fail('Failed to load salary structures');
                 }
             } else {
-                const rawMessage = response?.data?.message;
-                const errorMsg = rawMessage?.message || rawMessage?.error || 'Failed to load salary structures';
-                setError(errorMsg);
+                fail(serverMessage(response, 'Failed to load salary structures'));
             }
         } catch (err) {
             console.error('Load salary structures error:', err);
-            setError('Failed to load salary structures');
+            if (isLatest()) {
+                fail('Failed to load salary structures');
+            }
         }
     };
 
@@ -168,13 +199,19 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
     }, [filterDepartment, filterStructure]);
 
     const handleViewDetail = async (employee) => {
+        const requestId = ++detailRequest.current;
+        const isLatest = () => requestId === detailRequest.current;
         setSelectedEmployee(employee);
         setEmployeeSalaryData(null);
+        setDetailError(null);
         setShowDetailModal(true);
         setLoadingDetail(true);
 
         try {
             const response = await apiService.getEmployeeSalaryStructure(employee.employee);
+            if (!isLatest()) {
+                return;
+            }
             if (isApiSuccess(response)) {
                 const data = extractFrappeData(response, null);
                 // Check if we have the actual salary data (has employee or earnings)
@@ -184,12 +221,19 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
                     // Fallback: data might still be wrapped
                     setEmployeeSalaryData(data.data);
                 }
+            } else {
+                // e.g. "No salary structure assigned for this employee", or a network error
+                setDetailError(serverMessage(response, 'Failed to load employee salary details'));
             }
         } catch (err) {
             console.error('Load employee salary detail error:', err);
-            showToast({ type: 'error', text1: 'Could not load salary', text2: 'Failed to load employee salary details' });
+            if (isLatest()) {
+                showToast({ type: 'error', text1: 'Could not load salary', text2: 'Failed to load employee salary details' });
+            }
         } finally {
-            setLoadingDetail(false);
+            if (isLatest()) {
+                setLoadingDetail(false);
+            }
         }
     };
 
@@ -221,7 +265,13 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
         }
         const d = employeeSalaryData;
         if (!d) {
-            return <EmptyState icon="file-text" title="No salary data" message="No salary structure is assigned yet." />;
+            return (
+                <EmptyState
+                    icon="file-text"
+                    title={detailError ? 'Could not load salary' : 'No salary data'}
+                    message={detailError || 'No salary structure is assigned yet.'}
+                />
+            );
         }
         const cur = d.currency;
         const structureNote = [
@@ -265,7 +315,7 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
                 </Group>
 
                 <Group>
-                    <Row title="Net pay per month" right={<Text style={styles.netPay}>{money(d.net_pay, cur)}</Text>} />
+                    <Row title="Net pay per month" titleLines={2} right={<Text style={styles.netPay} numberOfLines={1}>{money(d.net_pay, cur)}</Text>} />
                 </Group>
             </>
         );
@@ -279,6 +329,7 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
                     <Row
                         key={`opt-${o.value}`}
                         title={o.label}
+                        titleLines={2}
                         selected={active}
                         right={active ? <Icon name="check" size={18} color={color.accent} /> : null}
                         chevron={false}
@@ -329,7 +380,7 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
                     <StatStrip
                         style={styles.stats}
                         items={[
-                            { label: 'Employees', value: statistics.total_employees },
+                            { label: 'Employees', value: statistics.total_employees ?? assignments.length },
                             { label: 'Monthly CTC', value: money(statistics.total_ctc) },
                         ]}
                     />
@@ -341,7 +392,7 @@ const SalaryStructureAdminScreen = ({ navigation }) => {
                             <Row
                                 key={item.name}
                                 left={<Avatar name={item.employee_name} />}
-                                title={item.employee_name}
+                                title={item.employee_name || item.employee}
                                 subtitle={[item.employee, item.designation, deptLabel(item.department)].filter(Boolean).join('  ·  ')}
                                 meta={item.salary_structure ? <Tag label={item.salary_structure} /> : null}
                                 value={money(item.total_ctc)}

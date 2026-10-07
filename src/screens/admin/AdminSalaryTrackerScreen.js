@@ -5,7 +5,7 @@
 // or rejecting one takes effect immediately. "Add salaries" creates a month's records for
 // every employee (optionally one department), or a pending-salary record for the admin's
 // own employee profile.
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import ApiService from '../../services/api.service';
@@ -23,6 +23,7 @@ import {
     SelectField,
     EmptyState,
     Loading,
+    Notice,
     Icon,
     color,
     space,
@@ -47,8 +48,15 @@ const inr = (value) => {
     return `${n < 0 ? '-' : ''}₹${grouped}`;
 };
 
-const monthOf = (item) => item?.salary_month || `${item?.month} ${item?.year}`;
+const monthOf = (item) => item?.salary_month || [item?.month, item?.year].filter(Boolean).join(' ');
 const deptLabel = (dept) => String(dept || '').replace(' - DG', '');
+
+// The API wrapper never throws on HTTP errors; the server's message is in `response.message`
+// (a frappe.throw comes back as HTTP 417 with no `status` in the body).
+const failMessage = (resp, data, fallback = 'Failed') => {
+    const msg = resp?.message || data?.message;
+    return typeof msg === 'string' && msg.trim() ? msg.trim() : fallback;
+};
 
 // Options shown inside a sheet in place of a nested picker
 const OptionList = ({ options, value, onSelect }) => (
@@ -102,11 +110,15 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
     const [reviewing, setReviewing] = useState(null);
     const [processing, setProcessing] = useState(null); // 'approve' | 'reject'
 
+    const [loadError, setLoadError] = useState(null);
+    // only the latest load may write to state; `busy` blocks a second submit before the button re-renders
+    const loadRequest = useRef(0);
+    const busy = useRef(false);
+
     useEffect(() => {
-        loadData();
+        // the list itself is loaded by the focus effect below (it also runs on mount)
         loadDepartments();
         loadAdminEmployee();
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
     }, []);
 
     // When AdminDashboard's "My Salary Tracker" shortcut routes here with
@@ -148,7 +160,7 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
     };
 
     const loadData = async () => {
-        setLoading(true);
+        const requestId = ++loadRequest.current;
         try {
             const filters = {};
             if (filterMonth) {
@@ -163,6 +175,11 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
                 ApiService.getPendingReviewTrackers(),
                 ApiService.getPendingSalarySummary(),
             ]);
+            if (requestId !== loadRequest.current) {
+                return;
+            }
+            const failed = [listResp, pendingResp, summaryResp].find((r) => !r?.success);
+            setLoadError(failed ? failMessage(failed, null, 'Could not load salary records') : null);
 
             // Stable comparator on the trailing numeric segment of the
             // Employee ID (HR-EMP-00001 → 00037). Used to sort the three
@@ -196,8 +213,14 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
             setSummary(sortedSummary);
         } catch (err) {
             console.error('Load admin salary tracker error:', err);
+            if (requestId === loadRequest.current) {
+                setLoadError('Could not load salary records');
+            }
         } finally {
-            setLoading(false);
+            // full-screen loading is only for the first load; later reloads keep the list on screen
+            if (requestId === loadRequest.current) {
+                setLoading(false);
+            }
         }
     };
 
@@ -208,6 +231,10 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
     };
 
     const handleAddMonth = async () => {
+        if (busy.current) {
+            return;
+        }
+        busy.current = true;
         setAddLoading(true);
         try {
             const resp = await ApiService.addMonthlySalaries({
@@ -216,16 +243,17 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
                 department: addDept || undefined,
             });
             const data = resp?.data?.message || resp?.data;
-            if (data?.status === 'success') {
+            if (resp?.success && data?.status === 'success') {
                 showToast({ type: 'success', text1: 'Salaries added', text2: data.message });
                 setShowAddModal(false);
                 loadData();
             } else {
-                showToast({ type: 'error', text1: 'Not added', text2: data?.message || 'Failed' });
+                showToast({ type: 'error', text1: 'Not added', text2: failMessage(resp, data) });
             }
         } catch (err) {
             showToast({ type: 'error', text1: 'Not added', text2: err.message || 'Failed' });
         } finally {
+            busy.current = false;
             setAddLoading(false);
         }
     };
@@ -239,6 +267,10 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
             showToast({ type: 'error', text1: 'Check the amount', text2: 'Enter a valid salary amount' });
             return;
         }
+        if (busy.current) {
+            return;
+        }
+        busy.current = true;
         setAddLoading(true);
         try {
             const resp = await ApiService.requestPendingSalary({
@@ -249,18 +281,19 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
                 remarks: selfRemarks || undefined,
             });
             const data = resp?.data?.message || resp?.data;
-            if (data?.status === 'success') {
+            if (resp?.success && data?.status === 'success') {
                 showToast({ type: 'success', text1: 'Salary added', text2: data.message });
                 setShowAddModal(false);
                 setSelfAmount('');
                 setSelfRemarks('');
                 loadData();
             } else {
-                showToast({ type: 'error', text1: 'Not added', text2: data?.message || 'Failed' });
+                showToast({ type: 'error', text1: 'Not added', text2: failMessage(resp, data) });
             }
         } catch (err) {
             showToast({ type: 'error', text1: 'Not added', text2: err.message || 'Failed' });
         } finally {
+            busy.current = false;
             setAddLoading(false);
         }
     };
@@ -273,24 +306,26 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
                 action: action,
             });
             const data = resp?.data?.message || resp?.data;
-            if (data?.status === 'success') {
+            if (resp?.success && data?.status === 'success') {
                 showToast({ type: 'success', text1: action === 'approve' ? 'Approved' : 'Rejected', text2: data.message });
                 loadData();
                 return true;
             }
-            showToast({ type: 'error', text1: 'Not updated', text2: data?.message || 'Failed' });
+            showToast({ type: 'error', text1: 'Not updated', text2: failMessage(resp, data) });
         } catch (err) {
-            showToast({ type: 'error', text1: 'Not updated', text2: err.message });
+            showToast({ type: 'error', text1: 'Not updated', text2: err.message || 'Failed' });
         }
         return false;
     };
 
     const decide = async (action) => {
-        if (!reviewing) {
+        if (!reviewing || busy.current) {
             return;
         }
+        busy.current = true;
         setProcessing(action);
         const ok = await handleApprove(reviewing.name, action);
+        busy.current = false;
         setProcessing(null);
         if (ok) {
             setReviewing(null);
@@ -329,9 +364,9 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
         setAddPicker(null);
     };
 
-    const totalPending = summary.reduce((sum, e) => sum + (e.total_pending || 0), 0);
-    const totalSalary = summary.reduce((sum, e) => sum + (e.total_salary || 0), 0);
-    const totalPaid = summary.reduce((sum, e) => sum + (e.total_paid || 0), 0);
+    const totalPending = summary.reduce((sum, e) => sum + (Number(e.total_pending) || 0), 0);
+    const totalSalary = summary.reduce((sum, e) => sum + (Number(e.total_salary) || 0), 0);
+    const totalPaid = summary.reduce((sum, e) => sum + (Number(e.total_paid) || 0), 0);
     const hasFilters = filterMonth || filterStatus;
 
     const monthOptions = MONTHS.map((m) => ({ value: m, label: m }));
@@ -344,7 +379,7 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
         }),
     ];
 
-    if (loading && records.length === 0) {
+    if (loading) {
         return (
             <View style={styles.screen}>
                 <Loading label="Loading salary tracker" />
@@ -359,7 +394,7 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
             <Row
                 key={item.name}
                 left={<Avatar name={item.employee_name} />}
-                title={item.employee_name}
+                title={item.employee_name || item.employee}
                 subtitle={monthOf(item)}
                 meta={item.payment_status ? (
                     <>
@@ -394,9 +429,9 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
                                 left={<Avatar name={emp.employee_name} />}
                                 title={emp.employee_name}
                                 subtitle={[
-                                    deptLabel(emp.department) || '-',
+                                    deptLabel(emp.department),
                                     months != null ? `${months} ${Number(months) === 1 ? 'month' : 'months'}` : null,
-                                ].filter(Boolean).join('  ·  ')}
+                                ].filter(Boolean).join('  ·  ') || undefined}
                                 value={inr(emp.total_pending)}
                             />
                         );
@@ -408,13 +443,13 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
                 <Group title={`${records.length} ${records.length === 1 ? 'record' : 'records'}`}>
                     {records.map(renderRecordRow)}
                 </Group>
-            ) : (
+            ) : !loadError ? (
                 <EmptyState
                     icon="credit-card"
                     title="No salary records"
                     message={hasFilters ? 'Nothing matches these filters.' : 'Add a month of salaries to start tracking payments.'}
                 />
-            )}
+            ) : null}
         </>
     );
 
@@ -424,16 +459,16 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
                 <Row
                     key={item.name}
                     left={<Avatar name={item.employee_name} />}
-                    title={item.employee_name}
+                    title={item.employee_name || item.employee}
                     subtitle={item.remarks ? `${monthOf(item)}\n${item.remarks}` : monthOf(item)}
                     value={inr(item.salary_to_pay)}
                     onPress={() => setReviewing(item)}
                 />
             ))}
         </Group>
-    ) : (
+    ) : !loadError ? (
         <EmptyState icon="check-circle" title="No pending reviews" message="Salary records submitted by employees appear here." />
-    ));
+    ) : null);
 
     // ------------------------------------------------------------------ main
     const addTitle = {
@@ -475,13 +510,14 @@ function AdminSalaryTrackerScreen({ navigation, route }) {
                 onRefresh={onRefresh}
                 footer={<Button title="Add salaries" onPress={openAdd} />}
             >
+                {loadError ? <Notice tone="danger" icon="alert-circle">{loadError}</Notice> : null}
                 {tab === 'all' ? renderAll() : renderPending()}
             </Screen>
 
             {/* review an employee-submitted record */}
             <Sheet
                 visible={Boolean(reviewing)}
-                title={reviewing?.employee_name}
+                title={reviewing?.employee_name || reviewing?.employee || 'Salary record'}
                 subtitle="Submitted for review"
                 onClose={() => !processing && setReviewing(null)}
                 dismissable={!processing}

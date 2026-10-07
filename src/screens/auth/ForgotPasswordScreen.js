@@ -2,7 +2,7 @@
 //
 // Self-serve password reset through Frappe (frappe.core.doctype.user.user.reset_password):
 // the server emails a link that opens the site's "set a new password" page in the browser.
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
     Text,
     Image,
@@ -24,15 +24,22 @@ const ForgotPasswordScreen = ({ navigation, route }) => {
     const [email, setEmail] = useState(route?.params?.email || '');
     const [sending, setSending] = useState(false);
     const [sentTo, setSentTo] = useState(null);
+    // the keyboard's Send key and the button can both fire before the re-render disables them;
+    // a second request would also eat into the server's hourly reset limit
+    const sendBusy = useRef(false);
 
     const backToSignIn = () => navigation.navigate(ROUTES.LOGIN);
 
     const sendLink = async () => {
+        if (sendBusy.current) {
+            return;
+        }
         const address = email.trim().toLowerCase();
         if (!EMAIL_RE.test(address)) {
             showToast({ type: 'warning', text1: 'Enter your work email', text2: 'The email you sign in with' });
             return;
         }
+        sendBusy.current = true;
         setSending(true);
         try {
             const res = await ApiService.requestPasswordReset(address);
@@ -52,6 +59,7 @@ const ForgotPasswordScreen = ({ navigation, route }) => {
         } catch (error) {
             showToast({ type: 'error', text1: 'Could not send the link', text2: error?.message || 'Check your connection and try again' });
         } finally {
+            sendBusy.current = false;
             setSending(false);
         }
     };

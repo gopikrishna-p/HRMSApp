@@ -3,7 +3,7 @@
 // Everyone's daily tasks for one day, grouped by employee (hrms.api.admin_get_all_tasks).
 // Admins can edit any task, assign a task to one or more employees, add a task to their
 // own list, and see weekly or monthly task analytics.
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import ApiService from '../../services/api.service';
 import showToast from '../../utils/Toast';
@@ -49,6 +49,17 @@ const toOptions = (values) => values.map((v) => ({ value: v, label: statusLabel(
 const shortDept = (dept) => (dept || '').replace(' - DG', '');
 // "Took 2 Days" -> "Took 2 days"
 const sentenceCase = (text) => (text ? text.charAt(0) + text.slice(1).toLowerCase() : text);
+// 2.3333 -> "2.3h"
+const hoursText = (hours) => {
+    const h = Math.round((Number(hours) || 0) * 10) / 10;
+    return h > 0 ? `${h}h` : null;
+};
+
+// The API wrapper never throws on HTTP errors; the server's message is in `response.message`.
+const failMessage = (response, fallback) => {
+    const msg = response?.message || response?.data?.message?.message;
+    return typeof msg === 'string' && msg.trim() ? msg.trim() : fallback;
+};
 const ANALYTICS_PERIODS = [
     { value: 'week', label: 'This week' },
     { value: 'month', label: 'This month' },
@@ -98,6 +109,15 @@ const AdminDailyTasksScreen = ({ navigation }) => {
     const [newPriority, setNewPriority] = useState('Medium');
     const [creating, setCreating] = useState(false);
 
+    const [loadError, setLoadError] = useState(null);
+    const [analyticsError, setAnalyticsError] = useState(null);
+    const [empError, setEmpError] = useState(null);
+    // Only the latest request may write to state (the date or tab can change while one runs);
+    // `busy` blocks a second submit before the button re-renders as loading.
+    const taskRequest = useRef(0);
+    const analyticsRequest = useRef(0);
+    const busy = useRef(false);
+
     const formatDate = (d) => {
         const y = d.getFullYear();
         const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -125,58 +145,94 @@ const AdminDailyTasksScreen = ({ navigation }) => {
     };
 
     const fetchTasks = useCallback(async () => {
+        const requestId = ++taskRequest.current;
+        const isLatest = () => requestId === taskRequest.current;
         try {
             const dateStr = formatDate(selectedDate);
             const filter = activeTab === 'All' ? null : activeTab;
             const response = await ApiService.adminGetAllTasks(dateStr, null, null, filter);
+            if (!isLatest()) {
+                return;
+            }
             if (response?.success && response?.data?.message?.status === 'success') {
-                const result = response.data.message.data;
-                setEmployeeGroups(result.employee_groups || []);
+                const result = response.data.message.data || {};
+                const groups = Array.isArray(result.employee_groups) ? result.employee_groups : [];
+                setEmployeeGroups(groups);
                 setSummary(result.summary || {});
-                const expanded = {};
-                (result.employee_groups || []).forEach(g => { expanded[g.employee] = true; });
-                setExpandedEmps(expanded);
+                setLoadError(null);
+                // new employees open expanded; ones the admin collapsed stay collapsed after a reload
+                setExpandedEmps((prev) => {
+                    const expanded = {};
+                    groups.forEach((g) => { expanded[g.employee] = prev[g.employee] ?? true; });
+                    return expanded;
+                });
             } else {
                 setEmployeeGroups([]);
                 setSummary({});
+                setLoadError(failMessage(response, 'Could not load tasks'));
             }
         } catch (error) {
             console.error('Admin fetch tasks error:', error);
-            setEmployeeGroups([]);
-            setSummary({});
-            showToast({ type: 'error', text1: 'Could not load tasks', text2: error?.message || 'Check your connection and try again' });
+            if (isLatest()) {
+                setEmployeeGroups([]);
+                setSummary({});
+                setLoadError(error?.message || 'Check your connection and try again');
+            }
         } finally {
-            setLoading(false);
-            setRefreshing(false);
+            if (isLatest()) {
+                setLoading(false);
+                setRefreshing(false);
+            }
         }
     }, [selectedDate, activeTab]);
 
     const fetchAnalytics = useCallback(async () => {
+        const requestId = ++analyticsRequest.current;
+        const isLatest = () => requestId === analyticsRequest.current;
         setAnalyticsLoading(true);
         try {
             const response = await ApiService.adminGetTaskAnalytics(analyticsPeriod);
+            if (!isLatest()) {
+                return;
+            }
             if (response?.success && response?.data?.message?.status === 'success') {
-                setAnalytics(response.data.message.data);
+                setAnalytics(response.data.message.data || null);
+                setAnalyticsError(null);
+            } else {
+                // never leave the other period's numbers under this period's tab
+                setAnalytics(null);
+                setAnalyticsError(failMessage(response, 'Could not load task analytics.'));
             }
         } catch (error) {
             console.error('Analytics error:', error);
+            if (isLatest()) {
+                setAnalytics(null);
+                setAnalyticsError('Could not load task analytics.');
+            }
         } finally {
-            setAnalyticsLoading(false);
+            if (isLatest()) {
+                setAnalyticsLoading(false);
+            }
         }
     }, [analyticsPeriod]);
 
     const fetchEmployees = async () => {
         setEmpLoading(true);
+        setEmpError(null);
         try {
             const response = await ApiService.getAllEmployees();
             if (response?.success && response?.data?.message) {
                 const data = response.data.message;
                 // get_all_employees returns { status, employees: [...] }
                 const emps = data.employees || data || [];
-                setEmployeeList(Array.isArray(emps) ? emps : []);
+                // people who left or are inactive can't be given tasks
+                setEmployeeList(Array.isArray(emps) ? emps.filter((e) => !e.status || e.status === 'Active') : []);
+            } else {
+                setEmpError(failMessage(response, 'Could not load employees'));
             }
         } catch (err) {
             console.error('Fetch employees error:', err);
+            setEmpError('Could not load employees');
         } finally {
             setEmpLoading(false);
         }
@@ -207,7 +263,7 @@ const AdminDailyTasksScreen = ({ navigation }) => {
 
     const openEditModal = (task) => {
         setEditTask(task);
-        setEditTitle(task.task_title);
+        setEditTitle(task.task_title || '');
         setEditDescription(task.task_description || '');
         setEditPriority(task.priority);
         setEditStatus(task.status);
@@ -220,6 +276,10 @@ const AdminDailyTasksScreen = ({ navigation }) => {
             showToast({ type: 'error', text1: 'Title is required', text2: 'Enter a task title' });
             return;
         }
+        if (busy.current || !editTask) {
+            return;
+        }
+        busy.current = true;
         setSaving(true);
         try {
             const response = await ApiService.adminUpdateTask({
@@ -235,11 +295,12 @@ const AdminDailyTasksScreen = ({ navigation }) => {
                 setShowEditModal(false);
                 fetchTasks();
             } else {
-                showToast({ type: 'error', text1: 'Not updated', text2: response?.data?.message?.message || 'Update failed' });
+                showToast({ type: 'error', text1: 'Not updated', text2: failMessage(response, 'Update failed') });
             }
         } catch (error) {
             showToast({ type: 'error', text1: 'Not updated', text2: 'Update failed' });
         } finally {
+            busy.current = false;
             setSaving(false);
         }
     };
@@ -255,6 +316,10 @@ const AdminDailyTasksScreen = ({ navigation }) => {
             showToast({ type: 'error', text1: 'Missing details', text2: 'Select employees and enter a title' });
             return;
         }
+        if (busy.current) {
+            return;
+        }
+        busy.current = true;
         setAssigning(true);
         try {
             const response = await ApiService.adminAssignTask({
@@ -273,11 +338,12 @@ const AdminDailyTasksScreen = ({ navigation }) => {
                 setEmpSearch('');
                 fetchTasks();
             } else {
-                showToast({ type: 'error', text1: 'Not assigned', text2: response?.data?.message?.message || 'Assign failed' });
+                showToast({ type: 'error', text1: 'Not assigned', text2: failMessage(response, 'Assign failed') });
             }
         } catch (error) {
             showToast({ type: 'error', text1: 'Not assigned', text2: 'Assign failed' });
         } finally {
+            busy.current = false;
             setAssigning(false);
         }
     };
@@ -287,6 +353,10 @@ const AdminDailyTasksScreen = ({ navigation }) => {
             showToast({ type: 'error', text1: 'Title is required', text2: 'Enter a task title' });
             return;
         }
+        if (busy.current) {
+            return;
+        }
+        busy.current = true;
         setCreating(true);
         try {
             const response = await ApiService.createDailyTask({
@@ -302,11 +372,12 @@ const AdminDailyTasksScreen = ({ navigation }) => {
                 setNewPriority('Medium');
                 fetchTasks();
             } else {
-                showToast({ type: 'error', text1: 'Not added', text2: response?.data?.message?.message || 'Failed' });
+                showToast({ type: 'error', text1: 'Not added', text2: failMessage(response, 'Failed') });
             }
         } catch (error) {
             showToast({ type: 'error', text1: 'Not added', text2: 'Failed to create task' });
         } finally {
+            busy.current = false;
             setCreating(false);
         }
     };
@@ -326,7 +397,9 @@ const AdminDailyTasksScreen = ({ navigation }) => {
 
     const renderTaskRow = (task) => {
         const priorityTag = PRIORITY_TAG[task.priority];
+        // status goes under the title with the tags: on the right it left a long title too little width
         const tags = [
+            task.status ? <StatusText key="s" label={statusLabel(task.status)} tone={STATUS_TONE[task.status]} size={12} /> : null,
             priorityTag && <Tag key="p" label={priorityTag.label} tone={priorityTag.tone} />,
             task.carry_forward_count > 0 && (
                 <Tag
@@ -338,7 +411,7 @@ const AdminDailyTasksScreen = ({ navigation }) => {
         ].filter(Boolean);
         const subtitle = [
             priorityTag ? null : task.priority ? `${task.priority} priority` : null,
-            task.time_taken_hours > 0 ? `${task.time_taken_hours}h` : null,
+            hoursText(task.time_taken_hours),
             sentenceCase(task.completion_label),
         ].filter(Boolean).join('  ·  ');
         return (
@@ -349,7 +422,6 @@ const AdminDailyTasksScreen = ({ navigation }) => {
                 titleLines={2}
                 subtitle={subtitle || undefined}
                 meta={tags.length ? tags : null}
-                right={<StatusText label={statusLabel(task.status)} tone={STATUS_TONE[task.status]} />}
                 onPress={() => openEditModal(task)}
             />
         );
@@ -362,13 +434,13 @@ const AdminDailyTasksScreen = ({ navigation }) => {
             <Group key={group.employee} style={styles.employeeGroup}>
                 <Row
                     left={<Avatar name={group.employee_name} />}
-                    title={group.employee_name}
+                    title={group.employee_name || group.employee}
                     subtitle={shortDept(group.department) || 'No department'}
                     chevron={false}
                     onPress={() => toggleExpand(group.employee)}
                     right={(
                         <View style={styles.groupRight}>
-                            <Text style={[styles.groupCount, allDone && styles.groupCountDone]}>{`${group.completed}/${group.total}`}</Text>
+                            <Text style={[styles.groupCount, allDone && styles.groupCountDone]} numberOfLines={1}>{`${group.completed ?? 0}/${group.total ?? 0}`}</Text>
                             <Icon name={isExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={color.textTertiary} />
                         </View>
                     )}
@@ -381,6 +453,9 @@ const AdminDailyTasksScreen = ({ navigation }) => {
     const renderBody = () => {
         if (loading) {
             return <Loading />;
+        }
+        if (loadError && employeeGroups.length === 0) {
+            return <EmptyState icon="alert-circle" title="Could not load tasks" message={loadError} action="Try again" onAction={onRefresh} />;
         }
         if (employeeGroups.length === 0) {
             const which = activeTab === 'All' ? '' : `${statusLabel(activeTab).toLowerCase()} `;
@@ -431,7 +506,8 @@ const AdminDailyTasksScreen = ({ navigation }) => {
                             items={[
                                 { label: 'Completion', value: `${analytics.completion_rate ?? 0}%` },
                                 { label: 'Avg hours', value: analytics.avg_completion_hours ?? 0 },
-                                { label: 'Carried forward', value: analytics.carried_forward ?? 0 },
+                                // "Carried forward" does not fit a third of a 320 dp sheet at large text
+                                { label: 'Carried over', value: analytics.carried_forward ?? 0 },
                             ]}
                         />
                     </View>
@@ -443,7 +519,7 @@ const AdminDailyTasksScreen = ({ navigation }) => {
                                     key={`top-${i}`}
                                     left={<Avatar name={emp.employee_name} size={32} />}
                                     title={emp.employee_name}
-                                    value={`${emp.completed} of ${emp.total}`}
+                                    value={`${emp.completed ?? 0} of ${emp.total ?? 0}`}
                                 />
                             ))}
                         </Group>
@@ -456,14 +532,14 @@ const AdminDailyTasksScreen = ({ navigation }) => {
                                     key={`cf-${i}`}
                                     left={<Avatar name={emp.employee_name} size={32} />}
                                     title={emp.employee_name}
-                                    value={`${emp.total_cf} ${Number(emp.total_cf) === 1 ? 'time' : 'times'}`}
+                                    value={`${emp.total_cf ?? 0} ${Number(emp.total_cf) === 1 ? 'time' : 'times'}`}
                                 />
                             ))}
                         </Group>
                     ) : null}
                 </>
             ) : (
-                <EmptyState icon="bar-chart-2" title="No analytics" message="Could not load task analytics." />
+                <EmptyState icon="bar-chart-2" title="No analytics" message={analyticsError || 'Could not load task analytics.'} />
             )}
         </Sheet>
     );
@@ -532,6 +608,8 @@ const AdminDailyTasksScreen = ({ navigation }) => {
                     <SearchField value={empSearch} onChangeText={setEmpSearch} placeholder="Search by name or department" style={styles.sheetControl} />
                     {empLoading ? (
                         <Loading />
+                    ) : empError && employeeList.length === 0 ? (
+                        <EmptyState icon="alert-circle" title="Could not load employees" message={empError} action="Try again" onAction={fetchEmployees} />
                     ) : filteredEmps.length === 0 ? (
                         <EmptyState icon="search" title="No employees found" />
                     ) : (
@@ -565,9 +643,9 @@ const AdminDailyTasksScreen = ({ navigation }) => {
                 dismissable={!assigning}
                 footer={(
                     <>
-                        <Button title="Cancel" variant="secondary" onPress={closeAssign} disabled={assigning} />
+                        <Button title="Cancel" variant="secondary" onPress={closeAssign} disabled={assigning} style={styles.flex} />
                         <Button
-                            title={count ? `Assign to ${count} ${count === 1 ? 'employee' : 'employees'}` : 'Assign'}
+                            title={count ? `Assign to ${count}` : 'Assign'}
                             onPress={handleAssign}
                             loading={assigning}
                             style={styles.flex}
@@ -693,7 +771,7 @@ const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: color.bg },
     flex: { flex: 1 },
     topBar: {
-        height: 56,
+        minHeight: 56,
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: space.xs,

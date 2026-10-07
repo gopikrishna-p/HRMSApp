@@ -3,7 +3,7 @@
 // The employee's comp-off requests for days worked on holidays: a status filter, the list,
 // the request form in a bottom sheet, and a detail sheet that can cancel a pending request.
 // Approved days are added to the employee's leave balance by the server.
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Alert, Platform, Switch } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
@@ -90,8 +90,14 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
     // 'history' shows the list; 'apply' while the request form sheet is open.
     // Going back to 'history' reloads the list.
     const [activeTab, setActiveTab] = useState('history');
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(false); // employee record / list loading
     const [refreshing, setRefreshing] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
+    const [cancelling, setCancelling] = useState(false);
+    const busy = useRef(false); // blocks a second submit / cancel while one is being sent
+    const listRequest = useRef(0); // only the latest list load may fill the list (filters can change mid-load)
+    const [employeeError, setEmployeeError] = useState(null);
+    const [listError, setListError] = useState(null);
 
     // Apply form states
     const [workFromDate, setWorkFromDate] = useState(new Date());
@@ -119,6 +125,7 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
 
     // Presentation only: the request shown in the detail sheet
     const [selectedName, setSelectedName] = useState(null);
+    const lastSelected = useRef(null); // keeps the detail sheet filled while it slides out
 
     useEffect(() => {
         loadInitialData();
@@ -136,31 +143,32 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
             setLoading(true);
             // Get employee ID
             const empResponse = await apiService.getCurrentEmployee();
-            if (isApiSuccess(empResponse)) {
-                const empData = extractFrappeData(empResponse, {});
-                const empId = empData.name;
+            const empId = isApiSuccess(empResponse) ? extractFrappeData(empResponse, {})?.name : null;
+            if (empId) {
                 setEmployeeId(empId);
+                setEmployeeError(null);
             } else {
-                showToast({
-                    type: 'error',
-                    text1: 'Could not load your employee record',
-                    text2: getApiErrorMessage(empResponse, 'Failed to get employee information'),
-                });
+                const message = getApiErrorMessage(empResponse, 'No employee record is linked to your login');
+                setEmployeeError(message);
+                showToast({ type: 'error', text1: 'Could not load your employee record', text2: message });
             }
         } catch (error) {
             console.error('Error loading employee data:', error);
+            setEmployeeError(error?.message || 'Please try again');
             showToast({ type: 'error', text1: 'Could not load your employee record', text2: 'Please try again' });
         } finally {
             setLoading(false);
         }
     };
 
-    const loadMyRequests = async () => {
+    // keep: on a failed pull-to-refresh the list for this same filter stays on screen
+    const loadMyRequests = async ({ keep = false } = {}) => {
         if (!employeeId) {
             setRefreshing(false);
             return;
         }
 
+        const requestNo = ++listRequest.current;
         try {
             setLoading(true);
             const response = await apiService.getMyCompLeaves({
@@ -170,21 +178,32 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
                 to_date: null,
                 limit: 100
             });
+            if (requestNo !== listRequest.current) {
+                return; // a newer load (another filter) is on its way
+            }
 
             if (isApiSuccess(response)) {
                 const data = extractFrappeData(response, { requests: [], total_compensatory_days: 0, status_summary: { pending: 0, approved: 0, cancelled: 0 } });
                 setMyRequests(Array.isArray(data.requests) ? data.requests : []);
                 setTotalDays(data.total_compensatory_days || 0);
                 setStatusSummary(data.status_summary || { pending: 0, approved: 0, cancelled: 0 });
+                setListError(null);
             } else {
-                setMyRequests([]);
+                const message = getApiErrorMessage(response, 'Pull down to try again');
+                setListError(message);
+                if (!keep) {
+                    setMyRequests([]); // the list on screen may be for another filter
+                }
+                showToast({ type: 'error', text1: 'Could not load your requests', text2: message });
             }
         } catch (error) {
             console.error('Load requests error:', error);
             showToast({ type: 'error', text1: 'Could not load your requests', text2: 'Pull down to try again' });
         } finally {
-            setLoading(false);
-            setRefreshing(false);
+            if (requestNo === listRequest.current) {
+                setLoading(false);
+                setRefreshing(false);
+            }
         }
     };
 
@@ -192,7 +211,12 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
     // which had no employee yet, so the spinner never stopped.
     const onRefresh = () => {
         setRefreshing(true);
-        loadMyRequests();
+        if (employeeId) {
+            loadMyRequests({ keep: true });
+        } else {
+            // the employee record did not load; once it does, the list loads by itself
+            loadInitialData().finally(() => setRefreshing(false));
+        }
     };
 
     // Keep the half-day date inside the worked range; the server rejects it otherwise.
@@ -204,6 +228,9 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
     }, [halfDayDate, workFromDate, workEndDate]);
 
     const handleSubmit = async () => {
+        if (busy.current) {
+            return;
+        }
         // Check if employee ID is loaded
         if (!employeeId) {
             showToast({ type: 'error', text1: 'Your employee record is not loaded', text2: 'Close this screen and open it again' });
@@ -226,7 +253,8 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
             return;
         }
 
-        setLoading(true);
+        busy.current = true;
+        setSubmitting(true);
         try {
             const response = await apiService.submitCompLeave({
                 employee: employeeId,
@@ -262,7 +290,8 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
             console.error('Submit error:', error);
             showToast({ type: 'error', text1: 'Not sent', text2: error.message || 'Failed to submit compensatory leave request' });
         } finally {
-            setLoading(false);
+            busy.current = false;
+            setSubmitting(false);
         }
     };
 
@@ -276,8 +305,12 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
                     text: 'Cancel request',
                     style: 'destructive',
                     onPress: async () => {
+                        if (busy.current) {
+                            return;
+                        }
+                        busy.current = true;
                         try {
-                            setLoading(true);
+                            setCancelling(true);
                             const response = await apiService.cancelCompLeave(requestId, 'Cancelled by employee');
 
                             if (response.success) {
@@ -291,7 +324,8 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
                         } catch (error) {
                             showToast({ type: 'error', text1: 'Not cancelled', text2: error.message || 'Failed to cancel request' });
                         } finally {
-                            setLoading(false);
+                            busy.current = false;
+                            setCancelling(false);
                         }
                     }
                 }
@@ -301,7 +335,7 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
 
     // ------------------------------------------------------------------ presentation helpers
     const closeForm = () => {
-        if (!loading) {
+        if (!submitting) {
             setShowWorkFromPicker(false);
             setShowWorkEndPicker(false);
             setShowHalfDayPicker(false);
@@ -311,7 +345,11 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
 
     // The detail sheet follows the list, so it closes by itself once a cancelled request is gone.
     const selected = selectedName ? myRequests.find((r) => r.name === selectedName) || null : null;
-    const selectedPending = selected?.docstatus === 0;
+    if (selected) {
+        lastSelected.current = selected;
+    }
+    const detail = selected || lastSelected.current;
+    const selectedPending = detail?.docstatus === 0;
 
     // days the form would request (display only; the server computes the real figure)
     const formDays = formatLocalDate(workEndDate) >= formatLocalDate(workFromDate)
@@ -322,25 +360,55 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
         if (loading && !refreshing) {
             return <Loading />;
         }
-        if (myRequests.length === 0) {
+        if (!employeeId && employeeError) {
             return (
                 <EmptyState
-                    icon="calendar"
-                    title={filterStatus === null ? 'No requests yet' : `No ${statusOf(filterStatus).toLowerCase()} requests`}
-                    message={filterStatus === null ? 'Requests for days worked on holidays appear here.' : undefined}
+                    icon="alert-circle"
+                    title="Could not load your employee record"
+                    message={employeeError}
+                    action="Try again"
+                    onAction={loadInitialData}
                 />
+            );
+        }
+        if (myRequests.length === 0 && listError) {
+            return (
+                <EmptyState
+                    icon="alert-circle"
+                    title="Could not load your requests"
+                    message={listError}
+                    action="Try again"
+                    onAction={() => loadMyRequests()}
+                />
+            );
+        }
+        // the numbers cover every request, whatever the filter, so they stay when a filter has none
+        const total = statusSummary.all ?? myRequests.length;
+        const strip = total ? (
+            <StatStrip
+                style={styles.strip}
+                items={[
+                    { label: 'Days earned', value: formatDays(totalDays) },
+                    { label: 'Pending', value: statusSummary.pending || 0, tone: statusSummary.pending ? 'warning' : undefined },
+                    { label: 'Requests', value: total },
+                ]}
+            />
+        ) : null;
+        if (myRequests.length === 0) {
+            return (
+                <>
+                    {strip}
+                    <EmptyState
+                        icon="calendar"
+                        title={filterStatus === null ? 'No requests yet' : `No ${statusOf(filterStatus).toLowerCase()} requests`}
+                        message={filterStatus === null ? 'Requests for days worked on holidays appear here.' : undefined}
+                    />
+                </>
             );
         }
         return (
             <>
-                <StatStrip
-                    style={styles.strip}
-                    items={[
-                        { label: 'Days earned', value: formatDays(totalDays) },
-                        { label: 'Pending', value: statusSummary.pending || 0, tone: statusSummary.pending ? 'warning' : undefined },
-                        { label: 'Requests', value: statusSummary.all ?? myRequests.length },
-                    ]}
-                />
+                {strip}
                 <Group title="Requests" footer="Approved days are added to your leave balance.">
                     {myRequests.map((request) => (
                         <Row
@@ -360,13 +428,11 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
     return (
         <View style={styles.container}>
             <View style={styles.toolbar}>
+                {/* no counts: four labels plus counts overlapped each other on 320-360 dp phones; the totals are in the strip below */}
                 <Segmented
                     value={filterStatus === null ? 'all' : String(filterStatus)}
                     onChange={(value) => setFilterStatus(value === 'all' ? null : Number(value))}
-                    options={STATUS_FILTERS.map((o) => ({
-                        ...o,
-                        count: { all: statusSummary.all, 0: statusSummary.pending, 1: statusSummary.approved, 2: statusSummary.cancelled }[o.value] || undefined,
-                    }))}
+                    options={STATUS_FILTERS}
                 />
             </View>
 
@@ -384,11 +450,11 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
                 title="Apply for comp-off"
                 subtitle={formDays ? daysLabel(formDays) : undefined}
                 onClose={closeForm}
-                dismissable={!loading}
+                dismissable={!submitting}
                 footer={(
                     <>
-                        <Button title="Cancel" variant="secondary" onPress={closeForm} disabled={loading} style={styles.flex} />
-                        <Button title="Submit" onPress={handleSubmit} loading={loading} style={styles.flex} />
+                        <Button title="Cancel" variant="secondary" onPress={closeForm} disabled={submitting} style={styles.flex} />
+                        <Button title="Submit" onPress={handleSubmit} loading={submitting} style={styles.flex} />
                     </>
                 )}
             >
@@ -456,7 +522,14 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
                             label="Half day date"
                             value={dayLabel(halfDayDate)}
                             icon="calendar"
-                            onPress={() => setShowHalfDayPicker(true)}
+                            onPress={() => {
+                                // the picker's earliest date would be after its latest
+                                if (formDays === null) {
+                                    showToast({ type: 'warning', text1: 'Check the dates', text2: 'The last day cannot be before the first day' });
+                                    return;
+                                }
+                                setShowHalfDayPicker(true);
+                            }}
                         />
                         {showHalfDayPicker && (
                             <DateTimePicker
@@ -490,35 +563,35 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
             {/* Request detail */}
             <Sheet
                 visible={Boolean(selected)}
-                title={selected ? rangeLabel(selected.work_from_date, selected.work_end_date) : ''}
-                subtitle={selected ? `Comp-off  ·  ${daysLabel(selected.compensatory_days)}` : undefined}
-                onClose={() => !loading && setSelectedName(null)}
-                dismissable={!loading}
+                title={detail ? rangeLabel(detail.work_from_date, detail.work_end_date) : ''}
+                subtitle={detail ? `Comp-off  ·  ${daysLabel(detail.compensatory_days)}` : undefined}
+                onClose={() => !cancelling && setSelectedName(null)}
+                dismissable={!cancelling}
                 footer={selectedPending ? (
                     <>
                         <Button
                             title="Cancel request"
                             variant="danger"
-                            onPress={() => handleCancelRequest(selected.name, fullRange(selected.work_from_date, selected.work_end_date))}
-                            loading={loading}
+                            onPress={() => handleCancelRequest(detail.name, fullRange(detail.work_from_date, detail.work_end_date))}
+                            loading={cancelling}
                             style={styles.flex}
                         />
-                        <Button title="Close" variant="secondary" onPress={() => setSelectedName(null)} disabled={loading} style={styles.flex} />
+                        <Button title="Close" variant="secondary" onPress={() => setSelectedName(null)} disabled={cancelling} style={styles.flex} />
                     </>
                 ) : (
                     <Button title="Close" variant="secondary" onPress={() => setSelectedName(null)} style={styles.flex} />
                 )}
             >
-                {selected ? (
+                {detail ? (
                     <>
-                        <Detail label="Status" value={<StatusText label={statusOf(selected.docstatus)} size={15} />} />
-                        <Detail label="Days worked" value={fullRange(selected.work_from_date, selected.work_end_date)} />
-                        <Detail label="Compensatory days" value={daysLabel(selected.compensatory_days)} />
-                        {selected.half_day === 1 ? <Detail label="Half day" value={dayLabel(selected.half_day_date)} /> : null}
-                        <Detail label="Reason" value={selected.reason || 'No reason given'} />
-                        {selected.leave_type ? <Detail label="Leave type" value={selected.leave_type} /> : null}
-                        {selected.leave_allocation ? <Detail label="Leave allocation" value={selected.leave_allocation} /> : null}
-                        <Detail label="Request" value={selected.name} />
+                        <Detail label="Status" value={<StatusText label={statusOf(detail.docstatus)} size={15} />} />
+                        <Detail label="Days worked" value={fullRange(detail.work_from_date, detail.work_end_date)} />
+                        <Detail label="Compensatory days" value={daysLabel(detail.compensatory_days)} />
+                        {Number(detail.half_day) === 1 && detail.half_day_date ? <Detail label="Half day" value={dayLabel(detail.half_day_date)} /> : null}
+                        <Detail label="Reason" value={detail.reason || 'No reason given'} />
+                        {detail.leave_type ? <Detail label="Leave type" value={detail.leave_type} /> : null}
+                        {detail.leave_allocation ? <Detail label="Leave allocation" value={detail.leave_allocation} /> : null}
+                        <Detail label="Request" value={detail.name} />
                     </>
                 ) : null}
             </Sheet>
@@ -544,8 +617,9 @@ const styles = StyleSheet.create({
         borderBottomColor: color.border,
     },
     strip: { marginBottom: space.xl },
-    dateRow: { flexDirection: 'row', gap: space.md },
-    dateField: { flex: 1, marginBottom: 0 },
+    // side by side when both fit (150 dp each: 360 dp phones and wider), stacked on 320 dp phones
+    dateRow: { flexDirection: 'row', flexWrap: 'wrap', columnGap: space.md, rowGap: space.lg },
+    dateField: { flexGrow: 1, flexShrink: 1, flexBasis: 150, marginBottom: 0 },
     dateHint: { ...type.caption, marginTop: 6, marginBottom: space.lg },
     halfDayGroup: { marginBottom: space.lg },
     formNote: { ...type.caption, lineHeight: 17, marginTop: -space.xs, marginBottom: space.sm },

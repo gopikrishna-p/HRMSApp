@@ -13,6 +13,7 @@ import {
     Avatar,
     EmptyState,
     Loading,
+    Notice,
     color,
     space,
 } from '../../components/ds';
@@ -39,12 +40,17 @@ const dateLabel = (value) => {
     return y && m && d ? `${String(d).padStart(2, '0')} ${MONTHS[m - 1]} ${y}` : String(value || '');
 };
 
+// deductions read "−₹1,800"; a zero stays "₹0" rather than "−₹0"
+const minusMoney = (value, currency) => (Number(value) > 0 ? `−${money(value, currency)}` : money(value, currency));
+
 const deptLabel = (dept) => String(dept || '').replace(' - DG', '');
 
 const SalaryStructureScreen = ({ navigation }) => {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [salaryData, setSalaryData] = useState(null);
+    // { kind: 'none' | 'failed', message }: 'none' when the server answered that there is no
+    // structure to show, 'failed' when the request itself did not get through
     const [error, setError] = useState(null);
 
     useEffect(() => {
@@ -53,37 +59,40 @@ const SalaryStructureScreen = ({ navigation }) => {
 
     const loadSalaryStructure = async () => {
         try {
-            setError(null);
             const response = await apiService.getEmployeeSalaryStructure();
 
             if (isApiSuccess(response)) {
                 // extractFrappeData already returns the unwrapped data from {status: 'success', data: {...}}
                 const data = extractFrappeData(response, null);
-
+                let found = null;
                 if (data && typeof data === 'object') {
                     // Check if we got the actual salary data (has employee or earnings)
                     if (data.employee || data.earnings || data.salary_structure) {
-                        setSalaryData(data);
+                        found = data;
                     } else if (data.data) {
                         // Fallback: data might still be wrapped
-                        setSalaryData(data.data);
-                    } else if (data.status === 'error') {
-                        setError(data.message || 'No salary structure assigned');
-                    } else {
-                        setError('No salary structure data found');
+                        found = data.data;
                     }
-                } else {
-                    setError('No salary structure assigned');
                 }
+                if (found) {
+                    setSalaryData(found);
+                    setError(null);
+                } else {
+                    setSalaryData(null);
+                    setError({ kind: 'none', message: data?.message || 'No salary structure assigned' });
+                }
+            } else if (response?.status === 200) {
+                // the server answered with { status: 'error', message } (no employee record, no
+                // structure assigned); the API wrapper puts that message on response.message
+                setSalaryData(null);
+                setError({ kind: 'none', message: response.message || 'No salary structure assigned' });
             } else {
-                // Try to get error message from response
-                const rawMessage = response?.data?.message;
-                const errorMsg = rawMessage?.message || rawMessage?.error || 'Failed to load salary structure';
-                setError(errorMsg);
+                // HTTP or network failure: keep what is on screen, say it could not be refreshed
+                setError({ kind: 'failed', message: response?.message || 'Check your connection and try again.' });
             }
         } catch (err) {
             console.error('Load salary structure error:', err);
-            setError('Failed to load salary structure');
+            setError({ kind: 'failed', message: err?.message || 'Check your connection and try again.' });
         } finally {
             setLoading(false);
         }
@@ -95,8 +104,7 @@ const SalaryStructureScreen = ({ navigation }) => {
         setRefreshing(false);
     }, []);
 
-    // also covers the moment a retry from the error state has cleared the error
-    if (loading || (!error && !salaryData)) {
+    if (loading && !salaryData && !error) {
         return (
             <View style={styles.screen}>
                 <Loading label="Loading salary structure" />
@@ -104,13 +112,16 @@ const SalaryStructureScreen = ({ navigation }) => {
         );
     }
 
-    if (error) {
+    if (!salaryData) {
+        const failed = error?.kind === 'failed';
         return (
             <Screen refreshing={refreshing} onRefresh={onRefresh}>
                 <EmptyState
-                    icon="file-text"
-                    title="No salary structure"
-                    message={`${error}\nContact HR to have one assigned.`}
+                    icon={failed ? 'alert-circle' : 'file-text'}
+                    title={failed ? 'Could not load salary structure' : 'No salary structure'}
+                    message={failed ? error.message : `${error?.message || 'No salary structure assigned'}\nContact HR to have one assigned.`}
+                    action={failed ? 'Try again' : undefined}
+                    onAction={failed ? onRefresh : undefined}
                 />
             </Screen>
         );
@@ -127,18 +138,23 @@ const SalaryStructureScreen = ({ navigation }) => {
 
     return (
         <Screen refreshing={refreshing} onRefresh={onRefresh}>
+            {error ? (
+                <Notice tone="danger" icon="alert-circle" title="Could not refresh">{error.message}</Notice>
+            ) : null}
+
             {d.employee_name ? (
                 <Group>
                     <Row
                         left={<Avatar name={d.employee_name} size={40} />}
                         title={d.employee_name}
+                        titleLines={2}
                         subtitle={[d.designation || 'Employee', deptLabel(d.department)].filter(Boolean).join('  ·  ')}
                     />
                 </Group>
             ) : null}
 
             <Group title="Structure">
-                <Row title={d.salary_structure || 'No structure'} subtitle={structureNote || undefined} />
+                <Row title={d.salary_structure || 'No structure'} titleLines={2} subtitle={structureNote || undefined} />
                 <Row title="Base pay" value={money(d.base, cur)} />
                 <Row title="Variable" value={money(d.variable, cur)} />
                 {d.leave_encashment_per_day > 0 ? (
@@ -152,6 +168,7 @@ const SalaryStructureScreen = ({ navigation }) => {
                         <Row
                             key={`e-${i}`}
                             title={e.salary_component}
+                            titleLines={2}
                             subtitle={e.abbr || undefined}
                             value={money(e.calculated_amount || e.amount, cur)}
                         />
@@ -159,7 +176,7 @@ const SalaryStructureScreen = ({ navigation }) => {
                 ) : (
                     <Row title="No earnings" />
                 )}
-                <Row title="Total earnings" right={<Text style={styles.total}>{money(d.total_earnings, cur)}</Text>} />
+                <Row title="Total earnings" right={<Text style={styles.total} numberOfLines={1}>{money(d.total_earnings, cur)}</Text>} />
             </Group>
 
             <Group title="Deductions">
@@ -168,19 +185,20 @@ const SalaryStructureScreen = ({ navigation }) => {
                         <Row
                             key={`d-${i}`}
                             title={x.salary_component}
+                            titleLines={2}
                             subtitle={[x.abbr, x.calculation_note].filter(Boolean).join('\n') || undefined}
                             subtitleLines={3}
-                            value={`−${money(x.calculated_amount || x.amount, cur)}`}
+                            value={minusMoney(x.calculated_amount || x.amount, cur)}
                         />
                     ))
                 ) : (
                     <Row title="No deductions" />
                 )}
-                <Row title="Total deductions" right={<Text style={styles.total}>{`−${money(d.total_deductions, cur)}`}</Text>} />
+                <Row title="Total deductions" right={<Text style={styles.total} numberOfLines={1}>{minusMoney(d.total_deductions, cur)}</Text>} />
             </Group>
 
             <Group footer="Indicative. Actual pay depends on attendance, overtime and other factors.">
-                <Row title="Net pay per month" right={<Text style={styles.netPay}>{money(d.net_pay, cur)}</Text>} />
+                <Row title="Net pay per month" right={<Text style={styles.netPay} numberOfLines={1}>{money(d.net_pay, cur)}</Text>} />
             </Group>
         </Screen>
     );

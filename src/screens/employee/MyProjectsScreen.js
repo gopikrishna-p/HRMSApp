@@ -5,7 +5,6 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import showToast from '../../utils/Toast';
 import { listProjects } from '../../services/project.service';
 import {
     Screen,
@@ -15,6 +14,7 @@ import {
     ProgressBar,
     EmptyState,
     Loading,
+    Notice,
     color,
     space,
     type,
@@ -33,7 +33,7 @@ const shortDate = (value) => {
 };
 
 const ProjectRow = ({ project, onPress }) => {
-    const progress = Number(project.percent_complete || 0);
+    const progress = Number(project.percent_complete) || 0;
     const status = project.status || 'Open';
     const tasks = Number(project.task_count || 0);
     const due = shortDate(project.expected_end_date);
@@ -46,15 +46,18 @@ const ProjectRow = ({ project, onPress }) => {
     return (
         <Row
             title={project.project_name}
+            titleLines={2}
             subtitle={subtitle}
             subtitleLines={1}
             meta={(
                 <View style={styles.metaLine}>
                     <StatusText label={status} tone={PROJECT_TONE[status]} />
-                    <View style={styles.bar}>
-                        <ProgressBar value={progress} tone={status === 'Completed' || progress >= 100 ? 'success' : 'accent'} />
+                    <View style={styles.barGroup}>
+                        <View style={styles.bar}>
+                            <ProgressBar value={progress} tone={status === 'Completed' || progress >= 100 ? 'success' : 'accent'} />
+                        </View>
+                        <Text style={styles.percent} numberOfLines={1}>{`${Math.round(progress)}%`}</Text>
                     </View>
-                    <Text style={styles.percent}>{Math.round(progress)}%</Text>
                 </View>
             )}
             onPress={onPress}
@@ -66,30 +69,36 @@ export default function MyProjectsScreen() {
     const navigation = useNavigation();
     const [projects, setProjects] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState(null);
     const [refreshing, setRefreshing] = useState(false);
 
     const load = useCallback(async () => {
         try {
             setLoading(true);
             const list = await listProjects({ q: '', limit: 200 });
-            const safe = (list || [])
+            // project.service returns null (it does not throw) when the request fails; that must
+            // not read as "no projects"
+            if (!Array.isArray(list)) {
+                throw new Error('Check your connection and try again.');
+            }
+            const safe = list
                 .map((p) => ({
                     id: p.name || p.project || p.project_name,
                     name: p.name,
                     project_name: p.project_name || p.name,
                     status: p.status || 'Open',
                     company: p.company,
-                    percent_complete: Number(p.percent_complete ?? p.progress ?? 0),
+                    percent_complete: Number(p.percent_complete ?? p.progress ?? 0) || 0,
                     // display only
                     task_count: p.task_count,
                     expected_end_date: p.expected_end_date,
                 }))
                 .filter((p) => !!p.id);
             setProjects(safe);
+            setLoadError(null);
         } catch (e) {
             console.log('listProjects error', e?.message || e);
-            setProjects([]);
-            showToast({ type: 'error', text1: 'Could not load projects', text2: e?.message });
+            setLoadError(e?.message || 'Check your connection and try again.');
         } finally {
             setLoading(false);
         }
@@ -117,23 +126,35 @@ export default function MyProjectsScreen() {
 
     return (
         <Screen refreshing={refreshing} onRefresh={onRefresh}>
-            {loading && !refreshing && projects.length === 0 ? (
+            {loading && !refreshing && projects.length === 0 && !loadError ? (
                 <Loading />
             ) : projects.length === 0 ? (
-                <EmptyState icon="folder" title="No projects yet" message="Projects you are added to appear here." />
+                loadError ? (
+                    <EmptyState icon="alert-circle" title="Could not load projects" message={loadError} action="Try again" onAction={onRefresh} />
+                ) : (
+                    <EmptyState icon="folder" title="No projects yet" message="Projects you are added to appear here." />
+                )
             ) : (
-                <Group title={`${projects.length} ${projects.length === 1 ? 'project' : 'projects'}`}>
-                    {projects.map((item) => (
-                        <ProjectRow key={item.id} project={item} onPress={() => openProject(item)} />
-                    ))}
-                </Group>
+                <>
+                    {loadError ? (
+                        <Notice tone="danger" icon="alert-circle" title="Could not refresh">{loadError}</Notice>
+                    ) : null}
+                    <Group title={`${projects.length} ${projects.length === 1 ? 'project' : 'projects'}`}>
+                        {projects.map((item) => (
+                            <ProjectRow key={item.id} project={item} onPress={() => openProject(item)} />
+                        ))}
+                    </Group>
+                </>
             )}
         </Screen>
     );
 }
 
 const styles = StyleSheet.create({
-    metaLine: { width: '100%', flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: 2 },
+    // the bar and its percent move under the status together when a long status and 1.3x text
+    // leave them no room
+    metaLine: { width: '100%', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: space.md, rowGap: space.xs, marginTop: 2 },
+    barGroup: { flex: 1, minWidth: 120, flexDirection: 'row', alignItems: 'center', gap: space.md },
     bar: { flex: 1, maxWidth: 160 },
     percent: { ...type.caption, color: color.textSecondary, fontVariant: ['tabular-nums'], minWidth: 32 },
 });

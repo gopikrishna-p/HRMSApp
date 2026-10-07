@@ -27,17 +27,23 @@ const OnSiteSettingsScreen = () => {
     const [rows, setRows] = useState([]);
     const [filter, setFilter] = useState('all'); // 'all' | 'eligible' | 'office'
     const [searchQuery, setSearchQuery] = useState('');
-    const [updating, setUpdating] = useState(null); // employee_id being updated
+    const [updating, setUpdating] = useState({}); // employee_id -> true while its switch is being saved
+    const [error, setError] = useState('');
 
     const fetchData = useCallback(async (isRefresh = false) => {
         try {
             isRefresh ? setRefreshing(true) : setLoading(true);
             const res = await AttendanceService.getEmployeeOnSiteList();
-            if (res.success && res.data?.message) {
+            if (res.success && Array.isArray(res.data?.message)) {
                 setRows(res.data.message);
+                setError('');
             } else {
-                showToast({ type: 'error', text1: 'Could not load employees', text2: res.message || 'Please try again' });
+                const msg = res.message || 'Please try again';
+                setError(msg);
+                showToast({ type: 'error', text1: 'Could not load employees', text2: msg });
             }
+        } catch (err) {
+            setError(err?.message || 'Please try again');
         } finally {
             isRefresh ? setRefreshing(false) : setLoading(false);
         }
@@ -48,7 +54,10 @@ const OnSiteSettingsScreen = () => {
     }, [fetchData]);
 
     const toggle = async (employee_id, value) => {
-        setUpdating(employee_id);
+        if (updating[employee_id]) {
+            return;
+        }
+        setUpdating((all) => ({ ...all, [employee_id]: true }));
         const res = await AttendanceService.toggleOnSiteEligibility(employee_id, value);
 
         if (res.success) {
@@ -66,7 +75,11 @@ const OnSiteSettingsScreen = () => {
             showToast({ type: 'error', text1: 'Not saved', text2: res.message || 'Failed to update' });
         }
 
-        setUpdating(null);
+        setUpdating((all) => {
+            const next = { ...all };
+            delete next[employee_id];
+            return next;
+        });
     };
 
     // Filter and search logic
@@ -118,14 +131,21 @@ const OnSiteSettingsScreen = () => {
                 <Loading />
             ) : (
                 <Screen refreshing={refreshing} onRefresh={() => fetchData(true)}>
-                    {filter === 'all' && !searchQuery ? (
+                    {error && rows.length > 0 ? (
+                        <Notice tone="danger" icon="alert-circle" title="Could not refresh" onPress={() => fetchData(true)}>
+                            {`${error} Tap to try again.`}
+                        </Notice>
+                    ) : null}
+                    {filter === 'all' && !searchQuery && rows.length > 0 ? (
                         <Notice tone="neutral" icon="info">
                             Anyone can request On Site for specific dates; an approved request covers those dates only.
                             Turn on-site on here only for people who work on site most days.
                         </Notice>
                     ) : null}
 
-                    {filteredRows.length === 0 ? (
+                    {error && rows.length === 0 ? (
+                        <EmptyState icon="alert-circle" title="Could not load employees" message={error} action="Try again" onAction={() => fetchData(false)} />
+                    ) : filteredRows.length === 0 ? (
                         <EmptyState
                             icon="users"
                             title="No employees"
@@ -147,7 +167,7 @@ const OnSiteSettingsScreen = () => {
                                         subtitle={[item.name, (item.department || '').replace(' - DG', '')].filter(Boolean).join('  ·  ')}
                                         meta={!isActive ? <Tag label={item.status || 'Unknown'} />
                                             : item.on_site_request_today && !isEligible ? <Tag label="On-site approved today" tone="info" /> : null}
-                                        right={updating === item.name ? (
+                                        right={updating[item.name] ? (
                                             <ActivityIndicator size="small" color={color.textTertiary} style={styles.spinner} />
                                         ) : (
                                             <Switch

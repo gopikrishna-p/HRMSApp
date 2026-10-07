@@ -2,7 +2,7 @@
 //
 // Work logs (timesheet entries) of a project, or of one task when opened from the task list.
 // For a task, its progress can be set here; new entries are added from the footer button.
-import React, { useCallback, useLayoutEffect, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Alert } from 'react-native';
 import { useFocusEffect, useRoute, useNavigation } from '@react-navigation/native';
 import showToast from '../../utils/Toast';
@@ -52,7 +52,7 @@ const hoursLabel = (hours) => {
 };
 
 const LogRow = ({ log, showTask, onStop }) => {
-    const facts = [whenLabel(log), log.employee_name || log.employee, showTask ? log.task : null].filter(Boolean).join('  ·  ');
+    const facts = [whenLabel(log), log.employee_name || log.employee, showTask ? log.task_subject || log.task : null].filter(Boolean).join('  ·  ');
     return (
         <Row
             title={log.description || 'Work log'}
@@ -79,8 +79,13 @@ const ProjectLogsScreen = () => {
     const [message, setMessage] = useState('');
     const [hours, setHours] = useState('1');
 
-    const [taskProgress, setTaskProgress] = useState(initialProgress || 0);
+    const [taskProgress, setTaskProgress] = useState(Number(initialProgress) || 0);
     const [updatingProgress, setUpdatingProgress] = useState(false);
+    const [error, setError] = useState(null);
+    // blocks a second save / progress change before the controls re-render as busy
+    const busy = useRef(false);
+    const progressBusy = useRef(false);
+    const loadRequest = useRef(0);
 
     const headerTitle = taskSubject || projectName || 'Logs';
 
@@ -89,32 +94,54 @@ const ProjectLogsScreen = () => {
     }, [navigation, headerTitle]);
 
     const onUpdateProgress = async (newProgress) => {
-        if (!taskId) {
+        if (!taskId || progressBusy.current || newProgress === taskProgress) {
             return;
         }
+        progressBusy.current = true;
         setUpdatingProgress(true);
         try {
-            await updateTask(taskId, { progress: newProgress });
+            // project.service returns null (it does not throw) when the server call fails
+            const res = await updateTask(taskId, { progress: newProgress });
+            if (!res) {
+                throw new Error('The server did not accept the change. Try again.');
+            }
             setTaskProgress(newProgress);
         } catch (e) {
             console.warn('Update progress error', e);
-            showToast({ type: 'error', text1: 'Progress not updated', text2: e?.message });
+            showToast({ type: 'error', text1: 'Progress not updated', text2: e?.message || 'Try again' });
         } finally {
+            progressBusy.current = false;
             setUpdatingProgress(false);
         }
     };
 
     const fetch = useCallback(async () => {
+        const requestId = ++loadRequest.current;
         setLoading(true);
         try {
             // admin view: every employee's logs, not only the signed-in user's
             const data = await adminListProjectLogs(projectId, { task: taskId });
-            setLogs(Array.isArray(data) ? data : []);
+            if (requestId !== loadRequest.current) {
+                return;
+            }
+            // project.service returns null (it does not throw) when the server call fails
+            if (Array.isArray(data)) {
+                setLogs(data);
+                setError(null);
+            } else {
+                setLogs([]);
+                setError('Could not load logs. Pull down to try again.');
+            }
         } catch (e) {
             console.warn('Logs fetch error', e);
-            showToast({ type: 'error', text1: 'Could not load logs', text2: e?.message });
+            if (requestId === loadRequest.current) {
+                setLogs([]);
+                setError(e?.message || 'Could not load logs. Pull down to try again.');
+            }
         } finally {
-            setLoading(false);
+            if (requestId === loadRequest.current) {
+                setLoading(false);
+            }
         }
     }, [projectId, taskId]);
 
@@ -134,18 +161,35 @@ const ProjectLogsScreen = () => {
     };
 
     const onStartSubmit = async () => {
+        if (busy.current) {
+            return;
+        }
+        const hoursValue = String(hours).trim() ? parseFloat(String(hours).replace(',', '.')) : 1;
+        if (!(hoursValue > 0)) {
+            showToast({ type: 'error', text1: 'Check the hours', text2: 'Enter a number of hours greater than 0' });
+            return;
+        }
+        if (!message.trim()) {
+            showToast({ type: 'error', text1: 'Description is required', text2: 'Describe the work done' });
+            return;
+        }
+        busy.current = true;
         setStarting(true);
         try {
-            const hoursValue = parseFloat(hours) || 1;
-            await startLog({ project: projectId, task: taskId, message, hours: hoursValue });
+            // project.service returns null (it does not throw) when the server call fails
+            const res = await startLog({ project: projectId, task: taskId, message, hours: hoursValue });
+            if (!res) {
+                throw new Error('The server did not accept the log. Try again.');
+            }
             setStartVisible(false);
             setMessage('');
             setHours('1');
             fetch();
         } catch (e) {
             console.warn('Start log error', e);
-            showToast({ type: 'error', text1: 'Log not saved', text2: e?.message });
+            showToast({ type: 'error', text1: 'Log not saved', text2: e?.message || 'Try again' });
         } finally {
+            busy.current = false;
             setStarting(false);
         }
     };
@@ -169,37 +213,34 @@ const ProjectLogsScreen = () => {
         ]);
     };
 
-    const closeStart = () => setStartVisible(false);
+    const closeStart = () => !starting && setStartVisible(false);
 
     return (
         <View style={styles.flex}>
             <Screen
                 refreshing={refreshing}
                 onRefresh={onRefresh}
-                footer={<Button title="Add log" onPress={() => setStartVisible(true)} />}
+                // a log is always added to a task (add_task_log needs one)
+                footer={taskId ? <Button title="Add log" onPress={() => setStartVisible(true)} /> : null}
             >
                 {taskId ? (
                     <Group title="Task">
                         {projectName ? (
                             <Row
                                 title="Project"
-                                right={<Text style={styles.detailValue} numberOfLines={1}>{projectName}</Text>}
+                                right={<Text style={styles.detailValue} numberOfLines={2}>{projectName}</Text>}
                             />
                         ) : null}
                         <View style={styles.progressBlock}>
                             <View style={styles.progressHeader}>
                                 <Text style={type.bodyStrong}>Progress</Text>
-                                <Text style={styles.progressValue}>{Math.round(taskProgress)}%</Text>
+                                <Text style={styles.progressValue} numberOfLines={1}>{`${Math.round(taskProgress)}%`}</Text>
                             </View>
                             <ProgressBar value={taskProgress} tone={taskProgress >= 100 ? 'success' : 'accent'} />
                             <Segmented
                                 options={PROGRESS_STEPS}
                                 value={taskProgress}
-                                onChange={(v) => {
-                                    if (!updatingProgress) {
-                                        onUpdateProgress(v);
-                                    }
-                                }}
+                                onChange={onUpdateProgress}
                                 style={[styles.progressControl, updatingProgress && styles.busy]}
                             />
                         </View>
@@ -208,6 +249,8 @@ const ProjectLogsScreen = () => {
 
                 {loading && !refreshing && logs.length === 0 ? (
                     <Loading />
+                ) : error && logs.length === 0 ? (
+                    <EmptyState icon="alert-circle" title="Could not load logs" message={error} action="Try again" onAction={fetch} />
                 ) : logs.length === 0 ? (
                     <EmptyState
                         icon="clock"
@@ -237,7 +280,7 @@ const ProjectLogsScreen = () => {
                 footer={(
                     <>
                         <Button title="Cancel" variant="secondary" onPress={closeStart} disabled={starting} style={styles.flex} />
-                        <Button title="Save" onPress={onStartSubmit} loading={starting} style={styles.flex} />
+                        <Button title="Save" onPress={onStartSubmit} loading={starting} disabled={!message.trim()} style={styles.flex} />
                     </>
                 )}
             >

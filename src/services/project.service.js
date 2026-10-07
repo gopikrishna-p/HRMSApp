@@ -1,7 +1,14 @@
 // src/services/project.service.js
-import ApiService, { extractFrappeData } from './api.service';
+import ApiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from './api.service';
 
-const unwrap = (res) => extractFrappeData(res, null);
+// The API wrapper never throws: a refused or failed call comes back with success false and the server's
+// message. Raise it, so screens show the real reason instead of treating the failure as "no data".
+const unwrap = (res) => {
+    if (!isApiSuccess(res)) {
+        throw new Error(getApiErrorMessage(res, 'Request failed'));
+    }
+    return extractFrappeData(res, null);
+};
 
 // Base API path - change if your backend module name is different
 const BASE = '/api/method/hrms.api';

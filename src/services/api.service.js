@@ -274,9 +274,6 @@ class ApiService {
     /* -------------------------
      * EMPLOYEES / ADMIN
      * -----------------------*/
-    getAllEmployees() {
-        return this.get(m('get_all_employees'));
-    }
 
     getDepartments() {
         return this.get(m('get_departments_list'));
@@ -289,10 +286,6 @@ class ApiService {
         return this.get(m('get_unread_notifications_count'));
     }
 
-    markAllNotificationsRead() {
-        return this.post(m('mark_all_notifications_as_read'));
-    }
-
     arePushNotificationsEnabled() {
         return this.get(m('are_push_notifications_enabled'));
     }
@@ -302,23 +295,6 @@ class ApiService {
     }
 
     // New notification APIs
-    createNotification({ title, message, target_type, target_employees, department }) {
-        return this.post(m('create_notification'), {
-            title,
-            message,
-            target_type,
-            target_employees,
-            department
-        });
-    }
-
-    getNotificationSettings() {
-        return this.get(m('get_notification_settings'));
-    }
-
-    updateNotificationSettings(settings) {
-        return this.post(m('update_notification_settings'), settings);
-    }
 
     /* -------------------------
      * GEO / ATTENDANCE (Employee)
@@ -449,10 +425,6 @@ class ApiService {
         return this.get(m('get_attendance_records'), { employee, start_date, end_date });
     }
 
-    getHolidays({ start_date, end_date }) {
-        return this.get(m('get_holidays'), { start_date, end_date });
-    }
-
     /**
      * Get holidays for employee from their holiday list
      * Uses: get_holidays_for_employee from backend (line ~1166)
@@ -475,10 +447,6 @@ class ApiService {
         if (employee) params.employee = employee;
         if (year) params.year = year;
         return this.get(m('get_employee_holidays'), params);
-    }
-
-    getLeaveApplications({ employee }) {
-        return this.get(m('get_leave_applications'), { employee });
     }
 
     manualCheckout({ attendance_id, checkout_time }) {
@@ -555,9 +523,6 @@ class ApiService {
     /* -------------------------
      * LEAVES / HOLIDAYS / SHIFTS
      * -----------------------*/
-    getLeaveApplications({ employee, for_approval = false, include_balances = false } = {}) {
-        return this.get(m('get_leave_applications'), { employee, for_approval, include_balances });
-    }
 
     getLeaveBalanceMap({ employee }) {
         return this.get(m('get_leave_balance_map'), { employee });

@@ -3,7 +3,7 @@
 // The employee's own travel requests: a status filter, one row per request with a detail
 // sheet, and the request form (trip, itinerary legs, estimated costs, other details).
 // The admin app opens this screen too, for the admin's own requests.
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     View,
     Text,
@@ -19,7 +19,7 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Toast from 'react-native-toast-message';
 import { toastConfig } from '../../config/toastConfig';
-import apiService, { extractFrappeData, isApiSuccess } from '../../services/api.service';
+import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import { formatLocalDate, formatLocalDateTime, formatTimeOfDay } from '../../utils/dateFormat';
 import { validateItinerary } from '../../utils/travelValidation';
 import showToast from '../../utils/Toast';
@@ -44,6 +44,7 @@ import {
     type,
     formatShortDate,
     ModalTopInset,
+    KeyboardSafeView,
     Notice,
 } from '../../components/ds';
 
@@ -94,7 +95,11 @@ const EMPTY_FORM = {
     other_details: '',
 };
 
+// legs and cost lines carry a stable key (not sent to the server) so removing one keeps the others' inputs
+let lineSeq = 0;
+
 const newLeg = () => ({
+    key: `leg${++lineSeq}`,
     travel_from: '',
     travel_to: '',
     mode_of_travel: '',
@@ -110,6 +115,7 @@ const newLeg = () => ({
 });
 
 const newCost = () => ({
+    key: `cost${++lineSeq}`,
     expense_type: '',
     sponsored_amount: '',
     funded_amount: '',
@@ -140,6 +146,12 @@ const tripDates = (from, to, withYear = false) => {
 // '2026-10-07 09:48:53' -> '07 Oct 2026, 09:48 AM'
 const stampLabel = (value) => [dayLabel(value, true), formatTimeOfDay(value)].filter(Boolean).join(', ');
 const routeLabel = (from, to) => (from && to ? `${from} → ${to}` : from || to || '');
+// digits and one decimal point, so the amount sent is the amount typed ("1,500" -> "1500";
+// parseFloat would read "1,500" as 1)
+const cleanAmount = (text) => {
+    const [whole, ...rest] = String(text).replace(/[^0-9.]/g, '').split('.');
+    return rest.length ? `${whole}.${rest.join('').slice(0, 2)}` : whole;
+};
 const labelOf = (options, value) => options.find((o) => o.value === value)?.label || value;
 const joinDot = (parts) => parts.filter(Boolean).join('  ·  ');
 
@@ -156,12 +168,20 @@ const inr = (value) => {
 };
 
 const TravelRequestScreen = ({ navigation }) => {
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true); // first load (employee, purposes, expense types, requests)
     const [refreshing, setRefreshing] = useState(false);
+    const [submitting, setSubmitting] = useState(false);
+    const submittingRef = useRef(false); // blocks a second tap before the re-render disables the button
     const [showForm, setShowForm] = useState(false);
     const [requests, setRequests] = useState([]);
+    const [listLoading, setListLoading] = useState(false);
+    const [listError, setListError] = useState(null);
+    const [employeeError, setEmployeeError] = useState(null);
+    const listRequest = useRef(0); // ignores an answer for a filter that is no longer selected
+    const listFilter = useRef(null); // the filter the requests on screen belong to
     const [counts, setCounts] = useState({}); // per status, over all requests (server statistics)
     const [withdrawing, setWithdrawing] = useState(false);
+    const withdrawingRef = useRef(false);
     const [purposes, setPurposes] = useState([]);
     const [currentEmployee, setCurrentEmployee] = useState(null);
     const [expenseTypes, setExpenseTypes] = useState([]);
@@ -201,16 +221,22 @@ const TravelRequestScreen = ({ navigation }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps -- reload whenever the status filter changes
     }, [filterStatus]);
 
-    const loadInitialData = async () => {
-        setLoading(true);
+    // `quiet`: a pull-to-refresh retry, which keeps its own spinner
+    const loadInitialData = async (quiet = false) => {
+        if (!quiet) {
+            setLoading(true);
+        }
         try {
             // Get current employee
             const empResponse = await apiService.getCurrentEmployee();
             let empId = null;
-            if (isApiSuccess(empResponse)) {
-                const emp = extractFrappeData(empResponse, {});
+            const emp = extractFrappeData(empResponse, null);
+            if (emp?.name) {
                 setCurrentEmployee(emp);
-                empId = emp?.name || null;
+                setEmployeeError(null);
+                empId = emp.name;
+            } else {
+                setEmployeeError(getApiErrorMessage(empResponse, 'Pull down to try again.'));
             }
 
             // Load purposes, expense types and requests in parallel
@@ -253,10 +279,22 @@ const TravelRequestScreen = ({ navigation }) => {
 
     // Always the signed-in employee's own requests: for an HR login (Self-Service) the server would
     // otherwise return everyone's. Skipped until the employee record is known.
+    // A failed reload of the same filter keeps the requests on screen and says so; a failed load
+    // for another filter clears them, so requests of the previous filter are never shown under it.
     const loadRequests = async (employeeId = currentEmployee?.name) => {
         if (!employeeId) {
             return;
         }
+        const request = ++listRequest.current;
+        const filter = filterStatus;
+        const fail = (message) => {
+            if (listFilter.current !== filter) {
+                setRequests([]);
+                listFilter.current = filter;
+            }
+            setListError(message);
+        };
+        setListLoading(true);
         try {
             const filters = { limit: 200, employee: employeeId };
             if (filterStatus !== 'all') {
@@ -264,68 +302,80 @@ const TravelRequestScreen = ({ navigation }) => {
             }
 
             const response = await apiService.getTravelRequests(filters);
+            if (request !== listRequest.current) {
+                return;
+            }
 
             if (isApiSuccess(response)) {
                 const data = extractFrappeData(response, { requests: [] });
                 const requestsData = data.requests || (Array.isArray(data) ? data : []);
-                setRequests(requestsData);
+                setRequests(Array.isArray(requestsData) ? requestsData : []);
+                listFilter.current = filter;
                 setCounts(data.statistics || {});
+                setListError(null);
             } else {
-                setRequests([]);
+                fail(getApiErrorMessage(response, 'Pull down to try again.'));
             }
         } catch (error) {
             console.error('[Employee] Load requests error:', error);
-            setRequests([]);
+            if (request === listRequest.current) {
+                fail(error.message || 'Pull down to try again.');
+            }
+        } finally {
+            if (request === listRequest.current) {
+                setListLoading(false);
+            }
         }
     };
 
-    const onRefresh = useCallback(async () => {
+    // Not memoised: loadRequests must see the employee once it has loaded.
+    const onRefresh = async () => {
         setRefreshing(true);
-        await loadRequests();
+        if (currentEmployee?.name) {
+            await loadRequests();
+        } else {
+            // the employee record did not load: try the whole first load again
+            await loadInitialData(true);
+        }
         setRefreshing(false);
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- loadRequests only reads filterStatus
-    }, [filterStatus]);
+    };
 
     // Itinerary functions
     const addItineraryItem = () => {
-        setItinerary([...itinerary, newLeg()]);
+        setItinerary((legs) => [...legs, newLeg()]);
     };
 
     const removeItineraryItem = (index) => {
-        if (itinerary.length > 1) {
-            setItinerary(itinerary.filter((_, i) => i !== index));
-        }
+        setItinerary((legs) => (legs.length > 1 ? legs.filter((_, i) => i !== index) : legs));
     };
 
     const updateItineraryItem = (index, field, value) => {
-        const newItinerary = [...itinerary];
-        newItinerary[index][field] = value;
-        setItinerary(newItinerary);
+        setItinerary((legs) => legs.map((leg, i) => (i === index ? { ...leg, [field]: value } : leg)));
     };
 
     // Costings functions
     const addCostingItem = () => {
-        setCostings([...costings, newCost()]);
+        setCostings((list) => [...list, newCost()]);
     };
 
     const removeCostingItem = (index) => {
-        if (costings.length > 1) {
-            setCostings(costings.filter((_, i) => i !== index));
-        }
+        setCostings((list) => (list.length > 1 ? list.filter((_, i) => i !== index) : list));
     };
 
     const updateCostingItem = (index, field, value) => {
-        const newCostings = [...costings];
-        newCostings[index][field] = value;
-
-        // Auto-calculate total
-        if (field === 'sponsored_amount' || field === 'funded_amount') {
-            const sponsored = parseFloat(newCostings[index].sponsored_amount) || 0;
-            const funded = parseFloat(newCostings[index].funded_amount) || 0;
-            newCostings[index].total_amount = (sponsored + funded).toString();
-        }
-
-        setCostings(newCostings);
+        setCostings((list) => list.map((cost, i) => {
+            if (i !== index) {
+                return cost;
+            }
+            const next = { ...cost, [field]: value };
+            // Auto-calculate total
+            if (field === 'sponsored_amount' || field === 'funded_amount') {
+                const sponsored = parseFloat(next.sponsored_amount) || 0;
+                const funded = parseFloat(next.funded_amount) || 0;
+                next.total_amount = (sponsored + funded).toString();
+            }
+            return next;
+        }));
     };
 
     const calculateTotalCost = () => {
@@ -333,6 +383,9 @@ const TravelRequestScreen = ({ navigation }) => {
     };
 
     const handleSubmit = async () => {
+        if (submittingRef.current) {
+            return;
+        }
         // Validation
         if (!formData.travel_type) {
             showToast({ type: 'warning', text1: 'Select a travel type' });
@@ -348,12 +401,13 @@ const TravelRequestScreen = ({ navigation }) => {
             return;
         }
 
-        if (!currentEmployee) {
+        if (!currentEmployee?.name) {
             showToast({ type: 'error', text1: 'Employee record not found', text2: 'Go back and open this screen again.' });
             return;
         }
 
-        setLoading(true);
+        submittingRef.current = true;
+        setSubmitting(true);
         try {
             // Prepare itinerary
             const itineraryData = itinerary.map(item => ({
@@ -390,26 +444,36 @@ const TravelRequestScreen = ({ navigation }) => {
             const response = await apiService.submitTravelRequest(travelData);
 
             if (response.success && response.data?.message?.status === 'success') {
+                const requestId = response.data.message.request_id;
                 showToast({
                     type: 'success',
                     text1: 'Travel request submitted',
-                    text2: `Request ${response.data.message.request_id}`,
+                    text2: requestId ? `Request ${requestId}` : undefined,
                 });
                 setShowForm(false);
                 resetForm();
-                loadRequests();
+                await loadRequests();
             } else {
                 showToast({
                     type: 'error',
                     text1: 'Request not submitted',
-                    text2: response.data?.message?.message || 'Please try again.',
+                    // the API wrapper puts the server's text in response.message (HTTP and status errors)
+                    text2: response.message || response.data?.message?.message || 'Please try again.',
                 });
             }
         } catch (error) {
             console.error('Submit error:', error);
             showToast({ type: 'error', text1: 'Request not submitted', text2: 'Check your connection and try again.' });
         } finally {
-            setLoading(false);
+            submittingRef.current = false;
+            setSubmitting(false);
+        }
+    };
+
+    // the form stays open while a submit is in flight
+    const closeForm = () => {
+        if (!submittingRef.current) {
+            setShowForm(false);
         }
     };
 
@@ -419,22 +483,20 @@ const TravelRequestScreen = ({ navigation }) => {
         setCostings([newCost()]);
     };
 
+    // the tapped row shows the spinner (openingId)
     const handleViewDetails = async (request) => {
         try {
-            setLoading(true);
             const response = await apiService.getTravelRequestDetails(request.name);
 
             if (response.success && response.data?.message?.data) {
                 setSelectedRequest(response.data.message.data);
                 setShowDetailsModal(true);
             } else {
-                showToast({ type: 'error', text1: 'Could not load request details' });
+                showToast({ type: 'error', text1: 'Could not load request details', text2: getApiErrorMessage(response, 'Please try again.') });
             }
         } catch (error) {
             console.error('View details error:', error);
             showToast({ type: 'error', text1: 'Could not load request details', text2: 'Check your connection and try again.' });
-        } finally {
-            setLoading(false);
         }
     };
 
@@ -536,8 +598,32 @@ const TravelRequestScreen = ({ navigation }) => {
     };
 
     const renderList = () => {
-        if (loading && requests.length === 0) {
+        // the rows on screen belong to another filter while a filter change loads
+        const otherFilter = listFilter.current !== filterStatus;
+        if ((loading || listLoading) && !refreshing && (requests.length === 0 || otherFilter)) {
             return <Loading />;
+        }
+        if (!currentEmployee?.name && employeeError) {
+            return (
+                <EmptyState
+                    icon="alert-circle"
+                    title="Could not load your employee record"
+                    message={employeeError}
+                    action="Try again"
+                    onAction={() => loadInitialData()}
+                />
+            );
+        }
+        if (listError && requests.length === 0) {
+            return (
+                <EmptyState
+                    icon="alert-circle"
+                    title="Could not load your travel requests"
+                    message={listError}
+                    action="Try again"
+                    onAction={onRefresh}
+                />
+            );
         }
         if (requests.length === 0) {
             const filter = FILTERS.find((f) => f.value === filterStatus);
@@ -550,9 +636,15 @@ const TravelRequestScreen = ({ navigation }) => {
             );
         }
         return (
-            <Group title="Requests">
-                {requests.map(renderRequestRow)}
-            </Group>
+            <>
+                {/* a failed refresh keeps the last list on screen */}
+                {listError ? (
+                    <Notice tone="warning" icon="alert-circle" title="Could not refresh the list">{listError}</Notice>
+                ) : null}
+                <Group title="Requests">
+                    {requests.map(renderRequestRow)}
+                </Group>
+            </>
         );
     };
 
@@ -577,7 +669,7 @@ const TravelRequestScreen = ({ navigation }) => {
 
     const renderLeg = (item, index) => (
         <Group
-            key={index}
+            key={item.key}
             title={itinerary.length > 1 ? `Leg ${index + 1}` : 'Itinerary'}
             action={itinerary.length > 1 ? 'Remove' : undefined}
             onAction={() => removeItineraryItem(index)}
@@ -589,14 +681,14 @@ const TravelRequestScreen = ({ navigation }) => {
                         value={item.travel_from}
                         onChangeText={(text) => updateItineraryItem(index, 'travel_from', text)}
                         placeholder="Origin city"
-                        style={styles.flex}
+                        style={styles.pairItem}
                     />
                     <TextField
                         label="To"
                         value={item.travel_to}
                         onChangeText={(text) => updateItineraryItem(index, 'travel_to', text)}
                         placeholder="Destination city"
-                        style={styles.flex}
+                        style={styles.pairItem}
                     />
                 </View>
                 <SelectField
@@ -611,14 +703,14 @@ const TravelRequestScreen = ({ navigation }) => {
                         value={formatShortDate(item.departure_date)}
                         icon="calendar"
                         onPress={() => setShowDeparturePicker({ show: true, index })}
-                        style={styles.flex}
+                        style={styles.pairItem}
                     />
                     <SelectField
                         label="Arrival"
                         value={formatShortDate(item.arrival_date)}
                         icon="calendar"
                         onPress={() => setShowArrivalPicker({ show: true, index })}
-                        style={styles.flex}
+                        style={styles.pairItem}
                     />
                 </View>
                 {renderDatePicker(showDeparturePicker, setShowDeparturePicker, item, index, 'departure_date')}
@@ -656,14 +748,14 @@ const TravelRequestScreen = ({ navigation }) => {
                             value={formatShortDate(item.check_in_date)}
                             icon="calendar"
                             onPress={() => setShowCheckInPicker({ show: true, index })}
-                            style={styles.flex}
+                            style={styles.pairItem}
                         />
                         <SelectField
                             label="Check-out"
                             value={formatShortDate(item.check_out_date)}
                             icon="calendar"
                             onPress={() => setShowCheckOutPicker({ show: true, index })}
-                            style={styles.flex}
+                            style={styles.pairItem}
                         />
                     </View>
                     {renderDatePicker(showCheckInPicker, setShowCheckInPicker, item, index, 'check_in_date')}
@@ -687,7 +779,7 @@ const TravelRequestScreen = ({ navigation }) => {
                     <TextField
                         label="Advance amount (₹)"
                         value={item.advance_amount}
-                        onChangeText={(text) => updateItineraryItem(index, 'advance_amount', text)}
+                        onChangeText={(text) => updateItineraryItem(index, 'advance_amount', cleanAmount(text))}
                         placeholder="0"
                         keyboardType="decimal-pad"
                     />
@@ -700,7 +792,7 @@ const TravelRequestScreen = ({ navigation }) => {
         const leftOut = !item.expense_type && (parseFloat(item.total_amount) || 0) > 0;
         return (
             <Group
-                key={index}
+                key={item.key}
                 title={costings.length > 1 ? `Cost ${index + 1}` : 'Estimated costs'}
                 action={costings.length > 1 ? 'Remove' : undefined}
                 onAction={() => removeCostingItem(index)}
@@ -717,18 +809,18 @@ const TravelRequestScreen = ({ navigation }) => {
                         <TextField
                             label="Sponsored (₹)"
                             value={item.sponsored_amount}
-                            onChangeText={(text) => updateCostingItem(index, 'sponsored_amount', text)}
+                            onChangeText={(text) => updateCostingItem(index, 'sponsored_amount', cleanAmount(text))}
                             placeholder="0"
                             keyboardType="decimal-pad"
-                            style={styles.flex}
+                            style={styles.pairItem}
                         />
                         <TextField
                             label="Funded (₹)"
                             value={item.funded_amount}
-                            onChangeText={(text) => updateCostingItem(index, 'funded_amount', text)}
+                            onChangeText={(text) => updateCostingItem(index, 'funded_amount', cleanAmount(text))}
                             placeholder="0"
                             keyboardType="decimal-pad"
-                            style={styles.flex}
+                            style={styles.pairItem}
                         />
                     </View>
                     <TextField
@@ -779,19 +871,21 @@ const TravelRequestScreen = ({ navigation }) => {
     );
 
     const renderForm = () => (
-        <Modal visible={showForm} animationType="slide" statusBarTranslucent onRequestClose={() => setShowForm(false)}>
+        <Modal visible={showForm} animationType="slide" statusBarTranslucent onRequestClose={closeForm}>
             <SafeAreaView style={styles.page}>
                 <ModalTopInset />
-                <PageHeader title="New travel request" onClose={() => setShowForm(false)} />
+                <PageHeader title="New travel request" onClose={closeForm} />
+                {/* Android: the translucent Modal does not shrink for the keyboard; this keeps the form above it */}
+                <KeyboardSafeView>
                 <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
                     <Screen
                         footer={(
                             <View style={styles.footerRow}>
                                 <View style={styles.flex}>
                                     <Text style={type.caption}>Estimated total</Text>
-                                    <Text style={styles.footerTotal}>{inr(calculateTotalCost())}</Text>
+                                    <Text style={styles.footerTotal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{inr(calculateTotalCost())}</Text>
                                 </View>
-                                <Button title="Submit request" onPress={handleSubmit} loading={loading} />
+                                <Button title="Submit request" onPress={handleSubmit} loading={submitting} style={styles.footerButton} />
                             </View>
                         )}
                     >
@@ -879,6 +973,7 @@ const TravelRequestScreen = ({ navigation }) => {
                         </Group>
                     </Screen>
                 </KeyboardAvoidingView>
+                </KeyboardSafeView>
             </SafeAreaView>
             {renderPicker()}
             {/* toasts from the root host would sit under this full-screen page */}
@@ -893,6 +988,10 @@ const TravelRequestScreen = ({ navigation }) => {
                 text: 'Withdraw',
                 style: 'destructive',
                 onPress: async () => {
+                    if (withdrawingRef.current) {
+                        return;
+                    }
+                    withdrawingRef.current = true;
                     setWithdrawing(true);
                     try {
                         const res = await apiService.withdrawTravelRequest(r.request_id);
@@ -901,11 +1000,12 @@ const TravelRequestScreen = ({ navigation }) => {
                             showToast({ type: 'success', text1: 'Request withdrawn' });
                             await loadRequests();
                         } else {
-                            showToast({ type: 'error', text1: 'Not withdrawn', text2: res?.message || 'Try again' });
+                            showToast({ type: 'error', text1: 'Not withdrawn', text2: getApiErrorMessage(res, 'Try again') });
                         }
                     } catch (error) {
                         showToast({ type: 'error', text1: 'Not withdrawn', text2: error?.message || 'Try again' });
                     } finally {
+                        withdrawingRef.current = false;
                         setWithdrawing(false);
                     }
                 },
@@ -943,8 +1043,8 @@ const TravelRequestScreen = ({ navigation }) => {
                             <Notice tone="success" title="Note from HR">{r.approval_remarks}</Notice>
                         ) : null}
                         <View style={styles.pair}>
-                            <Detail label="Travel type" value={r.travel_type || '—'} style={styles.flex} />
-                            <Detail label="Funding" value={r.travel_funding ? labelOf(FUNDING_OPTIONS, r.travel_funding) : '—'} style={styles.flex} />
+                            <Detail label="Travel type" value={r.travel_type || '—'} style={styles.pairItem} />
+                            <Detail label="Funding" value={r.travel_funding ? labelOf(FUNDING_OPTIONS, r.travel_funding) : '—'} style={styles.pairItem} />
                         </View>
                         {r.description ? <Detail label="Description" value={r.description} /> : null}
 
@@ -982,8 +1082,8 @@ const TravelRequestScreen = ({ navigation }) => {
                         ) : null}
 
                         <View style={styles.pair}>
-                            <Detail label="Submitted" value={stampLabel(r.creation) || '—'} style={styles.flex} />
-                            {r.modified ? <Detail label="Last updated" value={stampLabel(r.modified) || '—'} style={styles.flex} /> : null}
+                            <Detail label="Submitted" value={stampLabel(r.creation) || '—'} style={styles.pairItem} />
+                            {r.modified ? <Detail label="Last updated" value={stampLabel(r.modified) || '—'} style={styles.pairItem} /> : null}
                         </View>
                     </>
                 ) : null}
@@ -1068,10 +1168,13 @@ const styles = StyleSheet.create({
     pageHeaderSide: { width: 56, alignItems: 'flex-start', justifyContent: 'center' },
     pageTitle: { ...type.title, flex: 1, textAlign: 'center' },
     panel: { paddingHorizontal: space.lg, paddingTop: space.lg },
-    pair: { flexDirection: 'row', gap: space.md },
+    // two fields side by side; stacked when both do not fit (narrow phones, large text)
+    pair: { flexDirection: 'row', flexWrap: 'wrap', columnGap: space.md },
+    pairItem: { flexGrow: 1, flexBasis: 150 },
     amount: { ...type.bodyStrong, fontVariant: ['tabular-nums'] },
     addButton: { alignSelf: 'flex-start', marginTop: -space.sm, marginBottom: space.xl },
     footerRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+    footerButton: { flexShrink: 1 },
     footerTotal: { ...type.title, fontVariant: ['tabular-nums'], marginTop: 2 },
     pickerSearch: { marginBottom: space.md },
     check: { width: 24, alignItems: 'flex-end' },

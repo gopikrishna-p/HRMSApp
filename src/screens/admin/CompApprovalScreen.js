@@ -5,7 +5,7 @@
 // days to the employee's leave balance; rejecting removes the pending request and notifies
 // the employee with the reason. Admins can also apply on an employee's behalf; those requests
 // are approved on submit. The admin's own comp-off lives under My Self-Service on the dashboard.
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, Pressable, Switch, Platform } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import apiService, { isApiSuccess, extractFrappeData, getApiErrorMessage } from '../../services/api.service';
@@ -24,6 +24,7 @@ import {
     Loading,
     StatusText,
     StatStrip,
+    Notice,
     SearchField,
     SelectField,
     TextField,
@@ -73,8 +74,13 @@ const SWITCH_TRACK = { false: '#D0D5DD', true: color.accent };
 const CompApprovalScreen = ({ navigation }) => {
     // State management
     const [activeTab, setActiveTab] = useState('pending'); // 'pending', 'apply', 'history', 'statistics'
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true); // the pending list is fetched on mount
     const [refreshing, setRefreshing] = useState(false);
+    const [loadError, setLoadError] = useState(''); // message of the last failed list load
+    const [acting, setActing] = useState(false); // approve / reject request running
+    const [submitting, setSubmitting] = useState(false); // apply-on-behalf request running
+    const busy = useRef(false); // blocks a second tap before the busy state renders
+    const loadSeq = useRef(0); // only the latest list load may update the screen
 
     // Requests data
     const [pendingRequests, setPendingRequests] = useState([]);
@@ -188,37 +194,52 @@ const CompApprovalScreen = ({ navigation }) => {
         }
     };
 
-    const fetchPendingRequests = async () => {
+    // `quiet` reloads keep the current list on screen (used after a decision)
+    const fetchPendingRequests = async (quiet = false) => {
+        const id = ++loadSeq.current;
         try {
-            setLoading(true);
+            if (!quiet) {
+                setLoading(true);
+            }
             const response = await apiService.getAllCompLeaves({
                 docstatus: 0, // Pending only
                 department: filterDepartment || null,
                 employee: filterEmployee || null,
                 limit: 100
             });
+            if (id !== loadSeq.current) {
+                return;
+            }
 
             if (isApiSuccess(response)) {
-                const data = extractFrappeData(response, {});
+                const data = extractFrappeData(response, {}) || {};
                 const applications = data.requests || [];
                 setPendingRequests(Array.isArray(applications) ? applications : []);
                 setStatistics(data.statistics || {});
+                setLoadError('');
             } else {
                 const errMsg = getApiErrorMessage(response, 'Failed to fetch compensatory leaves');
                 console.error('Failed to fetch comp leaves:', errMsg);
                 showToast({ type: 'error', text1: 'Could not load requests', text2: errMsg });
                 setPendingRequests([]);
+                setLoadError(errMsg);
             }
         } catch (error) {
             console.error('Fetch pending comp leave requests error:', error);
-            setPendingRequests([]);
+            if (id === loadSeq.current) {
+                setPendingRequests([]);
+                setLoadError(error?.message || 'Please try again.');
+            }
         } finally {
-            setLoading(false);
-            setRefreshing(false);
+            if (id === loadSeq.current) {
+                setLoading(false);
+                setRefreshing(false);
+            }
         }
     };
 
     const fetchHistoryRequests = async () => {
+        const id = ++loadSeq.current;
         try {
             setLoading(true);
             const statusFilter = filterStatus ? parseInt(filterStatus, 10) : null;
@@ -228,9 +249,12 @@ const CompApprovalScreen = ({ navigation }) => {
                 employee: filterEmployee || null,
                 limit: 200
             });
+            if (id !== loadSeq.current) {
+                return;
+            }
 
             if (isApiSuccess(response)) {
-                const data = extractFrappeData(response, {});
+                const data = extractFrappeData(response, {}) || {};
                 const applications = data.requests || [];
                 // Filter out pending (docstatus=0) from history
                 const historyOnly = Array.isArray(applications)
@@ -238,21 +262,30 @@ const CompApprovalScreen = ({ navigation }) => {
                     : [];
                 setHistoryRequests(historyOnly);
                 setStatistics(data.statistics || {});
+                setLoadError('');
             } else {
-                showToast({ type: 'error', text1: 'Could not load history', text2: getApiErrorMessage(response, 'Failed to load history') });
+                const errMsg = getApiErrorMessage(response, 'Failed to load history');
+                showToast({ type: 'error', text1: 'Could not load history', text2: errMsg });
                 setHistoryRequests([]);
+                setLoadError(errMsg);
             }
         } catch (error) {
             console.error('Fetch history requests error:', error);
-            showToast({ type: 'error', text1: 'Could not load history', text2: 'Please try again' });
-            setHistoryRequests([]);
+            if (id === loadSeq.current) {
+                showToast({ type: 'error', text1: 'Could not load history', text2: error?.message || 'Please try again' });
+                setHistoryRequests([]);
+                setLoadError(error?.message || 'Please try again.');
+            }
         } finally {
-            setLoading(false);
-            setRefreshing(false);
+            if (id === loadSeq.current) {
+                setLoading(false);
+                setRefreshing(false);
+            }
         }
     };
 
     const fetchStatistics = async () => {
+        const id = ++loadSeq.current;
         try {
             setLoading(true);
             const response = await apiService.getAllCompLeaves({
@@ -260,19 +293,30 @@ const CompApprovalScreen = ({ navigation }) => {
                 employee: filterEmployee || null,
                 limit: 500
             });
+            if (id !== loadSeq.current) {
+                return;
+            }
 
             if (isApiSuccess(response)) {
-                const data = extractFrappeData(response, {});
+                const data = extractFrappeData(response, {}) || {};
                 setStatistics(data.statistics || {});
+                setLoadError('');
             } else {
-                showToast({ type: 'error', text1: 'Could not load summary', text2: getApiErrorMessage(response, 'Failed to load statistics') });
+                const errMsg = getApiErrorMessage(response, 'Failed to load statistics');
+                showToast({ type: 'error', text1: 'Could not load summary', text2: errMsg });
+                setLoadError(errMsg);
             }
         } catch (error) {
             console.error('Fetch statistics error:', error);
-            showToast({ type: 'error', text1: 'Could not load summary', text2: 'Please try again' });
+            if (id === loadSeq.current) {
+                showToast({ type: 'error', text1: 'Could not load summary', text2: error?.message || 'Please try again' });
+                setLoadError(error?.message || 'Please try again.');
+            }
         } finally {
-            setLoading(false);
-            setRefreshing(false);
+            if (id === loadSeq.current) {
+                setLoading(false);
+                setRefreshing(false);
+            }
         }
     };
 
@@ -311,18 +355,26 @@ const CompApprovalScreen = ({ navigation }) => {
     };
 
     const closeActionSheet = () => {
+        if (acting) {
+            return;
+        }
         setShowActionModal(false);
         setActionInput('');
     };
 
+    // The sheet stays open (button spinner) while the request runs, so a failure can be retried
+    // and the list is never replaced by a spinner; it closes on success.
     const executeAction = async () => {
+        if (!selectedRequest || busy.current) {
+            return;
+        }
         if (actionType === 'reject' && !actionInput.trim()) {
             showToast({ type: 'error', text1: 'Enter a reason for rejecting' });
             return;
         }
 
-        setLoading(true);
-        setShowActionModal(false);
+        busy.current = true;
+        setActing(true);
 
         try {
             let response;
@@ -343,7 +395,9 @@ const CompApprovalScreen = ({ navigation }) => {
                 } else {
                     showToast({ type: 'success', text1: 'Request rejected', text2: selectedRequest.employee_name });
                 }
-                fetchPendingRequests();
+                setShowActionModal(false);
+                setActionInput('');
+                await fetchPendingRequests(true);
             } else {
                 showToast({ type: 'error', text1: 'Not updated', text2: getApiErrorMessage(response, `Failed to ${actionType} request`) });
             }
@@ -351,9 +405,8 @@ const CompApprovalScreen = ({ navigation }) => {
             console.error(`${actionType} error:`, error);
             showToast({ type: 'error', text1: 'Not updated', text2: error.message || `Failed to ${actionType} request` });
         } finally {
-            setLoading(false);
-            setSelectedRequest(null);
-            setActionInput('');
+            busy.current = false;
+            setActing(false);
         }
     };
 
@@ -376,8 +429,12 @@ const CompApprovalScreen = ({ navigation }) => {
             showToast({ type: 'error', text1: 'Select the half day date' });
             return;
         }
+        if (busy.current) {
+            return;
+        }
 
-        setLoading(true);
+        busy.current = true;
+        setSubmitting(true);
         try {
             const response = await apiService.submitCompLeave({
                 employee: applyEmployee,
@@ -395,7 +452,8 @@ const CompApprovalScreen = ({ navigation }) => {
                 showToast({
                     type: 'success',
                     text1: `Request submitted for ${empName}`,
-                    text2: `${daysLabel(data.compensatory_days)}  ·  ${data.docstatus === 1 ? 'Approved' : 'Pending'}`,
+                    text2: [data.compensatory_days ? daysLabel(data.compensatory_days) : null, data.docstatus === 1 ? 'Approved' : 'Pending']
+                        .filter(Boolean).join('  ·  '),
                 });
                 // Reset form
                 setApplyEmployee('');
@@ -412,7 +470,8 @@ const CompApprovalScreen = ({ navigation }) => {
             console.error('Admin apply comp-off error:', error);
             showToast({ type: 'error', text1: 'Not submitted', text2: error.message || 'Failed to submit comp-off request' });
         } finally {
-            setLoading(false);
+            busy.current = false;
+            setSubmitting(false);
         }
     };
 
@@ -433,8 +492,8 @@ const CompApprovalScreen = ({ navigation }) => {
     ].filter((o, i, all) => all.findIndex((x) => x.value === o.value) === i);
     const employeeOptions = employees.map((emp) => ({
         value: emp.name,
-        label: emp.employee_name,
-        subtitle: [emp.name, emp.department].filter(Boolean).join('  ·  '),
+        label: emp.employee_name || emp.name,
+        subtitle: [emp.name, String(emp.department || '').replace(' - DG', '')].filter(Boolean).join('  ·  '),
     }));
 
     const pickers = {
@@ -532,7 +591,7 @@ const CompApprovalScreen = ({ navigation }) => {
             footer={(
                 <View style={styles.footerRow}>
                     <Button title="Cancel" variant="secondary" onPress={() => setActiveTab('pending')} style={styles.flex} />
-                    <Button title="Submit" onPress={handleAdminApplyCompOff} loading={loading} disabled={loading} style={styles.flex} />
+                    <Button title="Submit" onPress={handleAdminApplyCompOff} loading={submitting} style={styles.flex} />
                 </View>
             )}
         >
@@ -653,6 +712,8 @@ const CompApprovalScreen = ({ navigation }) => {
         <Screen refreshing={refreshing} onRefresh={onRefresh} footer={applyFooter}>
             {loading && !refreshing ? (
                 <Loading />
+            ) : pendingRequests.length === 0 && loadError ? (
+                <EmptyState icon="alert-circle" title="Could not load requests" message={loadError} action="Try again" onAction={onRefresh} />
             ) : pendingRequests.length === 0 ? (
                 <EmptyState
                     icon="check-circle"
@@ -669,6 +730,7 @@ const CompApprovalScreen = ({ navigation }) => {
                             left={<Avatar name={request.employee_name} />}
                             title={request.employee_name}
                             subtitle={requestSubtitle(request, false)}
+                            subtitleLines={3}
                             value={daysLabel(request.compensatory_days)}
                             onPress={() => openRequest(request)}
                         />
@@ -683,6 +745,8 @@ const CompApprovalScreen = ({ navigation }) => {
         <Screen refreshing={refreshing} onRefresh={onRefresh} footer={applyFooter}>
             {loading && !refreshing ? (
                 <Loading />
+            ) : historyRequests.length === 0 && loadError ? (
+                <EmptyState icon="alert-circle" title="Could not load history" message={loadError} action="Try again" onAction={onRefresh} />
             ) : historyRequests.length === 0 ? (
                 <EmptyState
                     icon="clock"
@@ -699,6 +763,7 @@ const CompApprovalScreen = ({ navigation }) => {
                             left={<Avatar name={request.employee_name} />}
                             title={request.employee_name}
                             subtitle={requestSubtitle(request, true)}
+                            subtitleLines={3}
                             right={<StatusText label={statusOf(request.docstatus)} />}
                             onPress={() => openRequest(request)}
                         />
@@ -715,6 +780,11 @@ const CompApprovalScreen = ({ navigation }) => {
                 <Loading />
             ) : (
                 <>
+                    {loadError ? (
+                        <Notice tone="danger" icon="alert-circle" title="Could not load the summary" onPress={onRefresh}>
+                            {`${loadError} Tap to try again.`}
+                        </Notice>
+                    ) : null}
                     <StatStrip
                         style={styles.strip}
                         items={[
@@ -769,8 +839,8 @@ const CompApprovalScreen = ({ navigation }) => {
             subtitle = 'Approve comp-off';
             footer = (
                 <>
-                    <Button title="Back" variant="secondary" onPress={backToDetails} style={styles.flex} />
-                    <Button title="Approve" onPress={executeAction} style={styles.flex} />
+                    <Button title="Back" variant="secondary" onPress={backToDetails} disabled={acting} style={styles.flex} />
+                    <Button title="Approve" onPress={executeAction} loading={acting} style={styles.flex} />
                 </>
             );
             body = (
@@ -781,6 +851,7 @@ const CompApprovalScreen = ({ navigation }) => {
                         hint="Optional. The days are added to the employee's leave balance."
                         value={actionInput}
                         onChangeText={setActionInput}
+                        editable={!acting}
                         placeholder="Add a remark"
                         multiline
                         numberOfLines={4}
@@ -791,8 +862,8 @@ const CompApprovalScreen = ({ navigation }) => {
             subtitle = 'Reject comp-off';
             footer = (
                 <>
-                    <Button title="Back" variant="secondary" onPress={backToDetails} style={styles.flex} />
-                    <Button title="Reject" variant="dangerSolid" onPress={executeAction} disabled={!actionInput.trim()} style={styles.flex} />
+                    <Button title="Back" variant="secondary" onPress={backToDetails} disabled={acting} style={styles.flex} />
+                    <Button title="Reject" variant="dangerSolid" onPress={executeAction} loading={acting} disabled={!actionInput.trim()} style={styles.flex} />
                 </>
             );
             body = (
@@ -803,6 +874,7 @@ const CompApprovalScreen = ({ navigation }) => {
                         hint="Required. Sent to the employee."
                         value={actionInput}
                         onChangeText={setActionInput}
+                        editable={!acting}
                         placeholder="Why the request is rejected"
                         multiline
                         numberOfLines={4}
@@ -825,7 +897,7 @@ const CompApprovalScreen = ({ navigation }) => {
                     {request.half_day ? <Detail label="Half day" value={dayLabel(request.half_day_date)} /> : null}
                     <Detail label="Reason" value={request.reason || 'No reason given'} />
                     {request.leave_type ? <Detail label="Leave type" value={request.leave_type} /> : null}
-                    <Detail label="Department" value={request.department || '-'} />
+                    <Detail label="Department" value={String(request.department || '-').replace(' - DG', '')} />
                     {!isPending ? <Detail label="Status" value={<StatusText label={statusOf(request.docstatus)} size={15} />} /> : null}
                     {request.leave_allocation ? <Detail label="Leave allocation" value={request.leave_allocation} /> : null}
                     <Detail label="Request" value={request.name} />
@@ -839,6 +911,7 @@ const CompApprovalScreen = ({ navigation }) => {
                 title={request?.employee_name}
                 subtitle={subtitle}
                 onClose={closeActionSheet}
+                dismissable={!acting}
                 footer={footer}
             >
                 {body}
@@ -867,12 +940,13 @@ const CompApprovalScreen = ({ navigation }) => {
                     <Text style={styles.noMatch}>No matches</Text>
                 ) : (
                     <Group flush style={styles.sheetList}>
-                        {options.map((o, i) => {
+                        {options.map((o) => {
                             const active = o.value === config.value;
                             return (
                                 <Row
-                                    key={`${o.value}-${i}`}
+                                    key={o.value || 'all'}
                                     title={o.label}
+                                    titleLines={2}
                                     subtitle={o.subtitle || undefined}
                                     selected={active}
                                     right={active ? <Icon name="check" size={18} color={color.accent} /> : null}
@@ -933,7 +1007,8 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         flexShrink: 1,
         gap: 4,
-        height: 32,
+        minHeight: 32,
+        paddingVertical: 4,
         paddingHorizontal: space.md,
         borderRadius: 16,
         backgroundColor: color.neutralSoft,
@@ -948,8 +1023,9 @@ const styles = StyleSheet.create({
     strip: { marginBottom: space.xl },
 
     formTitle: { ...type.title, marginBottom: space.lg },
-    dateRow: { flexDirection: 'row', gap: space.md },
-    dateField: { flex: 1, marginBottom: 0 },
+    // side by side from 360 dp; stacked on a 320 dp phone, where two dates would be cut off at large text
+    dateRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.md },
+    dateField: { flexGrow: 1, flexBasis: 140, marginBottom: 0 },
     dateHint: { ...type.caption, marginTop: 6, marginBottom: space.lg },
     halfDayGroup: { marginBottom: space.lg },
     formNote: { ...type.caption, lineHeight: 17 },

@@ -12,6 +12,7 @@ import {
     Count,
     IconButton,
     Loading,
+    Notice,
     color,
     space,
     type,
@@ -28,17 +29,8 @@ const AdminDashboard = ({ navigation }) => {
     const { logout, user, employee } = useAuth();
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [stats, setStats] = useState({
-        totalEmployees: 0,
-        presentToday: 0,
-        absentToday: 0,
-        wfhToday: 0,
-        onsiteToday: 0,
-        onLeave: 0,
-        lateArrivals: 0,
-        employeesOnHoliday: 0,
-        attendanceRate: 0,
-    });
+    const [stats, setStats] = useState(null); // null until loaded, so a failed load shows dashes, not zeros
+    const [statsError, setStatsError] = useState(null);
     const [pending, setPending] = useState({
         wfh: 0, onsite: 0, leave: 0, expense: 0, travel: 0, compLeave: 0, total: 0,
     });
@@ -51,6 +43,7 @@ const AdminDashboard = ({ navigation }) => {
             const response = await ApiService.get('/api/method/hrms.api.get_employee_statistics');
             if (response.success && response.data?.message) {
                 const d = response.data.message;
+                setStatsError(null);
                 setStats({
                     totalEmployees: d.totalEmployees || 0,
                     presentToday: d.presentToday || 0,
@@ -62,9 +55,14 @@ const AdminDashboard = ({ navigation }) => {
                     employeesOnHoliday: d.employeesOnHoliday || 0,
                     attendanceRate: d.attendanceRate || 0,
                 });
+            } else {
+                setStats(null);
+                setStatsError(getApiErrorMessage(response, 'Could not load today\'s numbers'));
             }
         } catch (error) {
             console.error('Dashboard stats error:', error);
+            setStats(null);
+            setStatsError(error?.message || 'Could not load today\'s numbers');
         }
     };
 
@@ -112,9 +110,10 @@ const AdminDashboard = ({ navigation }) => {
         }
         try {
             const response = await ApiService.getLeaveBalances(empId);
-            const balances = response?.data?.message;
+            const balances = isApiSuccess(response) ? response.data?.message : null;
             if (balances && typeof balances === 'object') {
-                setLeaveLeft(Object.values(balances).reduce((sum, b) => sum + (b.balance_leaves || 0), 0));
+                const total = Object.values(balances).reduce((sum, b) => sum + (Number(b?.balance_leaves) || 0), 0);
+                setLeaveLeft(Math.round(total * 100) / 100);
             }
         } catch (error) {
             console.error('Leave balance error:', error?.message);
@@ -154,6 +153,7 @@ const AdminDashboard = ({ navigation }) => {
     };
 
     const go = (route) => () => navigation.navigate(route);
+    const stat = (key) => (stats ? stats[key] : '–');
     const firstName = (employee?.employee_name || user?.full_name || '').split(' ')[0];
 
     const attention = [
@@ -186,25 +186,31 @@ const AdminDashboard = ({ navigation }) => {
                         <Text style={styles.date}>{formatLongDate(new Date())}</Text>
                     </View>
 
+                    {statsError ? (
+                        <Notice tone="danger" icon="alert-circle" title="Could not load today's numbers" onPress={onRefresh}>
+                            {`${String(statsError).replace(/\.\s*$/, '')}. Tap to try again.`}
+                        </Notice>
+                    ) : null}
+
                     <Group title="Today" action="View attendance" onAction={go('TodayAttendance')}>
                         <View style={styles.statsBlock}>
                             <StatStrip
                                 style={styles.flatStrip}
                                 items={[
-                                    { label: 'Present', value: stats.presentToday },
-                                    { label: 'Absent', value: stats.absentToday, tone: stats.absentToday ? 'danger' : undefined },
-                                    { label: 'On leave', value: stats.onLeave },
-                                    { label: 'WFH', value: stats.wfhToday },
+                                    { label: 'Present', value: stat('presentToday') },
+                                    { label: 'Absent', value: stat('absentToday'), tone: stats?.absentToday ? 'danger' : undefined },
+                                    { label: 'On leave', value: stat('onLeave') },
+                                    { label: 'WFH', value: stat('wfhToday') },
                                 ]}
                             />
                             <View style={styles.stripDivider} />
                             <StatStrip
                                 style={styles.flatStrip}
                                 items={[
-                                    { label: 'On site', value: stats.onsiteToday },
-                                    { label: 'Late', value: stats.lateArrivals, tone: stats.lateArrivals ? 'warning' : undefined },
-                                    { label: 'Holiday', value: stats.employeesOnHoliday },
-                                    { label: 'Rate', value: `${stats.attendanceRate}%` },
+                                    { label: 'On site', value: stat('onsiteToday') },
+                                    { label: 'Late', value: stat('lateArrivals'), tone: stats?.lateArrivals ? 'warning' : undefined },
+                                    { label: 'Holiday', value: stat('employeesOnHoliday') },
+                                    { label: 'Rate', value: stats ? `${stats.attendanceRate}%` : '–' },
                                 ]}
                             />
                         </View>
@@ -244,7 +250,7 @@ const AdminDashboard = ({ navigation }) => {
                     </Group>
 
                     <Group title="People">
-                        <Row icon="users" title="Employees" value={stats.totalEmployees || undefined} onPress={go('EmployeeManagement')} />
+                        <Row icon="users" title="Employees" value={stats?.totalEmployees || undefined} onPress={go('EmployeeManagement')} />
                         <Row icon="user-plus" title="Onboarding" right={<Count value={pendingOnboarding} />} onPress={go('EmployeeOnboardingList')} />
                     </Group>
 
@@ -262,7 +268,7 @@ const AdminDashboard = ({ navigation }) => {
                         <Row icon="send" title="Send a notification" onPress={go('CreateNotification')} />
                     </Group>
 
-                    <Group title="My account" footer={employee?.name ? `${user?.full_name || ''}  ·  ${employee.name}` : undefined}>
+                    <Group title="My account" footer={employee?.name ? [user?.full_name, employee.name].filter(Boolean).join('  ·  ') : undefined}>
                         <Row icon="user" title="My self-service" subtitle="Leave, attendance, payslips and profile" onPress={go('AdminSelfService')} />
                         {leaveLeft !== null ? (
                             <Row icon="sun" title="My leave balance" value={`${leaveLeft} ${leaveLeft === 1 ? 'day' : 'days'}`} onPress={go('MyLeaveApplication')} />

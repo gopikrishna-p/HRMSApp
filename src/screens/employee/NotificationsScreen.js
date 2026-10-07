@@ -5,7 +5,7 @@
 // read. "Mark all read" sits in the header; archive and delete are in the detail sheet.
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Pressable, Alert } from 'react-native';
-import ApiService, { extractFrappeData } from '../../services/api.service';
+import ApiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import { formatTimeOfDay } from '../../utils/dateFormat';
 import showToast from '../../utils/Toast';
 import {
@@ -18,6 +18,7 @@ import {
     Button,
     EmptyState,
     Loading,
+    Notice,
     color,
     space,
     type,
@@ -72,7 +73,11 @@ const whenLabel = (item, recent) => {
     if (!d) {
         return item.time_ago || '';
     }
-    return recent ? time : `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}, ${time}`;
+    const day = `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}`;
+    if (!time) {
+        return recent ? item.time_ago || day : day;
+    }
+    return recent ? time : `${day}, ${time}`;
 };
 
 // get_notification_stats returns total_count / unread_count / urgent_count
@@ -86,6 +91,11 @@ const NotificationsScreen = ({ navigation }) => {
     const [detailModalVisible, setDetailModalVisible] = useState(false);
     const [selectedNotification, setSelectedNotification] = useState(null);
     const [selectedTab, setSelectedTab] = useState('All'); // All, Unread, Urgent
+    const [listError, setListError] = useState(null);
+    const listRequest = useRef(0); // ignores an answer for a tab that is no longer selected
+    const listTab = useRef(null); // the tab the notifications on screen belong to
+    const [acting, setActing] = useState(null); // 'archive' | 'delete' | 'all' while one is in flight
+    const actingRef = useRef(false);
     // Settings are fetched as before; this screen has no settings controls yet.
     const [, setSettings] = useState({});
 
@@ -102,7 +112,18 @@ const NotificationsScreen = ({ navigation }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch whenever the tab changes
     }, [selectedTab]);
 
+    // A failed reload of the same tab keeps the list on screen and says so; a failed load for
+    // another tab clears it, so items of the previous tab are never shown under it.
     const fetchNotifications = async () => {
+        const request = ++listRequest.current;
+        const tab = selectedTab;
+        const fail = (message) => {
+            if (listTab.current !== tab) {
+                setNotifications([]);
+                listTab.current = tab;
+            }
+            setListError(message);
+        };
         try {
             setLoading(true);
             const params = {
@@ -112,9 +133,16 @@ const NotificationsScreen = ({ navigation }) => {
             };
 
             const response = await ApiService.getMyNotifications(params);
+            if (request !== listRequest.current) {
+                return;
+            }
+            if (!isApiSuccess(response)) {
+                fail(getApiErrorMessage(response, 'Pull down to try again.'));
+                return;
+            }
 
             // Use helper to extract data
-            const extractedData = extractFrappeData(response, {});
+            const extractedData = extractFrappeData(response, {}) || {};
 
             // Handle different response structures
             let notificationsList = [];
@@ -126,24 +154,38 @@ const NotificationsScreen = ({ navigation }) => {
                 notificationsList = extractedData.notifications;
             }
 
+            if (!Array.isArray(notificationsList)) {
+                notificationsList = [];
+            }
+
             // Filter for urgent if needed
             if (selectedTab === 'Urgent') {
                 notificationsList = notificationsList.filter(n => n.priority === 'High');
             }
 
             setNotifications(notificationsList);
+            listTab.current = tab;
+            setListError(null);
         } catch (error) {
             console.error('Error fetching notifications:', error);
+            if (request === listRequest.current) {
+                fail(error.message || 'Pull down to try again.');
+            }
         } finally {
-            setLoading(false);
-            setRefreshing(false);
+            if (request === listRequest.current) {
+                setLoading(false);
+                setRefreshing(false);
+            }
         }
     };
 
     const fetchStats = async () => {
         try {
             const response = await ApiService.getNotificationStats();
-            const extractedData = extractFrappeData(response, {});
+            if (!isApiSuccess(response)) {
+                return; // keep the counts on screen
+            }
+            const extractedData = extractFrappeData(response, {}) || {};
             // Handle nested structure
             const statsData = extractedData.stats || (extractedData.status === 'success' ? extractedData.stats : {});
             setStats(statsData || { total: 0, unread: 0, urgent: 0 });
@@ -182,7 +224,11 @@ const NotificationsScreen = ({ navigation }) => {
 
     const markAsRead = async (notificationId) => {
         try {
-            await ApiService.markNotificationRead(notificationId);
+            const response = await ApiService.markNotificationRead(notificationId);
+            if (!isApiSuccess(response)) {
+                // stays unread here and on the server; it is marked again when opened next time
+                return;
+            }
             // Update local state
             setNotifications(prev =>
                 prev.map(n => n.name === notificationId ? { ...n, is_read: 1 } : n)
@@ -193,44 +239,70 @@ const NotificationsScreen = ({ navigation }) => {
         }
     };
 
-    const markAllAsRead = async () => {
+    // archive / delete / mark all read: one at a time, so a double tap does not send it twice
+    const runAction = async (kind, action) => {
+        if (actingRef.current) {
+            return;
+        }
+        actingRef.current = true;
+        setActing(kind);
+        try {
+            await action();
+        } finally {
+            actingRef.current = false;
+            setActing(null);
+        }
+    };
+
+    const markAllAsRead = () => runAction('all', async () => {
         try {
             const response = await ApiService.markAllNotificationsRead();
-            if (response.success) {
+            if (isApiSuccess(response)) {
                 setNotifications(prev => prev.map(n => ({ ...n, is_read: 1 })));
                 fetchStats();
                 showToast({ type: 'success', text1: 'All notifications marked as read' });
+            } else {
+                showToast({ type: 'error', text1: 'Could not mark all as read', text2: getApiErrorMessage(response, 'Please try again.') });
             }
         } catch (error) {
             console.error('Error marking all as read:', error);
             showToast({ type: 'error', text1: 'Could not mark all as read', text2: error.message });
         }
-    };
+    });
 
+    // true when the server archived it
     const archiveNotification = async (notificationId) => {
         try {
             const response = await ApiService.archiveNotification(notificationId);
-            if (response.success) {
+            if (isApiSuccess(response)) {
                 setNotifications(prev => prev.filter(n => n.name !== notificationId));
                 fetchStats();
+                return true;
             }
+            showToast({ type: 'error', text1: 'Not archived', text2: getApiErrorMessage(response, 'Please try again.') });
         } catch (error) {
             console.error('Error archiving notification:', error);
+            showToast({ type: 'error', text1: 'Not archived', text2: error.message });
         }
+        return false;
     };
 
+    // true when the server deleted it
     const deleteNotification = async (notificationId) => {
         try {
             const response = await ApiService.deleteNotification(notificationId);
-            if (response.success) {
+            if (isApiSuccess(response)) {
                 setNotifications(prev => prev.filter(n => n.name !== notificationId));
                 fetchStats();
                 showToast({ type: 'success', text1: 'Notification deleted' });
+                return true;
             }
+            showToast({ type: 'error', text1: 'Not deleted', text2: getApiErrorMessage(response, 'Please try again.') });
         } catch (error) {
             console.error('Error deleting notification:', error);
             showToast({ type: 'error', text1: 'Not deleted', text2: error.message });
         }
+        return false;
     };
 
     // ------------------------------------------------------------------ header
@@ -245,22 +317,38 @@ const NotificationsScreen = ({ navigation }) => {
         navigation.setOptions({
             // eslint-disable-next-line react/no-unstable-nested-components -- React Navigation header render prop
             headerRight: () => (unreadCount > 0 ? (
-                <Pressable onPress={() => markAllRef.current()} hitSlop={10} style={styles.headerAction}>
-                    <Text style={styles.headerActionText}>Mark all read</Text>
+                <Pressable onPress={() => markAllRef.current()} disabled={acting === 'all'} hitSlop={10} style={styles.headerAction}>
+                    <Text style={[styles.headerActionText, acting === 'all' && styles.headerActionBusy]} numberOfLines={1}>Mark all read</Text>
                 </Pressable>
             ) : null),
         });
-    }, [navigation, unreadCount]);
+    }, [navigation, unreadCount, acting]);
 
     // ------------------------------------------------------------------ detail actions
-    const closeDetail = () => setDetailModalVisible(false);
+    // the sheet stays open while archive / delete runs, and closes only when the server agreed
+    const closeDetail = () => {
+        if (!actingRef.current) {
+            setDetailModalVisible(false);
+        }
+    };
 
     const onArchive = () => {
-        archiveNotification(selectedNotification.name);
-        setDetailModalVisible(false);
+        const id = selectedNotification?.name;
+        if (!id) {
+            return;
+        }
+        runAction('archive', async () => {
+            if (await archiveNotification(id)) {
+                setDetailModalVisible(false);
+            }
+        });
     };
 
     const onDelete = () => {
+        const id = selectedNotification?.name;
+        if (!id) {
+            return;
+        }
         Alert.alert(
             'Delete notification',
             'Delete this notification permanently?',
@@ -269,10 +357,11 @@ const NotificationsScreen = ({ navigation }) => {
                 {
                     text: 'Delete',
                     style: 'destructive',
-                    onPress: () => {
-                        deleteNotification(selectedNotification.name);
-                        setDetailModalVisible(false);
-                    }
+                    onPress: () => runAction('delete', async () => {
+                        if (await deleteNotification(id)) {
+                            setDetailModalVisible(false);
+                        }
+                    }),
                 }
             ]
         );
@@ -323,7 +412,10 @@ const NotificationsScreen = ({ navigation }) => {
     const detail = selectedNotification;
     const detailDate = detail ? parseDateTime(detail.creation) : null;
     const detailWhen = detailDate
-        ? `${formatLongDate(detailDate)}${detailDate.getFullYear() !== new Date().getFullYear() ? ` ${detailDate.getFullYear()}` : ''}  ·  ${formatTimeOfDay(detail.creation)}`
+        ? [
+            `${formatLongDate(detailDate)}${detailDate.getFullYear() !== new Date().getFullYear() ? ` ${detailDate.getFullYear()}` : ''}`,
+            formatTimeOfDay(detail.creation),
+        ].filter(Boolean).join('  ·  ')
         : detail?.time_ago;
 
     return (
@@ -343,16 +435,30 @@ const NotificationsScreen = ({ navigation }) => {
             </View>
 
             <Screen refreshing={refreshing} onRefresh={onRefresh}>
-                {loading && notifications.length === 0 ? (
+                {loading && !refreshing && (notifications.length === 0 || listTab.current !== selectedTab) ? (
                     <Loading />
+                ) : listError && notifications.length === 0 ? (
+                    <EmptyState
+                        icon="alert-circle"
+                        title="Could not load notifications"
+                        message={listError}
+                        action="Try again"
+                        onAction={onRefresh}
+                    />
                 ) : notifications.length === 0 ? (
                     renderEmpty()
                 ) : (
-                    groupByDate(notifications).map((group) => (
-                        <Group key={group.key} title={group.title}>
-                            {group.items.map((item) => renderRow(item, group.recent))}
-                        </Group>
-                    ))
+                    <>
+                        {/* a failed refresh keeps the last list on screen */}
+                        {listError ? (
+                            <Notice tone="warning" icon="alert-circle" title="Could not refresh notifications">{listError}</Notice>
+                        ) : null}
+                        {groupByDate(notifications).map((group) => (
+                            <Group key={group.key} title={group.title}>
+                                {group.items.map((item) => renderRow(item, group.recent))}
+                            </Group>
+                        ))}
+                    </>
                 )}
             </Screen>
 
@@ -361,10 +467,25 @@ const NotificationsScreen = ({ navigation }) => {
                 title={detail?.title}
                 subtitle={detailWhen || undefined}
                 onClose={closeDetail}
+                dismissable={!acting}
                 footer={detail ? (
                     <>
-                        <Button title="Archive" variant="secondary" onPress={onArchive} style={styles.flex} />
-                        <Button title="Delete" variant="danger" onPress={onDelete} style={styles.flex} />
+                        <Button
+                            title="Archive"
+                            variant="secondary"
+                            onPress={onArchive}
+                            loading={acting === 'archive'}
+                            disabled={Boolean(acting)}
+                            style={styles.flex}
+                        />
+                        <Button
+                            title="Delete"
+                            variant="danger"
+                            onPress={onDelete}
+                            loading={acting === 'delete'}
+                            disabled={Boolean(acting)}
+                            style={styles.flex}
+                        />
                     </>
                 ) : null}
             >
@@ -397,6 +518,7 @@ const styles = StyleSheet.create({
     },
     headerAction: { paddingHorizontal: 4, paddingVertical: 4 },
     headerActionText: { fontSize: 16, fontWeight: '600', color: color.accent },
+    headerActionBusy: { opacity: 0.45 },
 
     dotSlot: { width: 8, marginRight: space.md, alignSelf: 'flex-start', paddingTop: 7 },
     dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: color.accent },

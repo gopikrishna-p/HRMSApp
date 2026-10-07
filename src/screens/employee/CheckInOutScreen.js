@@ -3,7 +3,7 @@
 // The employee's own check-in / check-out. Office mode needs the phone inside the office
 // geofence; WFH and On-site need permission for today (standing, set by HR, or an approved
 // request covering today). The server checks the geofence and eligibility again.
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, Alert, StyleSheet, ActivityIndicator } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import AttendanceService from '../../services/attendance.service';
@@ -43,22 +43,36 @@ const WORK_MODES = [
     { value: 'Onsite', label: 'On-site' },
 ];
 
-const parseBackendError = (errorResponse) => {
+// The server's reason for a refused check-in / check-out, from the ApiService result
+const parseBackendError = (res) => {
+    const data = res?.data;
     try {
-        if (errorResponse._server_messages) {
-            const arr = JSON.parse(errorResponse._server_messages);
+        if (data?._server_messages) {
+            const arr = JSON.parse(data._server_messages);
             const first = JSON.parse(arr?.[0] || '{}');
-            return first.message || 'Operation failed';
+            if (first.message) {
+                return String(first.message).replace(/<[^>]+>/g, '').trim();
+            }
         }
-        // geo_attendance reports refusals as { message: { status: 'Error', message } }
-        const msg = errorResponse.message;
-        if (msg && typeof msg === 'object') {
-            return msg.message || 'Operation failed';
-        }
-        return msg || 'Operation failed';
     } catch {
-        return 'Operation failed';
+        // fall through to the other places a message can be
     }
+    // geo_attendance reports refusals as { message: { status: 'Error', message } }
+    const msg = data?.message;
+    if (msg && typeof msg === 'object' && msg.message) {
+        return String(msg.message);
+    }
+    if (typeof msg === 'string' && msg) {
+        return msg;
+    }
+    // network errors and non-Frappe error pages: the wrapper's own message
+    return (typeof res?.message === 'string' && res.message) || 'Please try again.';
+};
+
+// "100 m", or null when the office location has no radius set
+const metres = (value) => {
+    const n = Number(value);
+    return value !== null && value !== undefined && value !== '' && Number.isFinite(n) ? `${Math.round(n)} m` : null;
 };
 
 // "2026-10-06 09:48:53.442343" -> local Date, without relying on the JS engine's date parser
@@ -102,7 +116,9 @@ const CheckInOutScreen = () => {
     const [locationError, setLocationError] = useState(null);
     const [refreshing, setRefreshing] = useState(false);
     const [todayLoaded, setTodayLoaded] = useState(false);
+    const [todayError, setTodayError] = useState(null); // today's status could not be loaded
     const [now, setNow] = useState(() => new Date());
+    const busy = useRef(false); // blocks a second check-in / check-out while one is being sent
 
     // Today's attendance status
     const [todayAttendance, setTodayAttendance] = useState({
@@ -115,6 +131,7 @@ const CheckInOutScreen = () => {
     });
 
     const employeeId = employee?.name;
+    const radiusText = metres(officeLocation?.radius);
 
     const fetchWFHInfo = useCallback(async () => {
         const res = await AttendanceService.getUserWFHInfo();
@@ -132,9 +149,21 @@ const CheckInOutScreen = () => {
         }
         try {
             const attendanceStatus = await AttendanceService.getTodayAttendanceStatus(employeeId);
+            if (attendanceStatus.error) {
+                // keep what we knew; never fall back to "not checked in"
+                setTodayError(attendanceStatus.error);
+                return;
+            }
+            setTodayError(null);
             setTodayAttendance(attendanceStatus);
+            // checked in but not out: check out in the same mode (a WFH day shouldn't need the office geofence)
+            if (attendanceStatus.hasCheckedIn && !attendanceStatus.hasCheckedOut) {
+                const t = attendanceStatus.workType;
+                setWorkMode(t === 'WFH' || t === 'Work From Home' ? 'WFH' : t === 'On Site' || t === 'Onsite' ? 'Onsite' : 'Office');
+            }
         } catch (error) {
             console.error('Error fetching today attendance:', error);
+            setTodayError(error?.message || "Could not load today's attendance");
         }
     }, [employeeId]);
 
@@ -235,11 +264,17 @@ const CheckInOutScreen = () => {
     };
 
     const doAction = async (action) => {
+        if (busy.current) {
+            return;
+        }
         if (workMode === 'Office' && locationStatus === 'outside') {
+            const verb = action === 'Check-In' ? 'check in' : 'check out';
             showToast({
                 type: 'error',
                 text1: 'Outside the office area',
-                text2: `You are ${distance} m away. Move within ${officeLocation?.radius} m to ${action === 'Check-In' ? 'check in' : 'check out'}.`,
+                text2: radiusText
+                    ? `You are ${distance} m away. Move within ${radiusText} to ${verb}.`
+                    : `You are ${distance} m away. Move closer to the office to ${verb}.`,
             });
             return;
         }
@@ -248,6 +283,7 @@ const CheckInOutScreen = () => {
             return;
         }
 
+        busy.current = true;
         try {
             setLoading(true);
             let latitude, longitude, work_type;
@@ -303,19 +339,19 @@ const CheckInOutScreen = () => {
                     text2: time ? `at ${time}` : undefined,
                 });
 
-                // Refresh today's attendance after check-in/out
-                fetchTodayAttendance();
+                // Wait for today's record so the button can't send the same action again
+                await fetchTodayAttendance();
                 // Also refresh location after action
                 if (workMode === 'Office') {
                     checkGeofenceStatus();
                 }
             } else {
-                const msg = parseBackendError(res.data || res);
-                Alert.alert(action === 'Check-In' ? 'Check-in failed' : 'Check-out failed', msg);
+                Alert.alert(action === 'Check-In' ? 'Check-in failed' : 'Check-out failed', parseBackendError(res));
             }
         } catch (e) {
             Alert.alert('Something went wrong', e?.message || 'Please try again.');
         } finally {
+            busy.current = false;
             setLoading(false);
         }
     };
@@ -353,15 +389,19 @@ const CheckInOutScreen = () => {
         if (locationStatus === 'error') {
             return { title: 'Location unavailable', subtitle: locationError, tone: 'danger' };
         }
+        const allowed = radiusText ? `allowed ${radiusText}` : null;
         const where = knownDistance
-            ? `${distance} m from ${placeName}, allowed ${officeLocation?.radius} m`
-            : `Allowed ${officeLocation?.radius} m from ${placeName}`;
+            ? [`${distance} m from ${placeName}`, allowed].filter(Boolean).join(', ')
+            : allowed ? `Allowed ${radiusText} from ${placeName}` : `Distance from ${placeName} not known`;
         return locationStatus === 'inside'
             ? { title: 'Inside the office area', subtitle: where, tone: 'success', label: 'In range' }
             : { title: 'Outside the office area', subtitle: where, tone: 'danger', label: 'Out of range' };
     })();
 
     const blockedReason = (() => {
+        if (todayError) {
+            return "Couldn't load today's attendance. Pull down to try again.";
+        }
         if (markedWithoutCheckIn) {
             return `Today is already marked ${String(today.status).toLowerCase()}. Ask HR if this is wrong.`;
         }
@@ -385,7 +425,8 @@ const CheckInOutScreen = () => {
             return 'Location unavailable. Tap refresh under Location.';
         }
         if (locationStatus === 'outside') {
-            return `Move within ${officeLocation?.radius} m of the office${others.length ? `, or choose ${others.join(' or ')}` : ''}.`;
+            const move = radiusText ? `Move within ${radiusText} of the office` : 'Move closer to the office';
+            return `${move}${others.length ? `, or choose ${others.join(' or ')}` : ''}.`;
         }
         return null;
     })();
@@ -395,7 +436,8 @@ const CheckInOutScreen = () => {
     const actionDisabled = loading
         || (workMode === 'Office' && locationStatus !== 'inside')
         || !nextAction
-        || (Boolean(employeeId) && !todayLoaded);
+        || (Boolean(employeeId) && !todayLoaded)
+        || Boolean(todayError);
 
     const onModeChange = (value) => {
         if (modeAllowed(value)) {
@@ -428,6 +470,7 @@ const CheckInOutScreen = () => {
             <Group title="Today">
                 <Row
                     title={formatLongDate(now)}
+                    titleLines={2}
                     subtitle={today.hasCheckedIn ? workTypeLabel(today.workType) : null}
                     right={todayLoaded || !employeeId
                         ? <StatusText label={todayState} tone={todayState === 'Not checked in' ? 'neutral' : undefined} />
@@ -447,15 +490,21 @@ const CheckInOutScreen = () => {
                     <Row
                         icon="map-pin"
                         title={location.title}
+                        titleLines={2}
                         subtitle={location.subtitle}
+                        subtitleLines={3}
+                        meta={location.label ? <StatusText label={location.label} tone={location.tone} /> : null}
                         right={(
                             <View style={styles.locationRight}>
                                 {locationStatus === 'checking' && !officeError ? (
                                     <ActivityIndicator size="small" color={color.textTertiary} />
-                                ) : location.label ? (
-                                    <StatusText label={location.label} tone={location.tone} />
                                 ) : null}
-                                <IconButton name="refresh-cw" onPress={checkGeofenceStatus} disabled={loading} label="Refresh location" />
+                                <IconButton
+                                    name="refresh-cw"
+                                    onPress={officeLocation ? checkGeofenceStatus : fetchOfficeLocation}
+                                    disabled={loading}
+                                    label="Refresh location"
+                                />
                             </View>
                         )}
                     />
@@ -472,7 +521,7 @@ const CheckInOutScreen = () => {
 const styles = StyleSheet.create({
     locationRight: { flexDirection: 'row', alignItems: 'center', gap: 2 },
     blocked: { ...type.secondary, textAlign: 'center', marginBottom: space.sm },
-    mainButton: { height: 50 },
+    mainButton: { minHeight: 50 },
 });
 
 export default CheckInOutScreen;

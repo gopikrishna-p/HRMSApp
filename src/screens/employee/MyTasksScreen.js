@@ -2,7 +2,7 @@
 //
 // Tasks of one project (hrms.api.my_tasks). Tapping a task opens its work logs; new tasks
 // are created from the sheet behind the footer button.
-import React, { useCallback, useLayoutEffect, useMemo, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import showToast from '../../utils/Toast';
@@ -21,6 +21,7 @@ import {
     Field,
     EmptyState,
     Loading,
+    Notice,
     color,
     space,
     type,
@@ -47,8 +48,16 @@ const taskTone = (status) => {
     return { working: 'warning', 'pending review': 'purple', overdue: 'danger', open: 'info' }[s] || 'neutral';
 };
 
+// "Pending Review" -> "Pending review"
+const statusLabel = (status) => {
+    const text = String(status || '');
+    return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
+};
+
+// Status sits on the meta line with the progress bar (as on My projects), so a long status
+// such as "Pending review" never squeezes a two-line task title on a narrow phone.
 const TaskRow = ({ t, onOpen }) => {
-    const progress = Number(t.progress || 0);
+    const progress = Number(t.progress) || 0;
     const due = shortDate(t.exp_end_date);
     const subtitle = [t.priority ? `${t.priority} priority` : null, due ? `Due ${due}` : null].filter(Boolean).join('  ·  ');
 
@@ -59,13 +68,15 @@ const TaskRow = ({ t, onOpen }) => {
             subtitle={subtitle || undefined}
             meta={(
                 <View style={styles.metaLine}>
-                    <View style={styles.bar}>
-                        <ProgressBar value={progress} tone={taskTone(t.status) === 'success' ? 'success' : 'accent'} />
+                    <StatusText label={statusLabel(t.status)} tone={taskTone(t.status)} />
+                    <View style={styles.barGroup}>
+                        <View style={styles.bar}>
+                            <ProgressBar value={progress} tone={taskTone(t.status) === 'success' ? 'success' : 'accent'} />
+                        </View>
+                        <Text style={styles.percent} numberOfLines={1}>{`${Math.round(progress)}%`}</Text>
                     </View>
-                    <Text style={styles.percent}>{Math.round(progress)}%</Text>
                 </View>
             )}
-            right={<StatusText label={t.status} tone={taskTone(t.status)} />}
             onPress={() => onOpen(t)}
         />
     );
@@ -76,9 +87,12 @@ export default function MyTasksScreen() {
     const navigation = useNavigation();
     const { projectId, projectName } = route.params || {};
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState(null);
+    const [refreshing, setRefreshing] = useState(false);
     const [tasks, setTasks] = useState([]);
     const [creating, setCreating] = useState(false);
     const [saving, setSaving] = useState(false);
+    const saveBusy = useRef(false); // blocks a second Create tap before the re-render disables it
     const [title, setTitle] = useState('');
     const [description, setDescription] = useState('');
     const [priority, setPriority] = useState('Medium');
@@ -101,12 +115,17 @@ export default function MyTasksScreen() {
         try {
             setLoading(true);
             const data = await listTasks(projectId, { status: undefined, limit: 200 });
-            const normalized = (data || [])
+            // project.service returns null (it does not throw) when the request fails; that must
+            // not read as "no tasks yet"
+            if (!Array.isArray(data)) {
+                throw new Error('Check your connection and try again.');
+            }
+            const normalized = data
                 .map((t) => ({
                     id: t.name,
                     subject: t.subject || t.title || t.name,
                     status: t.status || 'Open',
-                    progress: Number(t.progress ?? t.percent_complete ?? 0),
+                    progress: Number(t.progress ?? t.percent_complete ?? 0) || 0,
                     project: t.project || projectId,
                     exp_start_date: t.exp_start_date,
                     exp_end_date: t.exp_end_date,
@@ -116,11 +135,13 @@ export default function MyTasksScreen() {
                 }))
                 .filter((t) => !!t.id);
             setTasks(normalized);
+            setLoadError(null);
         } catch (e) {
             console.log('listTasks error', e?.message || e);
-            setTasks([]);
             if (projectId) {
-                showToast({ type: 'error', text1: 'Could not load tasks', text2: e?.message });
+                setLoadError(e?.message || 'Check your connection and try again.');
+            } else {
+                setTasks([]);
             }
         } finally {
             setLoading(false);
@@ -134,6 +155,12 @@ export default function MyTasksScreen() {
         }, [load])
     );
 
+    const onRefresh = async () => {
+        setRefreshing(true);
+        await load();
+        setRefreshing(false);
+    };
+
     const openTask = (t) => {
         navigation.navigate('MyLogsScreen', {
             projectId,
@@ -146,12 +173,18 @@ export default function MyTasksScreen() {
 
     const onCreate = async () => {
         const subject = title.trim();
-        if (!subject || saving) {
+        if (!subject || saveBusy.current) {
             return;
         }
+        saveBusy.current = true;
         setSaving(true);
         try {
-            await createTask(projectId, subject, description, { priority });
+            const created = await createTask(projectId, subject, description, { priority });
+            // project.service returns null (it does not throw) when the server refuses
+            if (!created) {
+                throw new Error('The task was not saved. Check your connection and try again.');
+            }
+            showToast({ type: 'success', text1: 'Task created' });
             setTitle('');
             setDescription('');
             setPriority('Medium');
@@ -161,24 +194,35 @@ export default function MyTasksScreen() {
             console.log('createTask error', e?.message || e);
             showToast({ type: 'error', text1: 'Task not created', text2: e?.message });
         } finally {
+            saveBusy.current = false;
             setSaving(false);
         }
     };
 
-    const closeCreate = () => setCreating(false);
+    const closeCreate = () => {
+        if (!saving) {
+            setCreating(false);
+        }
+    };
 
     const renderBody = () => {
-        if (loading && tasks.length === 0) {
+        if (loading && !refreshing && tasks.length === 0 && !loadError) {
             return <Loading />;
         }
         if (!projectId) {
             return <EmptyState icon="folder" title="No project selected" message="Open a project from My projects to see its tasks." />;
         }
         if (tasks.length === 0) {
+            if (loadError) {
+                return <EmptyState icon="alert-circle" title="Could not load tasks" message={loadError} action="Try again" onAction={onRefresh} />;
+            }
             return <EmptyState icon="check-square" title="No tasks yet" message="Add the first task for this project." />;
         }
         return (
             <>
+                {loadError ? (
+                    <Notice tone="danger" icon="alert-circle" title="Could not refresh">{loadError}</Notice>
+                ) : null}
                 <StatStrip
                     style={styles.stats}
                     items={[
@@ -198,7 +242,11 @@ export default function MyTasksScreen() {
 
     return (
         <View style={styles.flex}>
-            <Screen footer={projectId ? <Button title="New task" onPress={() => setCreating(true)} /> : null}>
+            <Screen
+                refreshing={refreshing}
+                onRefresh={projectId ? onRefresh : undefined}
+                footer={projectId ? <Button title="New task" onPress={() => setCreating(true)} /> : null}
+            >
                 {renderBody()}
             </Screen>
 
@@ -207,14 +255,15 @@ export default function MyTasksScreen() {
                 title="New task"
                 subtitle={headerTitle}
                 onClose={closeCreate}
+                dismissable={!saving}
                 footer={(
                     <>
-                        <Button title="Cancel" variant="secondary" onPress={closeCreate} style={styles.flex} />
+                        <Button title="Cancel" variant="secondary" onPress={closeCreate} disabled={saving} style={styles.flex} />
                         <Button title="Create" onPress={onCreate} loading={saving} disabled={!title.trim()} style={styles.flex} />
                     </>
                 )}
             >
-                <TextField label="Title" placeholder="What needs to be done" value={title} onChangeText={setTitle} />
+                <TextField label="Title" placeholder="What needs to be done" value={title} onChangeText={setTitle} maxLength={140} />
                 <TextField
                     label="Description"
                     placeholder="Optional"
@@ -234,7 +283,10 @@ export default function MyTasksScreen() {
 const styles = StyleSheet.create({
     flex: { flex: 1 },
     stats: { marginBottom: space.xl },
-    metaLine: { width: '100%', flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: 2 },
+    // the bar and its percent move under the status together when a long status and 1.3x text
+    // leave them no room
+    metaLine: { width: '100%', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: space.md, rowGap: space.xs, marginTop: 2 },
+    barGroup: { flex: 1, minWidth: 120, flexDirection: 'row', alignItems: 'center', gap: space.md },
     bar: { flex: 1, maxWidth: 160 },
     percent: { ...type.caption, color: color.textSecondary, fontVariant: ['tabular-nums'], minWidth: 32 },
 });

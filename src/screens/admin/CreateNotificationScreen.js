@@ -2,9 +2,9 @@
 //
 // Compose a notification and send it to all employees, one department or chosen
 // employees. The server creates one notification per recipient and sends the push.
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, StatusBar } from 'react-native';
-import ApiService from '../../services/api.service';
+import ApiService, { getApiErrorMessage } from '../../services/api.service';
 import showToast from '../../utils/Toast';
 import {
     Screen,
@@ -20,6 +20,7 @@ import {
     SelectField,
     EmptyState,
     Loading,
+    Notice,
     Icon,
     color,
     space,
@@ -34,8 +35,16 @@ const TARGETS = [
 ];
 
 const CreateNotificationScreen = ({ navigation }) => {
-    const [loading, setLoading] = useState(false);
+    // true from the start, so the empty form does not flash before the spinner
+    const [loading, setLoading] = useState(true);
     const [sending, setSending] = useState(false);
+    // blocks a second Send tap that lands before the button re-renders as disabled
+    const sendingRef = useRef(false);
+    // the delayed "go back" after sending; cleared if the screen closes first, so it can never
+    // pop the screen underneath
+    const goBackTimer = useRef(null);
+    // why the recipients could not be loaded (sending needs the employee list)
+    const [loadError, setLoadError] = useState(null);
     const [departments, setDepartments] = useState([]);
     const [employees, setEmployees] = useState([]);
 
@@ -70,10 +79,12 @@ const CreateNotificationScreen = ({ navigation }) => {
 
     useEffect(() => {
         loadInitialData();
+        return () => clearTimeout(goBackTimer.current);
     }, []);
 
     const loadInitialData = async () => {
         setLoading(true);
+        setLoadError(null);
         try {
             const [deptResponse, empResponse, templatesResponse] = await Promise.all([
                 ApiService.getDepartments(),
@@ -99,7 +110,14 @@ const CreateNotificationScreen = ({ navigation }) => {
                 } else {
                     console.warn('Employee data could not be normalized:', empData);
                     setEmployees([]);
+                    setLoadError('The employee list came back in an unexpected format.');
                 }
+            } else {
+                setLoadError(getApiErrorMessage(empResponse, 'The employee list could not be loaded.'));
+            }
+
+            if (!deptResponse.success) {
+                setLoadError((prev) => prev || getApiErrorMessage(deptResponse, 'The department list could not be loaded.'));
             }
 
             if (templatesResponse.success) {
@@ -107,6 +125,7 @@ const CreateNotificationScreen = ({ navigation }) => {
             }
         } catch (error) {
             console.error('Error loading initial data:', error);
+            setLoadError('Check your connection and try again.');
             showToast({
                 type: 'error',
                 text1: 'Could not load recipients',
@@ -207,6 +226,10 @@ const CreateNotificationScreen = ({ navigation }) => {
     };
 
     const confirmSendNotification = async () => {
+        if (sendingRef.current) {
+            return;
+        }
+        sendingRef.current = true;
         setSending(true);
         try {
             let response;
@@ -259,7 +282,7 @@ const CreateNotificationScreen = ({ navigation }) => {
                 resetForm();
 
                 // Go back after a delay
-                setTimeout(() => {
+                goBackTimer.current = setTimeout(() => {
                     navigation.goBack();
                 }, 1500);
             } else {
@@ -273,6 +296,7 @@ const CreateNotificationScreen = ({ navigation }) => {
                 text2: error.message || 'Failed to send notification',
             });
         } finally {
+            sendingRef.current = false;
             setSending(false);
         }
     };
@@ -281,9 +305,10 @@ const CreateNotificationScreen = ({ navigation }) => {
         switch (targetType) {
             case 'all':
                 return 'all employees';
-            case 'department':
+            case 'department': {
                 const dept = departments.find(d => d.name === selectedDepartment);
                 return `${dept?.department_name || 'selected'} department`;
+            }
             case 'specific':
                 return `${selectedEmployees.length} selected employee${selectedEmployees.length > 1 ? 's' : ''}`;
             default:
@@ -352,6 +377,9 @@ const CreateNotificationScreen = ({ navigation }) => {
     // ------------------------------------------------------------------ presentation helpers
 
     const onConfirmSend = async () => {
+        if (sendingRef.current) {
+            return;
+        }
         await confirmSendNotification();
         setConfirmTarget(null);
     };
@@ -397,6 +425,11 @@ const CreateNotificationScreen = ({ navigation }) => {
             <Screen
                 footer={<Button title="Send notification" onPress={handleSendNotification} loading={sending} />}
             >
+                {loadError ? (
+                    <Notice tone="danger" icon="alert-circle" title="Recipients not loaded" onPress={loadInitialData}>
+                        {`${loadError}\nTap to try again.`}
+                    </Notice>
+                ) : null}
                 <TextField
                     label="Title"
                     value={title}

@@ -102,6 +102,7 @@ function ExpensePaymentsScreen({ navigation, route }) {
     const [payRef, setPayRef] = useState('');
     const [payRemarks, setPayRemarks] = useState('');
     const [saving, setSaving] = useState(false);
+    const savingRef = useRef(false); // blocks a second tap before the busy state renders
 
     const loadPayables = useCallback(async () => {
         try {
@@ -129,10 +130,13 @@ function ExpensePaymentsScreen({ navigation, route }) {
             if (data?.employee) {
                 setAccount(data);
             } else {
+                // drop the old figures rather than show amounts that may no longer be true
+                setAccount(null);
                 setAccountError(getApiErrorMessage(res, 'Please try again.'));
             }
         } catch (err) {
             if (accountFor.current === employee) {
+                setAccount(null);
                 setAccountError(err?.message || 'Please try again.');
             }
         }
@@ -252,6 +256,10 @@ function ExpensePaymentsScreen({ navigation, route }) {
         }
 
         const employee = sheet.employee;
+        if (savingRef.current) {
+            return;
+        }
+        savingRef.current = true;
         setSaving(true);
         try {
             const res = await ApiService.recordExpensePayout({
@@ -270,21 +278,25 @@ function ExpensePaymentsScreen({ navigation, route }) {
                     claims: Array.isArray(body.claims_paid) ? body.claims_paid : [],
                     stillOwed: Number(body.still_owed || 0),
                 });
+                // reload before leaving the form, so the account never shows the old amount owed
+                await Promise.all([loadAccount(employee), loadPayables()]);
                 setMode('account');
                 setShowIosDate(false);
-                loadAccount(employee);
-                loadPayables();
             } else {
                 showToast({ type: 'error', text1: 'Payment not recorded', text2: getApiErrorMessage(res, 'Please try again') });
             }
         } catch (err) {
             showToast({ type: 'error', text1: 'Payment not recorded', text2: err?.message || 'Please try again' });
         } finally {
+            savingRef.current = false;
             setSaving(false);
         }
     };
 
     const removePayout = (payout) => {
+        if (removing) {
+            return;
+        }
         const employee = sheet.employee;
         Alert.alert(
             'Remove payment',
@@ -301,8 +313,8 @@ function ExpensePaymentsScreen({ navigation, route }) {
                             if (isApiSuccess(res)) {
                                 showToast({ type: 'success', text1: 'Payment removed', text2: res?.data?.message?.message });
                                 setLastPayment(null);
-                                loadAccount(employee);
-                                loadPayables();
+                                // keep the remove buttons disabled until the list no longer shows this payment
+                                await Promise.all([loadAccount(employee), loadPayables()]);
                             } else {
                                 showToast({ type: 'error', text1: 'Not removed', text2: getApiErrorMessage(res, 'Please try again') });
                             }
@@ -485,9 +497,9 @@ function ExpensePaymentsScreen({ navigation, route }) {
 
                     {employees.length > 0 ? (
                         <Group title="Awaiting payment">
-                            {employees.map((e, i) => (
+                            {employees.map((e) => (
                                 <Row
-                                    key={`${e.employee}-${i}`}
+                                    key={e.employee}
                                     left={<Avatar name={e.employee_name || e.employee} />}
                                     title={e.employee_name || e.employee}
                                     subtitle={[

@@ -4,7 +4,7 @@
 // several records at once, and add attendance for employees with no record that day.
 // Times are sent as 'HH:MM' and applied on the record's own date by the server, so they
 // never shift with the phone's timezone. A draft with both times is submitted automatically.
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Alert, Platform } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { addDays, subDays } from 'date-fns';
@@ -32,10 +32,14 @@ import {
     color,
     space,
     type,
+    statusTone,
     formatLongDate,
 } from '../../components/ds';
 
-const STATUS_LABELS = { 'Work From Home': 'WFH' };
+const STATUS_LABELS = { 'Work From Home': 'WFH', 'On Leave': 'On leave', 'Half Day': 'Half day', 'On Site': 'On site', 'Not Marked': 'Not marked' };
+
+// non-breaking spaces inside one piece ("In 09:48 AM"), so a narrow row wraps only between pieces
+const keep = (text) => String(text).replace(/ /g, '\u00A0');
 const WORK_TYPES = [
     { value: 'Office', label: 'Office' },
     { value: 'WFH', label: 'WFH' },
@@ -61,6 +65,8 @@ const ManualCheckInOutScreen = () => {
     const [rows, setRows] = useState([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [loadError, setLoadError] = useState(null);
+    const requestId = useRef(0); // answers for an older date are ignored
 
     const [selectMode, setSelectMode] = useState(false);
     const [selected, setSelected] = useState([]);
@@ -68,6 +74,7 @@ const ManualCheckInOutScreen = () => {
     // sheets: 'edit' (one record), 'add' (no record yet), 'bulk' (selected records)
     const [dialog, setDialog] = useState(null);
     const [saving, setSaving] = useState(false);
+    const savingRef = useRef(false); // blocks a second tap before the re-render disables the button
     const [iosPicker, setIosPicker] = useState(null); // field name while an iOS inline time picker is open
 
     const ymd = useMemo(() => formatLocalDate(date), [date]);
@@ -75,17 +82,25 @@ const ManualCheckInOutScreen = () => {
 
     // ------------------------------------------------------------------ data
     const load = useCallback(async (isRefresh = false) => {
+        const id = ++requestId.current;
         isRefresh ? setRefreshing(true) : setLoading(true);
         try {
             const res = await ApiService.getAttendanceRecordsForDate({ date: ymd, include_missing: true });
+            if (id !== requestId.current) {
+                return;
+            }
             if (res.success) {
                 setRows(res.data?.message?.attendance_records || []);
+                setLoadError(null);
             } else {
                 setRows([]);
-                showToast({ type: 'error', text1: 'Could not load records', text2: res.message || 'Please try again' });
+                setLoadError(res.message || 'Please try again.');
             }
         } finally {
-            isRefresh ? setRefreshing(false) : setLoading(false);
+            if (id === requestId.current) {
+                setLoading(false);
+                setRefreshing(false);
+            }
         }
     }, [ymd]);
 
@@ -117,6 +132,14 @@ const ManualCheckInOutScreen = () => {
         return rows;
     }, [rows, tab]);
     const selectableRows = visibleRows.filter((r) => r.name && r.status !== 'On Leave');
+
+    // after a reload, drop selected records that are no longer listed, so a bulk update never touches hidden rows
+    useEffect(() => {
+        setSelected((old) => {
+            const still = old.filter((id) => visibleRows.some((r) => r.name === id && r.status !== 'On Leave'));
+            return still.length === old.length ? old : still;
+        });
+    }, [visibleRows]);
 
     const pickDate = () => {
         if (Platform.OS === 'android') {
@@ -171,6 +194,19 @@ const ManualCheckInOutScreen = () => {
         </View>
     );
 
+    const startSaving = () => {
+        if (savingRef.current) {
+            return false;
+        }
+        savingRef.current = true;
+        setSaving(true);
+        return true;
+    };
+    const endSaving = () => {
+        savingRef.current = false;
+        setSaving(false);
+    };
+
     const closeDialog = () => {
         if (!saving) {
             setDialog(null);
@@ -214,7 +250,9 @@ const ManualCheckInOutScreen = () => {
             showToast({ type: 'warning', text1: 'Check the times', text2: 'Check-out must be after check-in' });
             return;
         }
-        setSaving(true);
+        if (!startSaving()) {
+            return;
+        }
         try {
             const res = await ApiService.updateAttendanceTimes({
                 attendance_id: row.name,
@@ -229,14 +267,16 @@ const ManualCheckInOutScreen = () => {
                 showToast({ type: 'error', text1: 'Not saved', text2: res.message || 'Failed to update times' });
             }
         } finally {
-            setSaving(false);
+            endSaving();
         }
     };
 
     const submitAsIs = () => {
         const { row } = dialog;
         const doSubmit = async () => {
-            setSaving(true);
+            if (!startSaving()) {
+                return;
+            }
             try {
                 const res = await ApiService.submitAttendance({ attendance_id: row.name });
                 if (res.success) {
@@ -247,7 +287,7 @@ const ManualCheckInOutScreen = () => {
                     showToast({ type: 'error', text1: 'Not submitted', text2: res.message || 'Failed to submit' });
                 }
             } finally {
-                setSaving(false);
+                endSaving();
             }
         };
         if (!row.out_time) {
@@ -266,7 +306,9 @@ const ManualCheckInOutScreen = () => {
             showToast({ type: 'warning', text1: 'Check the times', text2: 'Check-out must be after check-in' });
             return;
         }
-        setSaving(true);
+        if (!startSaving()) {
+            return;
+        }
         try {
             const res = await ApiService.adminMarkAttendance({
                 employee: row.employee,
@@ -283,7 +325,7 @@ const ManualCheckInOutScreen = () => {
                 showToast({ type: 'error', text1: 'Not added', text2: res.message || 'Failed to add attendance' });
             }
         } finally {
-            setSaving(false);
+            endSaving();
         }
     };
 
@@ -293,7 +335,9 @@ const ManualCheckInOutScreen = () => {
             showToast({ type: 'warning', text1: 'Check the times', text2: 'Check-out must be after check-in' });
             return;
         }
-        setSaving(true);
+        if (!startSaving()) {
+            return;
+        }
         try {
             const res = await ApiService.bulkUpdateAttendanceTimes({
                 attendance_updates: selected.map((id) => ({
@@ -317,11 +361,16 @@ const ManualCheckInOutScreen = () => {
                 showToast({ type: 'error', text1: 'Not updated', text2: res.message || 'Bulk update failed' });
             }
         } finally {
-            setSaving(false);
+            endSaving();
         }
     };
 
     const allSelected = selectableRows.length > 0 && selectableRows.every((r) => selected.includes(r.name));
+    const toggleAll = () => setSelected(allSelected ? [] : selectableRows.map((r) => r.name));
+    const exitSelect = () => {
+        setSelectMode(false);
+        setSelected([]);
+    };
 
     // ------------------------------------------------------------------ rows
     const renderRow = (row) => {
@@ -333,7 +382,7 @@ const ManualCheckInOutScreen = () => {
             ? 'No check-in recorded'
             : isLeave
                 ? 'On approved leave'
-                : [`In ${checkIn || '–'}`, `Out ${checkOut || '–'}`, formatHours(row.working_hours)].filter(Boolean).join('  ·  ');
+                : [`In ${checkIn || '–'}`, `Out ${checkOut || '–'}`, formatHours(row.working_hours)].filter(Boolean).map(keep).join('  ·  ');
         const tags = !isMissing && !isLeave
             ? [row.docstatus === 0 && <Tag key="d" label="Draft" tone="warning" />, row.late_entry ? <Tag key="l" label="Late" tone="warning" /> : null].filter(Boolean)
             : [];
@@ -348,9 +397,11 @@ const ManualCheckInOutScreen = () => {
                     </View>
                 ) : <Avatar name={row.employee_name} />}
                 title={row.employee_name}
+                titleLines={2}
                 subtitle={subtitle}
+                subtitleLines={3}
                 meta={tags.length ? tags : null}
-                right={<StatusText label={STATUS_LABELS[row.status] || row.status} tone={row.status === 'Work From Home' ? 'purple' : undefined} />}
+                right={row.status ? <StatusText label={STATUS_LABELS[row.status] || row.status} tone={statusTone(row.status)} /> : null}
                 selected={checked}
                 onPress={isLeave && !selectMode ? undefined : () => openRow(row)}
                 chevron={false}
@@ -461,6 +512,9 @@ const ManualCheckInOutScreen = () => {
                     onChange={(v) => {
                         setTab(v);
                         setSelected([]);
+                        if (v === 'missing') {
+                            setSelectMode(false); // records with no attendance cannot be selected
+                        }
                     }}
                     options={[
                         { value: 'all', label: 'All', count: rows.length },
@@ -478,20 +532,25 @@ const ManualCheckInOutScreen = () => {
                     onRefresh={() => load(true)}
                     footer={selectMode ? (
                         <View style={styles.selectBar}>
-                            <Text style={styles.selectText} onPress={() => setSelected(allSelected ? [] : selectableRows.map((r) => r.name))}>
-                                {allSelected ? 'Clear selection' : `Select all ${selectableRows.length}`}
-                            </Text>
-                            <Button title="Cancel" variant="secondary" size="sm" onPress={() => { setSelectMode(false); setSelected([]); }} />
+                            <Button title="Cancel" variant="secondary" onPress={exitSelect} style={styles.flex} />
                             <Button
                                 title={`Set times${selected.length ? ` (${selected.length})` : ''}`}
-                                size="sm"
                                 disabled={!selected.length}
                                 onPress={() => setDialog({ type: 'bulk', mode: 'out', checkIn: timeOnDay(date, null, '10:00'), checkOut: timeOnDay(date, null, '18:00') })}
+                                style={styles.flex}
                             />
                         </View>
                     ) : null}
                 >
-                    {visibleRows.length === 0 ? (
+                    {loadError ? (
+                        <EmptyState
+                            icon="alert-circle"
+                            title="Could not load records"
+                            message={loadError}
+                            action="Try again"
+                            onAction={() => load(false)}
+                        />
+                    ) : visibleRows.length === 0 ? (
                         <EmptyState
                             icon={tab === 'missing' ? 'user-check' : 'check-circle'}
                             title={tab === 'pending' ? 'No missing check-outs' : tab === 'missing' ? 'Everyone is marked' : 'No records'}
@@ -499,9 +558,13 @@ const ManualCheckInOutScreen = () => {
                         />
                     ) : (
                         <Group
-                            title={tab === 'missing' ? 'Tap a name to add attendance' : 'Tap a record to edit its times'}
-                            action={canSelect && !selectMode ? 'Select' : undefined}
-                            onAction={() => setSelectMode(true)}
+                            title={selectMode
+                                ? `${selected.length} of ${selectableRows.length} selected`
+                                : tab === 'missing' ? 'Tap a name to add attendance' : 'Tap a record to edit'}
+                            action={selectMode
+                                ? (selectableRows.length ? (allSelected ? 'Clear all' : 'Select all') : undefined)
+                                : (canSelect ? 'Select' : undefined)}
+                            onAction={selectMode ? toggleAll : () => setSelectMode(true)}
                         >
                             {visibleRows.map(renderRow)}
                         </Group>
@@ -553,7 +616,6 @@ const styles = StyleSheet.create({
     checkboxOn: { backgroundColor: color.accent, borderColor: color.accent },
     checkboxOff: { opacity: 0.35 },
     selectBar: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-    selectText: { flex: 1, fontSize: 14, fontWeight: '600', color: color.accent },
     clearLink: { fontSize: 13, color: color.accent, fontWeight: '500', marginTop: -8, marginBottom: space.lg },
     sheetNote: { ...type.caption, marginBottom: space.sm },
 });

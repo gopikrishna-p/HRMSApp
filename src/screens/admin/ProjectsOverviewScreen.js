@@ -2,7 +2,7 @@
 //
 // All projects with their status and progress (hrms.api.admin_projects). Tapping a project
 // opens its tasks; the team button opens a sheet to add employees to the project.
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import showToast from '../../utils/Toast';
@@ -46,7 +46,7 @@ const shortDate = (value) => {
 const PROJECT_TONE = { Open: 'info', Completed: 'success', Cancelled: 'neutral' };
 
 const ProjectRow = ({ project, onPress, onManageMembers }) => {
-    const progress = Number(project.percent_complete || 0);
+    const progress = Number(project.percent_complete) || 0;
     const status = project.status || 'Open';
     const total = Number(project.task_count || 0);
     const done = Number(project.completed_tasks || 0);
@@ -68,10 +68,11 @@ const ProjectRow = ({ project, onPress, onManageMembers }) => {
                     <View style={styles.bar}>
                         <ProgressBar value={progress} tone={status === 'Completed' || progress >= 100 ? 'success' : 'accent'} />
                     </View>
-                    <Text style={styles.percent}>{Math.round(progress)}%</Text>
+                    <Text style={styles.percent} numberOfLines={1}>{`${Math.round(progress)}%`}</Text>
                 </View>
             )}
             right={<IconButton name="users" onPress={onManageMembers} label="Manage team" />}
+            titleLines={2}
             onPress={onPress}
         />
     );
@@ -92,18 +93,41 @@ const ProjectsOverviewScreen = () => {
     const [initialIds, setInitialIds] = useState(new Set());
     const [savingMembers, setSavingMembers] = useState(false);
     const [loadingMembers, setLoadingMembers] = useState(false);
+    const [error, setError] = useState(null);
+    const [membersError, setMembersError] = useState(null);
+
+    // Each keystroke in the search starts a request: only the latest one may write to state.
+    // The same goes for the team sheet when another project is opened before the first loads.
+    const listRequest = useRef(0);
+    const membersRequest = useRef(0);
+    const saving = useRef(false);
 
     const fetch = useCallback(async () => {
+        const requestId = ++listRequest.current;
         setLoading(true);
         try {
+            // project.service returns null (it does not throw) when the server call fails
             const data = await adminListProjects({ q });
-            setProjects(Array.isArray(data) ? data : []);
+            if (requestId !== listRequest.current) {
+                return;
+            }
+            if (Array.isArray(data)) {
+                setProjects(data);
+                setError(null);
+            } else {
+                setProjects([]);
+                setError('Could not load projects. Pull down to try again.');
+            }
         } catch (e) {
             console.warn('Projects fetch error', e);
-            setProjects([]);
-            showToast({ type: 'error', text1: 'Could not load projects', text2: e?.message });
+            if (requestId === listRequest.current) {
+                setProjects([]);
+                setError(e?.message || 'Could not load projects. Pull down to try again.');
+            }
         } finally {
-            setLoading(false);
+            if (requestId === listRequest.current) {
+                setLoading(false);
+            }
         }
     }, [q]);
 
@@ -123,13 +147,25 @@ const ProjectsOverviewScreen = () => {
     );
 
     const openMembers = async (project) => {
+        const requestId = ++membersRequest.current;
         setMemberProject(project);
         setSelectedIds(new Set());
         setInitialIds(new Set());
+        setEmployees([]);
+        setMembersError(null);
         setMemberModalVisible(true);
         setLoadingMembers(true);
         try {
             const [emp, detail] = await Promise.all([getAllEmployees(), getProjectDetail(project.name)]);
+            if (requestId !== membersRequest.current) {
+                return;
+            }
+            // null means the server call failed: without the current team, saving could not
+            // work out who to remove, so the sheet shows the error instead of an empty selection
+            if (!Array.isArray(emp) || !detail) {
+                setMembersError('Could not load the team. Close and try again.');
+                return;
+            }
             const detailMembers =
                 (detail?.project && Array.isArray(detail.project.members) && detail.project.members) ||
                 (Array.isArray(detail?.members) && detail.members) ||
@@ -138,14 +174,18 @@ const ProjectsOverviewScreen = () => {
 
             setSelectedIds(active);
             setInitialIds(new Set(active));
-            setEmployees(emp || []);
+            setEmployees(emp);
         } catch (e) {
             console.warn('Member load error', e);
-            setEmployees([]);
-            setSelectedIds(new Set());
-            showToast({ type: 'error', text1: 'Could not load employees', text2: e?.message });
+            if (requestId === membersRequest.current) {
+                setEmployees([]);
+                setSelectedIds(new Set());
+                setMembersError(e?.message || 'Could not load the team. Close and try again.');
+            }
         } finally {
-            setLoadingMembers(false);
+            if (requestId === membersRequest.current) {
+                setLoadingMembers(false);
+            }
         }
     };
 
@@ -162,7 +202,7 @@ const ProjectsOverviewScreen = () => {
     };
 
     const saveMembers = async () => {
-        if (!memberProject) {
+        if (!memberProject || saving.current || loadingMembers || membersError) {
             return;
         }
         const added = [...selectedIds].filter((id) => !initialIds.has(id));
@@ -171,20 +211,34 @@ const ProjectsOverviewScreen = () => {
             setMemberModalVisible(false);
             return;
         }
+        saving.current = true;
         setSavingMembers(true);
+        // the saved team so far: if a later step fails, a retry only sends what is still missing
+        const saved = new Set(initialIds);
         try {
+            // project.service returns null (it does not throw) when the server call fails
             if (added.length) {
-                await assignMembers(memberProject.name, added);
+                const res = await assignMembers(memberProject.name, added);
+                if (!res) {
+                    throw new Error('Could not add the new members');
+                }
+                added.forEach((id) => saved.add(id));
             }
             for (const id of removed) {
-                await removeMember(memberProject.name, id);
+                const res = await removeMember(memberProject.name, id);
+                if (!res) {
+                    throw new Error('Could not remove a member');
+                }
+                saved.delete(id);
             }
             setMemberModalVisible(false);
             showToast({ type: 'success', text1: 'Team updated', text2: memberProject.project_name || memberProject.name });
         } catch (e) {
             console.warn('Assign members error', e);
-            showToast({ type: 'error', text1: 'Team not updated', text2: e?.message });
+            showToast({ type: 'error', text1: 'Team not updated', text2: e?.message || 'Try again' });
         } finally {
+            setInitialIds(saved);
+            saving.current = false;
             setSavingMembers(false);
         }
     };
@@ -200,6 +254,8 @@ const ProjectsOverviewScreen = () => {
             <Screen refreshing={refreshing} onRefresh={onRefresh}>
                 {loading && !refreshing && projects.length === 0 ? (
                     <Loading />
+                ) : error && projects.length === 0 ? (
+                    <EmptyState icon="alert-circle" title="Could not load projects" message={error} action="Try again" onAction={fetch} />
                 ) : projects.length === 0 ? (
                     <EmptyState
                         icon="folder"
@@ -231,12 +287,14 @@ const ProjectsOverviewScreen = () => {
                 footer={(
                     <>
                         <Button title="Cancel" variant="secondary" onPress={closeMembers} disabled={savingMembers} style={styles.flex} />
-                        <Button title="Save" onPress={saveMembers} loading={savingMembers} disabled={loadingMembers} style={styles.flex} />
+                        <Button title="Save" onPress={saveMembers} loading={savingMembers} disabled={loadingMembers || Boolean(membersError)} style={styles.flex} />
                     </>
                 )}
             >
                 {loadingMembers ? (
                     <Loading />
+                ) : membersError ? (
+                    <EmptyState icon="alert-circle" title="Could not load the team" message={membersError} />
                 ) : employees.length === 0 ? (
                     <EmptyState icon="users" title="No employees" message="Only active employees with a user account can join a project." />
                 ) : (
@@ -249,6 +307,7 @@ const ProjectsOverviewScreen = () => {
                                     left={<Avatar name={item.employee_name || item.name} size={32} />}
                                     title={item.employee_name || item.name}
                                     subtitle={item.designation || undefined}
+                                    selected={isSelected}
                                     right={isSelected ? <Icon name="check" size={20} color={color.accent} /> : <View style={styles.checkSpace} />}
                                     chevron={false}
                                     onPress={() => toggleSelect(item.name)}

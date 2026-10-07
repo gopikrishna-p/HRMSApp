@@ -45,6 +45,8 @@ const LoginScreen = ({ navigation }) => {
     const [isPasswordVisible, setIsPasswordVisible] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
     const passwordRef = useRef(null);
+    // the keyboard's Go key and the button can both fire before the re-render disables them
+    const signingIn = useRef(false);
 
     useEffect(() => {
         // Check network connectivity
@@ -64,6 +66,9 @@ const LoginScreen = ({ navigation }) => {
     }, []);
 
     const handleLogin = async () => {
+        if (signingIn.current) {
+            return;
+        }
         // Check internet connection
         if (!isConnected) {
             Toast.show({
@@ -74,8 +79,9 @@ const LoginScreen = ({ navigation }) => {
             return;
         }
 
-        // Validate form
-        const validation = validateLoginForm(username, password);
+        // Validate form (on the trimmed username, which is what is sent: " name@company.com "
+        // must not fail the email check)
+        const validation = validateLoginForm(username.trim(), password);
 
         if (!validation.isValid) {
             setErrors(validation.errors);
@@ -93,6 +99,7 @@ const LoginScreen = ({ navigation }) => {
         // Clear errors
         setErrors({});
         setErrorMessage('');
+        signingIn.current = true;
         setLoading(true);
 
         try {
@@ -129,6 +136,7 @@ const LoginScreen = ({ navigation }) => {
                 visibilityTime: 4000,
             });
         } finally {
+            signingIn.current = false;
             setLoading(false);
         }
     };
@@ -333,10 +341,14 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: space.sm,
     },
+    // wraps "Contact support" under the question on a 320 dp phone with large text
     helpRow: {
         flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'center',
         alignItems: 'center',
-        gap: 6,
+        columnGap: 6,
+        rowGap: 2,
         marginBottom: space.xs,
     },
     helpText: {

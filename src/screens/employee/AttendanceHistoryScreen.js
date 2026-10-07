@@ -33,7 +33,8 @@ import {
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const STATUS_LABELS = { 'Work From Home': 'WFH', 'On Leave': 'On leave', 'Half Day': 'Half day' };
+const STATUS_LABELS = { 'Work From Home': 'WFH', 'On Leave': 'On leave', 'Half Day': 'Half day', 'On Site': 'On-site', 'Not Marked': 'Not marked' };
+const MODE_LABELS = { 'Work From Home': 'WFH', 'On Site': 'On-site' };
 
 const stripHtml = (html) => {
     if (!html) {
@@ -114,6 +115,7 @@ const AttendanceHistoryScreen = ({ navigation }) => {
     const [, setHolidays] = useState([]);
     const [, setLeaves] = useState([]);
     const [showPeriod, setShowPeriod] = useState(false);
+    const [loadError, setLoadError] = useState(null); // the last load's error, shown when there is nothing else to show
 
     // Date picker states - Default to 1st of current month to today
     const getFirstDayOfCurrentMonth = () => {
@@ -157,9 +159,12 @@ const AttendanceHistoryScreen = ({ navigation }) => {
             setDateRange(result.date_range || {});
             setHolidays(result.holidays || []);
             setLeaves(result.leaves || []);
+            setLoadError(null);
         } catch (error) {
             console.error('Error loading attendance history:', error);
-            showToast({ type: 'error', text1: 'Could not load attendance', text2: 'Pull down to try again.' });
+            // the last period that loaded stays on screen (its dates are in the period field)
+            setLoadError(error?.message || 'Could not load attendance');
+            showToast({ type: 'error', text1: 'Could not load attendance', text2: error?.message || 'Pull down to try again.' });
         } finally {
             setLoading(false);
         }
@@ -260,7 +265,7 @@ const AttendanceHistoryScreen = ({ navigation }) => {
 
         const tags = [
             item.type === 'attendance' && item.late_entry ? <Tag key="late" label="Late" tone="warning" /> : null,
-            showWorkMode ? <Tag key="mode" label={item.work_mode === 'Work From Home' ? 'WFH' : item.work_mode} /> : null,
+            showWorkMode ? <Tag key="mode" label={MODE_LABELS[item.work_mode] || item.work_mode} /> : null,
         ].filter(Boolean);
 
         return (
@@ -268,6 +273,7 @@ const AttendanceHistoryScreen = ({ navigation }) => {
                 key={item.name || `${item.attendance_date}_${index}`}
                 left={<DayBlock value={item.attendance_date} muted={item.type === 'holiday'} />}
                 title={title}
+                titleLines={2}
                 subtitle={subtitle}
                 meta={tags.length ? tags : null}
                 right={<StatusText label={STATUS_LABELS[item.status] || item.status} tone={statusTone(item.status)} />}
@@ -276,6 +282,8 @@ const AttendanceHistoryScreen = ({ navigation }) => {
     };
 
     const renderSummary = () => {
+        // null when no working day has passed yet in the period (nothing to count)
+        const rateKnown = summaryStats.attendance_percentage !== null && summaryStats.attendance_percentage !== undefined;
         const rate = Number(summaryStats.attendance_percentage) || 0;
         const absent = summaryStats.absent_days || 0;
         const attended = Number(summaryStats.attended_days) || 0;
@@ -288,7 +296,8 @@ const AttendanceHistoryScreen = ({ navigation }) => {
                 <StatStrip
                     style={styles.flatStrip}
                     items={[
-                        { label: 'Present', value: summaryStats.present_days || 0 },
+                        // on-site days count as present, as on the dashboard
+                        { label: 'Present', value: (summaryStats.present_days || 0) + (summaryStats.onsite_days || 0) },
                         { label: 'WFH', value: summaryStats.wfh_days || 0 },
                         { label: 'Leave', value: summaryStats.leave_days || 0 },
                         { label: 'Holiday', value: summaryStats.holiday_days || 0 },
@@ -298,9 +307,9 @@ const AttendanceHistoryScreen = ({ navigation }) => {
                 <View style={styles.rate}>
                     <View style={styles.rateHeader}>
                         <Text style={type.secondary}>Attendance rate</Text>
-                        <Text style={styles.rateValue}>{`${rate}%`}</Text>
+                        <Text style={styles.rateValue}>{rateKnown ? `${rate}%` : '–'}</Text>
                     </View>
-                    <ProgressBar value={rate} tone={rate >= 80 ? 'success' : rate >= 60 ? 'warning' : 'danger'} />
+                    <ProgressBar value={rate} tone={!rateKnown ? 'neutral' : rate >= 80 ? 'success' : rate >= 60 ? 'warning' : 'danger'} />
                 </View>
             </Group>
         );
@@ -318,7 +327,15 @@ const AttendanceHistoryScreen = ({ navigation }) => {
             ) : (
                 <Screen refreshing={refreshing} onRefresh={onRefresh}>
                     {Object.keys(summaryStats).length > 0 ? renderSummary() : null}
-                    {attendanceData.length === 0 ? (
+                    {attendanceData.length === 0 && loadError ? (
+                        <EmptyState
+                            icon="alert-circle"
+                            title="Could not load attendance"
+                            message={loadError}
+                            action="Try again"
+                            onAction={loadAttendanceHistory}
+                        />
+                    ) : attendanceData.length === 0 ? (
                         <EmptyState icon="calendar" title="No records" message="Nothing recorded for this period." />
                     ) : (
                         months.map((month) => (
@@ -380,7 +397,7 @@ const styles = StyleSheet.create({
     rate: { paddingHorizontal: space.lg, paddingVertical: space.md },
     rateHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: space.sm, marginBottom: 6 },
     rateValue: { fontSize: 15, fontWeight: '600', color: color.text, fontVariant: ['tabular-nums'] },
-    day: { width: 36, alignItems: 'center', marginRight: space.md },
+    day: { minWidth: 36, alignItems: 'center', marginRight: space.md },
     dayNumber: { fontSize: 17, fontWeight: '600', color: color.text, fontVariant: ['tabular-nums'] },
     dayName: { fontSize: 12, color: color.textTertiary, marginTop: 1 },
     muted: { color: color.textTertiary },

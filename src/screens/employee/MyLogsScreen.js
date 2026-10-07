@@ -2,7 +2,7 @@
 //
 // The signed-in employee's work logs (timesheet entries) on a task (hrms.api.my_task_logs).
 // The task's progress can be set here; new entries are added from the footer button.
-import React, { useState, useCallback, useLayoutEffect } from 'react';
+import React, { useState, useCallback, useLayoutEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Alert } from 'react-native';
 import { useFocusEffect, useRoute, useNavigation } from '@react-navigation/native';
 import showToast from '../../utils/Toast';
@@ -20,6 +20,7 @@ import {
     TextField,
     EmptyState,
     Loading,
+    Notice,
     color,
     space,
     type,
@@ -71,15 +72,18 @@ const ProjectLogsScreen = () => {
     const { projectId, projectName, taskId, taskSubject, taskProgress: initialProgress } = route.params || {};
     const [logs, setLogs] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState(null);
     const [refreshing, setRefreshing] = useState(false);
 
     const [startVisible, setStartVisible] = useState(false);
     const [starting, setStarting] = useState(false);
+    const startBusy = useRef(false); // blocks a second Save tap before the re-render disables it
     const [message, setMessage] = useState('');
     const [hours, setHours] = useState('1');
 
     const [taskProgress, setTaskProgress] = useState(initialProgress || 0);
     const [updatingProgress, setUpdatingProgress] = useState(false);
+    const progressBusy = useRef(false);
 
     const headerTitle = taskSubject || projectName;
 
@@ -90,17 +94,23 @@ const ProjectLogsScreen = () => {
     }, [navigation, headerTitle]);
 
     const onUpdateProgress = async (newProgress) => {
-        if (!taskId) {
+        if (!taskId || progressBusy.current) {
             return;
         }
+        progressBusy.current = true;
         setUpdatingProgress(true);
         try {
-            await updateTask(taskId, { progress: newProgress });
+            const result = await updateTask(taskId, { progress: newProgress });
+            // project.service returns null (it does not throw) when the server refuses
+            if (!result) {
+                throw new Error('Check your connection and try again.');
+            }
             setTaskProgress(newProgress);
         } catch (e) {
             console.warn('Update progress error', e);
             showToast({ type: 'error', text1: 'Progress not updated', text2: e?.message });
         } finally {
+            progressBusy.current = false;
             setUpdatingProgress(false);
         }
     };
@@ -109,12 +119,19 @@ const ProjectLogsScreen = () => {
         setLoading(true);
         try {
             const data = await listProjectLogs(projectId, { task: taskId });
-            setLogs(Array.isArray(data) ? data : []);
+            // project.service returns null (it does not throw) when the request fails; that must
+            // not read as "no logs yet"
+            if (!Array.isArray(data)) {
+                throw new Error('Check your connection and try again.');
+            }
+            setLogs(data);
+            setLoadError(null);
         } catch (e) {
             console.warn('Logs fetch error', e);
-            setLogs([]);
             if (projectId) {
-                showToast({ type: 'error', text1: 'Could not load logs', text2: e?.message });
+                setLoadError(e?.message || 'Check your connection and try again.');
+            } else {
+                setLogs([]);
             }
         } finally {
             setLoading(false);
@@ -137,18 +154,43 @@ const ProjectLogsScreen = () => {
     };
 
     const onStartSubmit = async () => {
+        if (startBusy.current) {
+            return;
+        }
+        // an empty field still means the default hour; anything typed must be a real number of
+        // hours ("0" or "abc" used to become 1 h silently). A decimal comma ("1,5", from a
+        // locale's decimal-pad) means 1.5 h, not the 1 h parseFloat would read.
+        const typed = String(hours || '').trim().replace(',', '.');
+        const hoursValue = typed ? (/^\d+(\.\d+)?$/.test(typed) ? parseFloat(typed) : NaN) : 1;
+        if (!(hoursValue > 0)) {
+            showToast({ type: 'error', text1: 'Check the hours', text2: 'Enter the hours in digits, e.g. 2.5' });
+            return;
+        }
+        if (hoursValue > 24) {
+            showToast({ type: 'error', text1: 'Check the hours', text2: 'One log can be at most 24 hours' });
+            return;
+        }
+        if (!message.trim()) {
+            showToast({ type: 'error', text1: 'Add a description', text2: 'Say what you worked on' });
+            return;
+        }
+        startBusy.current = true;
         setStarting(true);
         try {
-            const hoursValue = parseFloat(hours) || 1;
-            await startLog({ project: projectId, task: taskId, message, hours: hoursValue });
+            const result = await startLog({ project: projectId, task: taskId, message, hours: hoursValue });
+            // project.service returns null (it does not throw) when the server refuses
+            if (!result) {
+                throw new Error('Check your connection and try again.');
+            }
             setStartVisible(false);
             setMessage('');
             setHours('1');
-            fetch();
+            await fetch();
         } catch (e) {
             console.warn('Start log error', e);
             showToast({ type: 'error', text1: 'Log not saved', text2: e?.message });
         } finally {
+            startBusy.current = false;
             setStarting(false);
         }
     };
@@ -162,7 +204,7 @@ const ProjectLogsScreen = () => {
                 onPress: async () => {
                     try {
                         await stopLog({ log_name: log.name, message: '' });
-                        fetch();
+                        await fetch();
                     } catch (e) {
                         console.warn('Stop log error', e);
                         showToast({ type: 'error', text1: 'Log not stopped', text2: e?.message });
@@ -172,14 +214,21 @@ const ProjectLogsScreen = () => {
         ]);
     };
 
-    const closeStart = () => setStartVisible(false);
+    const closeStart = () => {
+        if (!starting) {
+            setStartVisible(false);
+        }
+    };
 
     const renderLogs = () => {
-        if (loading && !refreshing && logs.length === 0) {
+        if (loading && !refreshing && logs.length === 0 && !loadError) {
             return <Loading />;
         }
         if (!projectId) {
             return <EmptyState icon="clock" title="No task selected" message="Open a task from My projects to see its work logs." />;
+        }
+        if (logs.length === 0 && loadError) {
+            return <EmptyState icon="alert-circle" title="Could not load logs" message={loadError} action="Try again" onAction={onRefresh} />;
         }
         if (logs.length === 0) {
             return (
@@ -191,16 +240,21 @@ const ProjectLogsScreen = () => {
             );
         }
         return (
-            <Group title={`${logs.length} ${logs.length === 1 ? 'log' : 'logs'}`}>
-                {logs.map((item) => (
-                    <LogRow
-                        key={item.log_id || `${item.timesheet}_${item.from_time}`}
-                        log={item}
-                        showTask={!taskId}
-                        onStop={item.status === 'In Progress' ? () => onStop(item) : undefined}
-                    />
-                ))}
-            </Group>
+            <>
+                {loadError ? (
+                    <Notice tone="danger" icon="alert-circle" title="Could not refresh">{loadError}</Notice>
+                ) : null}
+                <Group title={`${logs.length} ${logs.length === 1 ? 'log' : 'logs'}`}>
+                    {logs.map((item) => (
+                        <LogRow
+                            key={item.log_id || `${item.timesheet}_${item.from_time}`}
+                            log={item}
+                            showTask={!taskId}
+                            onStop={item.status === 'In Progress' ? () => onStop(item) : undefined}
+                        />
+                    ))}
+                </Group>
+            </>
         );
     };
 
@@ -222,7 +276,7 @@ const ProjectLogsScreen = () => {
                         <View style={styles.progressBlock}>
                             <View style={styles.progressHeader}>
                                 <Text style={type.bodyStrong}>Progress</Text>
-                                <Text style={styles.progressValue}>{Math.round(taskProgress)}%</Text>
+                                <Text style={styles.progressValue}>{`${Math.round(Number(taskProgress) || 0)}%`}</Text>
                             </View>
                             <ProgressBar value={taskProgress} tone={taskProgress >= 100 ? 'success' : 'accent'} />
                             <Segmented

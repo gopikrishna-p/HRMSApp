@@ -21,6 +21,7 @@ import {
     StatusText,
     EmptyState,
     Loading,
+    Notice,
     Icon,
     color,
     space,
@@ -87,7 +88,11 @@ const LeaveApplicationScreen = ({ navigation }) => {
     // State for form
     const [loading, setLoading] = useState(true); // data is fetched on mount
     const [refreshing, setRefreshing] = useState(false);
+    const [submitting, setSubmitting] = useState(false); // submit / cancel in flight
+    const submittingRef = useRef(false); // blocks a second tap before the re-render disables the button
     const [employeeId, setEmployeeId] = useState('');
+    const [loadError, setLoadError] = useState(null); // employee record could not be loaded
+    const [listError, setListError] = useState(null); // applications could not be loaded
 
     // Leave application form
     const [selectedLeaveType, setSelectedLeaveType] = useState('');
@@ -133,8 +138,11 @@ const LeaveApplicationScreen = ({ navigation }) => {
         }
     }, [halfDayDate, fromDate, toDate]);
 
-    const loadInitialData = async () => {
-        setLoading(true);
+    // `quiet`: a pull-to-refresh retry, which keeps its own spinner instead of the full-screen one
+    const loadInitialData = async (quiet = false) => {
+        if (!quiet) {
+            setLoading(true);
+        }
         try {
             // Get employee ID
             const empResponse = await apiService.getCurrentEmployee();
@@ -142,6 +150,7 @@ const LeaveApplicationScreen = ({ navigation }) => {
             if (empData && empData.name) {
                 const empId = empData.name;
                 setEmployeeId(empId);
+                setLoadError(null);
 
                 // Load leave types, balances, and approvers in parallel
                 await Promise.all([
@@ -152,11 +161,11 @@ const LeaveApplicationScreen = ({ navigation }) => {
                 ]);
             } else {
                 console.error('Failed to get employee info:', empResponse);
-                showToast({ type: 'error', text1: 'Could not load your employee record', text2: 'Pull down to try again' });
+                setLoadError(getApiErrorMessage(empResponse, 'Pull down to try again.'));
             }
         } catch (error) {
             console.error('Error loading initial data:', error);
-            showToast({ type: 'error', text1: 'Could not load leave data', text2: error.message });
+            setLoadError(error.message || 'Pull down to try again.');
         } finally {
             setLoading(false);
         }
@@ -205,16 +214,22 @@ const LeaveApplicationScreen = ({ navigation }) => {
         }
     };
 
+    // A failed load keeps the applications already on screen and says so (listError).
     const loadMyLeaves = async (empId) => {
         try {
             const response = await apiService.getMyLeaves({ employee: empId, limit: 50 });
+            if (!isApiSuccess(response)) {
+                setListError(getApiErrorMessage(response, 'Pull down to try again.'));
+                return;
+            }
             const leavesData = extractFrappeData(response, {});
             // Handle different response structures - applications might be direct or nested
             const applications = leavesData.applications || (Array.isArray(leavesData) ? leavesData : []);
             setMyLeaves(Array.isArray(applications) ? applications : []);
+            setListError(null);
         } catch (error) {
             console.error('Error loading my leaves:', error);
-            setMyLeaves([]);
+            setListError(error.message || 'Pull down to try again.');
         }
     };
 
@@ -226,6 +241,9 @@ const LeaveApplicationScreen = ({ navigation }) => {
                     loadLeaveBalances(employeeId),
                     loadMyLeaves(employeeId)
                 ]);
+            } else {
+                // the employee record did not load: try the whole first load again
+                await loadInitialData(true);
             }
         } catch (error) {
             console.error('Error refreshing:', error);
@@ -235,6 +253,9 @@ const LeaveApplicationScreen = ({ navigation }) => {
     };
 
     const handleSubmitLeave = async () => {
+        if (submittingRef.current) {
+            return;
+        }
         // Validation
         if (!selectedLeaveType) {
             showToast({ type: 'error', text1: 'Select a leave type' });
@@ -251,9 +272,15 @@ const LeaveApplicationScreen = ({ navigation }) => {
             return;
         }
 
+        if (!employeeId) {
+            showToast({ type: 'error', text1: 'Your employee record is not loaded', text2: 'Pull down to try again' });
+            return;
+        }
+
         // No client-side balance check: the server counts working days, holidays and
         // half days correctly and returns "Insufficient leave balance" when needed.
-        setLoading(true);
+        submittingRef.current = true;
+        setSubmitting(true);
         try {
             const leaveData = {
                 employee: employeeId,
@@ -283,12 +310,11 @@ const LeaveApplicationScreen = ({ navigation }) => {
                 setIsHalfDay(false);
                 setFromDate(new Date());
                 setToDate(new Date());
-                // Refresh data
-                loadLeaveBalances(employeeId);
-                loadMyLeaves(employeeId);
                 // Back to the list (closes the form sheet)
                 setActiveTab('history');
                 setPicker(null);
+                // Refresh data
+                await Promise.all([loadLeaveBalances(employeeId), loadMyLeaves(employeeId)]);
             } else {
                 showToast({ type: 'error', text1: 'Not submitted', text2: getApiErrorMessage(response, 'Failed to submit leave application') });
             }
@@ -296,43 +322,46 @@ const LeaveApplicationScreen = ({ navigation }) => {
             console.error('Error submitting leave:', error);
             showToast({ type: 'error', text1: 'Not submitted', text2: error.message || 'Failed to submit leave application' });
         } finally {
-            setLoading(false);
+            submittingRef.current = false;
+            setSubmitting(false);
         }
     };
 
-    const handleCancelLeave = async (applicationId) => {
+    const cancelLeave = async (applicationId) => {
+        if (submittingRef.current) {
+            return;
+        }
+        submittingRef.current = true;
+        setSubmitting(true);
+        try {
+            const response = await apiService.cancelMyLeave(
+                applicationId,
+                'Cancelled by employee'
+            );
+
+            if (isApiSuccess(response)) {
+                showToast({ type: 'success', text1: 'Leave cancelled' });
+                setSelected(null);
+                await Promise.all([loadLeaveBalances(employeeId), loadMyLeaves(employeeId)]);
+            } else {
+                showToast({ type: 'error', text1: 'Not cancelled', text2: getApiErrorMessage(response, 'Failed to cancel leave') });
+            }
+        } catch (error) {
+            console.error('Error cancelling leave:', error);
+            showToast({ type: 'error', text1: 'Not cancelled', text2: error.message || 'Failed to cancel leave' });
+        } finally {
+            submittingRef.current = false;
+            setSubmitting(false);
+        }
+    };
+
+    const handleCancelLeave = (applicationId) => {
         Alert.alert(
             'Cancel leave',
             'Cancel this leave application?',
             [
                 { text: 'Keep', style: 'cancel' },
-                {
-                    text: 'Cancel leave',
-                    style: 'destructive',
-                    onPress: async () => {
-                        setLoading(true);
-                        try {
-                            const response = await apiService.cancelMyLeave(
-                                applicationId,
-                                'Cancelled by employee'
-                            );
-
-                            if (response.success) {
-                                showToast({ type: 'success', text1: 'Leave cancelled' });
-                                setSelected(null);
-                                loadLeaveBalances(employeeId);
-                                loadMyLeaves(employeeId);
-                            } else {
-                                showToast({ type: 'error', text1: 'Not cancelled', text2: response.message || 'Failed to cancel leave' });
-                            }
-                        } catch (error) {
-                            console.error('Error cancelling leave:', error);
-                            showToast({ type: 'error', text1: 'Not cancelled', text2: 'Failed to cancel leave' });
-                        } finally {
-                            setLoading(false);
-                        }
-                    }
-                }
+                { text: 'Cancel leave', style: 'destructive', onPress: () => cancelLeave(applicationId) },
             ]
         );
     };
@@ -344,14 +373,14 @@ const LeaveApplicationScreen = ({ navigation }) => {
     };
 
     const closeForm = () => {
-        if (!loading) {
+        if (!submitting) {
             setActiveTab('history');
             setPicker(null);
         }
     };
 
     const closeDetail = () => {
-        if (!loading) {
+        if (!submitting) {
             setSelected(null);
         }
     };
@@ -379,7 +408,71 @@ const LeaveApplicationScreen = ({ navigation }) => {
     const filterLabel = STATUS_FILTERS.find((f) => f.value === historyStatusFilter)?.label || '';
 
     // ------------------------------------------------------------------ list
-    const renderList = () => (
+    const renderList = () => {
+        if (!employeeId && loadError) {
+            return (
+                <EmptyState
+                    icon="alert-circle"
+                    title="Could not load your employee record"
+                    message={loadError}
+                    action="Try again"
+                    onAction={() => loadInitialData()}
+                />
+            );
+        }
+        return renderLeaves();
+    };
+
+    const renderApplications = () => {
+        if (listError && myLeaves.length === 0) {
+            return (
+                <EmptyState
+                    icon="alert-circle"
+                    title="Could not load your applications"
+                    message={listError}
+                    action="Try again"
+                    onAction={onRefresh}
+                />
+            );
+        }
+        return (
+            <>
+                {/* a failed refresh keeps the last list on screen */}
+                {listError ? (
+                    <Notice tone="warning" icon="alert-circle" title="Could not refresh the list">{listError}</Notice>
+                ) : null}
+                {filteredLeaves.length === 0 ? (
+                    <EmptyState
+                        icon="calendar"
+                        title={historyStatusFilter === 'all' ? 'No leave applications' : `No ${filterLabel.toLowerCase()} applications`}
+                        message={historyStatusFilter === 'all' ? 'Applications you submit appear here.' : undefined}
+                    />
+                ) : (
+                    <Group>
+                        {filteredLeaves.map((leave) => {
+                            const facts = [
+                                leave.leave_type,
+                                leave.total_leave_days !== undefined && leave.total_leave_days !== null ? daysText(leave.total_leave_days) : null,
+                                leave.half_day ? 'Half day' : null,
+                            ].filter(Boolean).join('  ·  ');
+                            return (
+                                <Row
+                                    key={leave.name}
+                                    title={rangeLabel(leave.from_date, leave.to_date)}
+                                    titleLines={2}
+                                    subtitle={leave.description ? `${facts}\n${leave.description}` : facts}
+                                    right={<StatusText label={statusLabel(leave.status)} />}
+                                    onPress={() => setSelected(leave)}
+                                />
+                            );
+                        })}
+                    </Group>
+                )}
+            </>
+        );
+    };
+
+    const renderLeaves = () => (
         <>
             {balanceTypes.length > 0 ? (
                 <Group title="Balance">
@@ -407,32 +500,7 @@ const LeaveApplicationScreen = ({ navigation }) => {
                 style={styles.filter}
             />
 
-            {filteredLeaves.length === 0 ? (
-                <EmptyState
-                    icon="calendar"
-                    title={historyStatusFilter === 'all' ? 'No leave applications' : `No ${filterLabel.toLowerCase()} applications`}
-                    message={historyStatusFilter === 'all' ? 'Applications you submit appear here.' : undefined}
-                />
-            ) : (
-                <Group>
-                    {filteredLeaves.map((leave) => {
-                        const facts = [
-                            leave.leave_type,
-                            leave.total_leave_days !== undefined && leave.total_leave_days !== null ? daysText(leave.total_leave_days) : null,
-                            leave.half_day ? 'Half day' : null,
-                        ].filter(Boolean).join('  ·  ');
-                        return (
-                            <Row
-                                key={leave.name}
-                                title={rangeLabel(leave.from_date, leave.to_date)}
-                                subtitle={leave.description ? `${facts}\n${leave.description}` : facts}
-                                right={<StatusText label={statusLabel(leave.status)} />}
-                                onPress={() => setSelected(leave)}
-                            />
-                        );
-                    })}
-                </Group>
-            )}
+            {renderApplications()}
         </>
     );
 
@@ -629,7 +697,7 @@ const LeaveApplicationScreen = ({ navigation }) => {
             <Screen
                 refreshing={refreshing}
                 onRefresh={onRefresh}
-                footer={<Button title="Apply for leave" onPress={openForm} disabled={busy} />}
+                footer={<Button title="Apply for leave" onPress={openForm} disabled={busy || !employeeId} />}
             >
                 {busy ? <Loading /> : renderList()}
             </Screen>
@@ -638,11 +706,11 @@ const LeaveApplicationScreen = ({ navigation }) => {
                 visible={activeTab === 'apply'}
                 title="Apply for leave"
                 onClose={closeForm}
-                dismissable={!loading}
+                dismissable={!submitting}
                 footer={(
                     <>
-                        <Button title="Cancel" variant="secondary" onPress={closeForm} disabled={loading} style={styles.flex} />
-                        <Button title="Submit" onPress={handleSubmitLeave} loading={loading} style={styles.flex} />
+                        <Button title="Cancel" variant="secondary" onPress={closeForm} disabled={submitting} style={styles.flex} />
+                        <Button title="Submit" onPress={handleSubmitLeave} loading={submitting} style={styles.flex} />
                     </>
                 )}
             >
@@ -654,11 +722,11 @@ const LeaveApplicationScreen = ({ navigation }) => {
                 title={detail?.leave_type}
                 subtitle={detail?.name}
                 onClose={closeDetail}
-                dismissable={!loading}
+                dismissable={!submitting}
                 footer={detail?.status === 'Open' ? (
                     <>
-                        <Button title="Close" variant="secondary" onPress={closeDetail} disabled={loading} style={styles.flex} />
-                        <Button title="Cancel leave" variant="danger" onPress={() => handleCancelLeave(detail.name)} loading={loading} style={styles.flex} />
+                        <Button title="Close" variant="secondary" onPress={closeDetail} disabled={submitting} style={styles.flex} />
+                        <Button title="Cancel leave" variant="danger" onPress={() => handleCancelLeave(detail.name)} loading={submitting} style={styles.flex} />
                     </>
                 ) : (
                     <Button title="Close" variant="secondary" onPress={closeDetail} style={styles.flex} />
@@ -678,8 +746,9 @@ const styles = StyleSheet.create({
 
     selectOpen: { marginBottom: space.sm },
     inlineList: { marginBottom: space.lg },
-    dateRow: { flexDirection: 'row', gap: space.md, marginBottom: space.lg },
-    dateField: { flex: 1, marginBottom: 0 },
+    // From / To side by side; stacked when two dates do not fit (320 dp phones, large text)
+    dateRow: { flexDirection: 'row', flexWrap: 'wrap', columnGap: space.md },
+    dateField: { flexGrow: 1, flexBasis: 150 },
     toggleGroup: { marginBottom: space.lg },
     shortMultiline: { minHeight: 72 },
 });

@@ -3,7 +3,7 @@
 // The signed-in employee's profile: contact, personal, employment, address and bank details.
 // Editing is gated by HR: the employee requests edit access, and once it is granted edits a
 // fixed set of fields on a full-screen form. The admin app opens this screen too (My Profile).
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     View,
     Text,
@@ -30,11 +30,13 @@ import {
     IconButton,
     TextField,
     Loading,
+    EmptyState,
     color,
     space,
     type,
     formatShortDate,
     ModalTopInset,
+    KeyboardSafeView,
 } from '../../components/ds';
 
 const STATUS_TONE = { Active: 'success', Inactive: 'neutral', Suspended: 'warning', Left: 'danger' };
@@ -90,6 +92,9 @@ const ProfileScreen = ({ navigation }) => {
     const [editForm, setEditForm] = useState({});
     const [submitting, setSubmitting] = useState(false);
     const [savingEdit, setSavingEdit] = useState(false);
+    const busyRef = useRef(false); // blocks a second tap before the re-render disables the button
+    const [loadError, setLoadError] = useState(null); // shown when there is no profile on screen yet
+    const [loggingOut, setLoggingOut] = useState(false);
 
     useEffect(() => {
         fetchProfileData();
@@ -101,6 +106,7 @@ const ProfileScreen = ({ navigation }) => {
             setLoading(true);
             if (!employee?.name) {
                 console.log('No employee ID found');
+                setLoadError('Your account is not linked to an employee record. Ask HR to link it.');
                 setLoading(false);
                 return;
             }
@@ -110,6 +116,7 @@ const ProfileScreen = ({ navigation }) => {
             if (!isApiSuccess(response)) {
                 const errorMsg = getApiErrorMessage(response, 'Failed to load profile data');
                 console.error('Profile fetch failed:', errorMsg);
+                setLoadError(errorMsg);
                 showToast({
                     type: 'error',
                     text1: 'Could not load your profile',
@@ -128,17 +135,21 @@ const ProfileScreen = ({ navigation }) => {
                 setCanEdit(data.can_edit || false);
                 setPendingRequest(data.pending_edit_request ? true : false);
                 setEditForm(data);
+                setLoadError(null);
             } else if (profileInfo && Object.keys(profileInfo).length > 0) {
                 // Direct profile data format
                 setProfileData(profileInfo);
                 setEditForm(profileInfo);
+                setLoadError(null);
                 // Also check edit permission separately
                 checkEditPermission();
             } else {
                 console.warn('Empty or invalid profile data');
+                setLoadError('The server sent an empty profile.');
             }
         } catch (error) {
             console.error('Profile fetch error:', error);
+            setLoadError(error.message || 'Check your connection and try again.');
             showToast({
                 type: 'error',
                 text1: 'Could not load your profile',
@@ -162,11 +173,15 @@ const ProfileScreen = ({ navigation }) => {
     };
 
     const handleRequestEditAccess = async () => {
+        if (busyRef.current) {
+            return;
+        }
         if (!requestReason.trim()) {
             showToast({ type: 'warning', text1: 'Add a reason', text2: 'Tell HR what you need to change.' });
             return;
         }
 
+        busyRef.current = true;
         try {
             setSubmitting(true);
             const response = await ApiService.post('/api/method/hrms.api.request_profile_edit', {
@@ -187,18 +202,23 @@ const ProfileScreen = ({ navigation }) => {
                 showToast({
                     type: 'error',
                     text1: 'Request not sent',
-                    text2: response.data?.message?.message || 'Please try again.',
+                    // the API wrapper puts the server's text in response.message (HTTP and status errors)
+                    text2: response.message || response.data?.message?.message || 'Please try again.',
                 });
             }
         } catch (error) {
             console.error('Error requesting edit access:', error);
             showToast({ type: 'error', text1: 'Request not sent', text2: 'Check your connection and try again.' });
         } finally {
+            busyRef.current = false;
             setSubmitting(false);
         }
     };
 
     const handleSaveProfile = async () => {
+        if (busyRef.current) {
+            return;
+        }
         // passport dates go into Date fields, so they must be YYYY-MM-DD (or empty)
         const badDate = [['valid_upto', 'Valid until'], ['date_of_issue', 'Issue date']]
             .find(([field]) => editForm[field] && !/^\d{4}-\d{2}-\d{2}$/.test(String(editForm[field]).trim()));
@@ -206,6 +226,7 @@ const ProfileScreen = ({ navigation }) => {
             showToast({ type: 'warning', text1: `${badDate[1]}: use YYYY-MM-DD`, text2: 'For example 2030-04-15' });
             return;
         }
+        busyRef.current = true;
         try {
             setSavingEdit(true);
             const response = await ApiService.post('/api/method/hrms.api.update_employee_profile', {
@@ -219,18 +240,20 @@ const ProfileScreen = ({ navigation }) => {
                     text1: 'Profile updated',
                 });
                 setEditModalVisible(false);
-                fetchProfileData();
+                await fetchProfileData();
             } else {
                 showToast({
                     type: 'error',
                     text1: 'Profile not saved',
-                    text2: response.data?.message?.message || 'Please try again.',
+                    // the API wrapper puts the server's text in response.message (HTTP and status errors)
+                    text2: response.message || response.data?.message?.message || 'Please try again.',
                 });
             }
         } catch (error) {
             console.error('Error updating profile:', error);
             showToast({ type: 'error', text1: 'Profile not saved', text2: 'Check your connection and try again.' });
         } finally {
+            busyRef.current = false;
             setSavingEdit(false);
         }
     };
@@ -242,7 +265,15 @@ const ProfileScreen = ({ navigation }) => {
     };
 
     const handleLogout = async () => {
-        await logout();
+        if (loggingOut) {
+            return;
+        }
+        setLoggingOut(true);
+        try {
+            await logout();
+        } finally {
+            setLoggingOut(false);
+        }
     };
 
     const openEdit = () => {
@@ -250,11 +281,36 @@ const ProfileScreen = ({ navigation }) => {
         setEditModalVisible(true);
     };
 
+    // the edit form stays open while a save is in flight
+    const closeEdit = () => {
+        if (!busyRef.current) {
+            setEditModalVisible(false);
+        }
+    };
+
     // Full-screen spinner for the first load only; refreshes keep the profile on screen.
     if (loading && !profileData.name) {
         return (
             <View style={styles.container}>
                 <Loading />
+            </View>
+        );
+    }
+
+    // First load failed: say why, offer a retry, and keep Log out reachable.
+    if (!profileData.name && loadError) {
+        return (
+            <View style={styles.container}>
+                <Screen refreshing={refreshing} onRefresh={onRefresh}>
+                    <EmptyState
+                        icon="alert-circle"
+                        title="Could not load your profile"
+                        message={loadError}
+                        action="Try again"
+                        onAction={fetchProfileData}
+                    />
+                    <Button title="Log out" variant="danger" onPress={handleLogout} loading={loggingOut} full />
+                </Screen>
             </View>
         );
     }
@@ -305,11 +361,13 @@ const ProfileScreen = ({ navigation }) => {
             visible={editModalVisible}
             animationType="slide"
             statusBarTranslucent
-            onRequestClose={() => setEditModalVisible(false)}
+            onRequestClose={closeEdit}
         >
             <SafeAreaView style={styles.page}>
                 <ModalTopInset />
-                <PageHeader title="Edit profile" onClose={() => setEditModalVisible(false)} />
+                <PageHeader title="Edit profile" onClose={closeEdit} />
+                {/* Android: the translucent Modal does not shrink for the keyboard; this keeps the form above it */}
+                <KeyboardSafeView>
                 <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
                     <Screen footer={<Button title="Save changes" onPress={handleSaveProfile} loading={savingEdit} full />}>
                         <FormGroup title="Basic information">
@@ -350,6 +408,7 @@ const ProfileScreen = ({ navigation }) => {
                         </FormGroup>
                     </Screen>
                 </KeyboardAvoidingView>
+                </KeyboardSafeView>
             </SafeAreaView>
             {/* toasts from the root host would sit under this full-screen page */}
             <Toast config={toastConfig} />
@@ -425,7 +484,7 @@ const ProfileScreen = ({ navigation }) => {
                     <InfoRow label="Place of issue" value={profileData.place_of_issue} />
                 </Group>
 
-                <Button title="Log out" variant="danger" onPress={handleLogout} full />
+                <Button title="Log out" variant="danger" onPress={handleLogout} loading={loggingOut} full />
             </Screen>
 
             {renderRequestSheet()}

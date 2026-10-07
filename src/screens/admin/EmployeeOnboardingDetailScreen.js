@@ -10,7 +10,7 @@
 //
 // "Approve and onboard" opens a confirmation sheet; on confirm the backend atomically creates
 // User + Employee + Salary Structure Assignment + Leave Policy Assignment.
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, Alert, Platform } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
@@ -49,26 +49,41 @@ const STATUS_TONE = {
     'Expired': 'neutral',
 };
 
-// 'YYYY-MM-DD[ HH:mm:ss]' shown as '06 Oct 2026' (parsed as a local date; raw value if unparseable)
-const formatDate = (s) => {
+// 'YYYY-MM-DD[ HH:mm:ss]' as a local calendar date (no timezone shift; `new Date()` cannot parse
+// the datetime form on Hermes), or null
+const parseLocalDate = (s) => {
     const [y, m, d] = String(s || '').slice(0, 10).split('-').map(Number);
-    return y && m && d ? formatShortDate(new Date(y, m - 1, d)) : s;
+    return y && m && d ? new Date(y, m - 1, d) : null;
+};
+
+// shown as '06 Oct 2026' (raw value if unparseable)
+const formatDate = (s) => {
+    const d = parseLocalDate(s);
+    return d ? formatShortDate(d) : s;
 };
 
 // label / value line; `stacked` puts the value under the label for long text
-const InfoRow = ({ label, value, stacked }) => (
-    <View style={[styles.info, stacked && styles.infoStacked]}>
-        <Text style={stacked ? styles.infoLabelStacked : styles.infoLabel}>{label}</Text>
-        <Text style={stacked ? styles.infoValueStacked : styles.infoValue} selectable>{value || '—'}</Text>
-    </View>
-);
+const InfoRow = ({ label, value, stacked }) => {
+    const empty = value === null || value === undefined || value === '';
+    return (
+        <View style={[styles.info, stacked && styles.infoStacked]}>
+            <Text style={stacked ? styles.infoLabelStacked : styles.infoLabel}>{label}</Text>
+            <Text style={[stacked ? styles.infoValueStacked : styles.infoValue, empty && styles.infoEmpty]} selectable={!empty}>
+                {empty ? '—' : String(value)}
+            </Text>
+        </View>
+    );
+};
 
 const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
     const requestName = route?.params?.name;
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState(null);
     const [busy, setBusy] = useState(false);
     const [acting, setActing] = useState(null); // which footer button shows the spinner while busy
+    // blocks a second tap that lands before the buttons re-render as disabled
+    const busyRef = useRef(false);
 
     // Admin-fill form state
     const [company, setCompany] = useState('');
@@ -97,17 +112,27 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
         try {
             const response = await apiService.getOnboardingRequestDetail(requestName);
             if (!isApiSuccess(response)) {
-                showToast({ type: 'error', text1: 'Could not load request', text2: getApiErrorMessage(response, 'Failed to load request') });
+                const reason = getApiErrorMessage(response, 'Failed to load request');
+                setLoadError(reason);
+                showToast({ type: 'error', text1: 'Could not load request', text2: reason });
                 return;
             }
-            const d = extractFrappeData(response, {})?.data || {};
+            // The server sends { status, data: <request> }; extractFrappeData already unwraps
+            // `data`, so reading `.data` again gave an empty object (blank page, no actions).
+            const payload = extractFrappeData(response, null);
+            const d = payload?.name ? payload : payload?.data;
+            if (!d?.name) {
+                setLoadError('The server sent an unexpected response.');
+                return;
+            }
+            setLoadError(null);
             setData(d);
             // Pre-fill admin-fill section from any existing values
             setCompany(d.company || '');
             setDepartment(d.department || '');
             setDesignation(d.designation || '');
-            if (d.date_of_joining) {
-                try { setDateOfJoining(new Date(d.date_of_joining)); } catch { /* ignore */ }
+            if (parseLocalDate(d.date_of_joining)) {
+                setDateOfJoining(parseLocalDate(d.date_of_joining));
             }
             setDefaultShift(d.default_shift || '');
             setHolidayList(d.holiday_list || '');
@@ -119,17 +144,20 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
             setBranch(d.branch || '');
             setReportsTo(d.reports_to || '');
         } catch (err) {
+            setLoadError(err?.message || 'Failed to load');
             showToast({ type: 'error', text1: 'Could not load request', text2: err?.message || 'Failed to load' });
         }
     }, [requestName]);
 
-    useEffect(() => {
-        (async () => {
-            setLoading(true);
-            await load();
-            setLoading(false);
-        })();
+    const initialLoad = useCallback(async () => {
+        setLoading(true);
+        await load();
+        setLoading(false);
     }, [load]);
+
+    useEffect(() => {
+        initialLoad();
+    }, [initialLoad]);
 
     if (loading) {
         return (
@@ -141,7 +169,13 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
     if (!data) {
         return (
             <View style={styles.flex}>
-                <EmptyState icon="alert-circle" title="Request not available" message="Go back and try again." />
+                <EmptyState
+                    icon="alert-circle"
+                    title="Request not available"
+                    message={loadError || 'Go back and try again.'}
+                    action="Try again"
+                    onAction={initialLoad}
+                />
             </View>
         );
     }
@@ -153,6 +187,21 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
         salaryStructure, leavePolicy, companyEmail,
     ];
     const allFilled = requiredAdminFields.every((v) => v && String(v).trim());
+
+    // Returns false when another action is still running.
+    const begin = () => {
+        if (busyRef.current) {
+            return false;
+        }
+        busyRef.current = true;
+        setBusy(true);
+        return true;
+    };
+
+    const end = () => {
+        busyRef.current = false;
+        setBusy(false);
+    };
 
     const handleApprove = () => {
         if (!allFilled) {
@@ -167,7 +216,9 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
     };
 
     const confirmApprove = async () => {
-        setBusy(true);
+        if (!begin()) {
+            return;
+        }
         try {
             const response = await apiService.approveOnboardingRequest({
                 name: data.name,
@@ -190,24 +241,26 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
                 showToast({ type: 'error', text1: 'Approval failed', text2: getApiErrorMessage(response, 'Could not complete onboarding') });
                 return;
             }
-            const result = extractFrappeData(response, {});
+            const result = extractFrappeData(response, {}) || {};
             setConfirmVisible(false);
             showToast({
                 type: 'success',
-                text1: `Employee ${result.employee} created`,
-                text2: `User ${result.user}. Welcome email queued.`,
+                text1: result.employee ? `Employee ${result.employee} created` : 'Employee created',
+                text2: result.user ? `User ${result.user}. Welcome email queued.` : 'Welcome email queued.',
             });
             navigation.goBack();
         } catch (err) {
             setConfirmVisible(false);
             showToast({ type: 'error', text1: 'Approval failed', text2: err?.message || 'Unexpected error' });
         } finally {
-            setBusy(false);
+            end();
         }
     };
 
     const handleResend = async () => {
-        setBusy(true);
+        if (!begin()) {
+            return;
+        }
         try {
             const response = await apiService.resendOnboardingInvitation(data.name);
             if (!isApiSuccess(response)) {
@@ -219,7 +272,7 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
         } catch (error) {
             showToast({ type: 'error', text1: 'Not resent', text2: error?.message || 'Check your connection and try again' });
         } finally {
-            setBusy(false);
+            end();
         }
     };
 
@@ -229,7 +282,9 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
             {
                 text: 'Cancel invitation', style: 'destructive',
                 onPress: async () => {
-                    setBusy(true);
+                    if (!begin()) {
+                        return;
+                    }
                     try {
                         const response = await apiService.cancelOnboardingInvitation(data.name);
                         if (!isApiSuccess(response)) {
@@ -241,7 +296,7 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
                     } catch (error) {
                         showToast({ type: 'error', text1: 'Not cancelled', text2: error?.message || 'Check your connection and try again' });
                     } finally {
-                        setBusy(false);
+                        end();
                     }
                 },
             },
@@ -253,7 +308,9 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
             showToast({ type: 'error', text1: 'Reason required', text2: 'Enter a reason for rejecting' });
             return;
         }
-        setBusy(true);
+        if (!begin()) {
+            return;
+        }
         try {
             const response = await apiService.rejectOnboardingRequest(data.name, rejectReason.trim());
             if (!isApiSuccess(response)) {
@@ -266,7 +323,7 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
         } catch (error) {
             showToast({ type: 'error', text1: 'Not rejected', text2: error?.message || 'Check your connection and try again' });
         } finally {
-            setBusy(false);
+            end();
         }
     };
 
@@ -276,7 +333,7 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
     };
 
     const hasName = Boolean(data.first_name || data.last_name);
-    const displayName = hasName ? `${data.first_name || ''} ${data.last_name || ''}`.trim() : data.invitation_email;
+    const displayName = (hasName ? `${data.first_name || ''} ${data.last_name || ''}`.trim() : data.invitation_email) || data.name;
     const showLink = Boolean(data.invitation_link)
         && (data.status === 'Pending Submission' || data.status === 'Submitted' || data.status === 'Expired');
 
@@ -294,7 +351,7 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
         footer = (
             <View style={styles.footerRow}>
                 <Button title="Reject" variant="danger" onPress={() => setRejectVisible(true)} disabled={busy} style={styles.flex1} />
-                <Button title="Approve and onboard" onPress={handleApprove} disabled={busy || !allFilled} style={styles.flex2} />
+                <Button title="Approve and onboard" onPress={handleApprove} disabled={busy} style={styles.flex2} />
             </View>
         );
     } else if (data.status === 'Expired') {
@@ -452,7 +509,7 @@ const EmployeeOnboardingDetailScreen = ({ navigation, route }) => {
                 dismissable={!busy}
                 footer={(
                     <>
-                        <Button title="Cancel" variant="secondary" onPress={() => setRejectVisible(false)} style={styles.flex1} />
+                        <Button title="Cancel" variant="secondary" onPress={() => setRejectVisible(false)} disabled={busy} style={styles.flex1} />
                         <Button title="Reject" variant="dangerSolid" onPress={handleReject} loading={busy} disabled={busy} style={styles.flex1} />
                     </>
                 )}
@@ -475,7 +532,8 @@ const styles = StyleSheet.create({
     flex1: { flex: 1 },
     flex2: { flex: 2 },
     footerRow: { flexDirection: 'row', gap: space.sm },
-    pair: { flexDirection: 'row', gap: space.sm },
+    // bottom-aligned so the two inputs stay level when one label wraps at large text sizes
+    pair: { flexDirection: 'row', alignItems: 'flex-end', gap: space.sm },
     pairField: { flex: 1, marginBottom: 0 },
     lastField: { marginBottom: 0 },
     linkBox: { paddingHorizontal: space.lg, paddingVertical: space.md, backgroundColor: color.surface },
@@ -496,8 +554,10 @@ const styles = StyleSheet.create({
         backgroundColor: color.surface,
     },
     infoStacked: { flexDirection: 'column', alignItems: 'stretch', gap: 2 },
-    infoLabel: { ...type.body, color: color.textSecondary },
-    infoValue: { ...type.body, flexShrink: 1, textAlign: 'right' },
+    // the label may take up to 45% and wraps beyond that; the value takes the rest and wraps
+    infoLabel: { ...type.body, color: color.textSecondary, flexShrink: 0, maxWidth: '45%' },
+    infoValue: { ...type.body, flex: 1, textAlign: 'right' },
+    infoEmpty: { color: color.textTertiary },
     infoLabelStacked: { ...type.secondary },
     infoValueStacked: { ...type.body, lineHeight: 21 },
     sheetText: { ...type.secondary, lineHeight: 19, marginBottom: space.lg },

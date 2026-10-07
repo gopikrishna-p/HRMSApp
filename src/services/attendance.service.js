@@ -59,12 +59,13 @@ class AttendanceService {
             
             console.log('Today attendance response:', response);
             
-            // Extract attendance data from response
-            let attendanceRecords = [];
-            if (isApiSuccess(response)) {
-                const data = extractFrappeData(response, []);
-                attendanceRecords = Array.isArray(data) ? data : (data.data || []);
+            // A failed load must not look like "not checked in" (the screen would offer Check in again)
+            if (!isApiSuccess(response)) {
+                return { hasCheckedIn: false, hasCheckedOut: false, checkInTime: null, checkOutTime: null, status: null, workType: null,
+                    error: response?.message || 'Could not load today\'s attendance' };
             }
+            const data = extractFrappeData(response, []);
+            const attendanceRecords = Array.isArray(data) ? data : (data.data || []);
             
             // Get the first (today's) record if exists
             if (attendanceRecords && attendanceRecords.length > 0) {
@@ -97,7 +98,8 @@ class AttendanceService {
                 checkInTime: null,
                 checkOutTime: null,
                 status: null,
-                workType: null
+                workType: null,
+                error: error?.message || 'Could not load today\'s attendance'
             };
         }
     }

@@ -3,7 +3,7 @@
 // One month's salary record for the signed-in employee: how the salary was worked out,
 // what has been paid, the attendance it was based on and every payment entry. On an
 // approved record with a balance, the employee can record an amount they received.
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import ApiService from '../../services/api.service';
@@ -23,6 +23,7 @@ import {
     TextField,
     EmptyState,
     Loading,
+    Notice,
     color,
     space,
     type,
@@ -60,6 +61,12 @@ const inr = (value) => {
 };
 const minus = (value) => (Number(value) > 0 ? `−${inr(value)}` : inr(value));
 
+// "25000" or "25000.50" -> number; anything else (e.g. "25,000", where parseFloat would read 25) -> NaN
+const parseAmount = (text) => {
+    const t = String(text || '').trim();
+    return /^\d+(\.\d+)?$/.test(t) ? parseFloat(t) : NaN;
+};
+
 // 'YYYY-MM-DD' -> '05 Mar 2026', read as a local date
 const dateLabel = (value) => {
     const [y, m, d] = String(value || '').slice(0, 10).split('-').map(Number);
@@ -67,9 +74,10 @@ const dateLabel = (value) => {
 };
 
 function SalaryTrackerDetailScreen({ route, navigation }) {
-    const { trackerId } = route.params;
+    const { trackerId } = route.params || {};
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState(null);
     const [refreshing, setRefreshing] = useState(false);
 
     // "Record received amount" sheet state
@@ -79,6 +87,7 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
     const [receiptReference, setReceiptReference] = useState('');
     const [receiptRemarks, setReceiptRemarks] = useState('');
     const [submitting, setSubmitting] = useState(false);
+    const submitBusy = useRef(false); // blocks a second Confirm tap before the re-render disables it
     // 'full' | 'half' | 'quarter' | 'custom' — drives the preset highlight in
     // the receipt sheet so the user can fill the most common partial
     // amounts in one tap.
@@ -127,10 +136,16 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
         setLoading(true);
         try {
             const resp = await ApiService.getSalaryTrackerDetail({ tracker_id: trackerId });
+            if (!resp?.success) {
+                // the API wrapper never throws: the server's message (e.g. no permission) is on resp.message
+                throw new Error(resp?.message || 'Could not load this salary record');
+            }
             const result = resp?.data?.message || resp?.data;
             setData(result?.data || null);
+            setLoadError(null);
         } catch (err) {
             console.error('Load tracker detail error:', err);
+            setLoadError(err?.message || 'Could not load this salary record');
         } finally {
             setLoading(false);
         }
@@ -155,9 +170,12 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
     };
 
     const submitReceipt = async () => {
-        const parsed = parseFloat(receiptAmount);
+        if (submitBusy.current) {
+            return;
+        }
+        const parsed = parseAmount(receiptAmount);
         if (!Number.isFinite(parsed) || parsed <= 0) {
-            showToast({ type: 'error', text1: 'Check the amount', text2: 'Enter a positive received amount.' });
+            showToast({ type: 'error', text1: 'Check the amount', text2: 'Enter the amount in digits only, e.g. 25000' });
             return;
         }
         const pending = Math.max(0, Number(data?.pending_amount || 0));
@@ -169,6 +187,7 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
             });
             return;
         }
+        submitBusy.current = true;
         setSubmitting(true);
         try {
             const resp = await ApiService.recordReceivedAmountByEmployee({
@@ -189,12 +208,9 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
                 throw new Error((resp?.success === false && resp.message) || result?.message || 'Could not record receipt');
             }
         } catch (err) {
-            const msg = err?.response?.data?.exception
-                || err?.response?.data?._server_messages
-                || err?.message
-                || 'Failed to record receipt';
-            showToast({ type: 'error', text1: 'Not recorded', text2: String(msg).slice(0, 300) });
+            showToast({ type: 'error', text1: 'Not recorded', text2: String(err?.message || 'Failed to record receipt').slice(0, 300) });
         } finally {
+            submitBusy.current = false;
             setSubmitting(false);
         }
     };
@@ -211,12 +227,19 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
     if (!data) {
         return (
             <Screen refreshing={refreshing} onRefresh={onRefresh}>
-                <EmptyState icon="file-text" title="Record not found" message="Pull down to try again." />
+                <EmptyState
+                    icon={loadError ? 'alert-circle' : 'file-text'}
+                    title={loadError ? 'Could not load this record' : 'Record not found'}
+                    message={loadError || 'Pull down to try again.'}
+                    action="Try again"
+                    onAction={onRefresh}
+                />
             </Screen>
         );
     }
 
-    const paidPct = data.salary_to_pay > 0 ? ((data.total_paid / data.salary_to_pay) * 100) : 0;
+    const salaryToPay = Number(data.salary_to_pay) || 0;
+    const paidPct = salaryToPay > 0 ? (((Number(data.total_paid) || 0) / salaryToPay) * 100) : 0;
     const payments = data.payments || [];
     const pendingAmount = Number(data.pending_amount || 0);
     const presentTotal = data.attended_days != null
@@ -233,6 +256,10 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
                 onRefresh={onRefresh}
                 footer={canRecordReceipt ? <Button title="Record amount received" onPress={openReceiptModal} /> : undefined}
             >
+                {loadError ? (
+                    <Notice tone="danger" icon="alert-circle" title="Could not refresh">{loadError}</Notice>
+                ) : null}
+
                 <Group>
                     <Row title="Payment" right={data.payment_status ? <StatusText label={data.payment_status} tone={PAY_TONE[data.payment_status]} /> : null} />
                     <Row title="Approval" right={data.status ? <StatusText label={data.status} tone={APPROVAL_TONE[data.status] || 'neutral'} /> : null} />
@@ -249,7 +276,7 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
                     <Row title="Total deductions" value={minus(data.total_deductions)} />
                 </Group>
                 <Group>
-                    <Row title="Salary to pay" right={<Text style={styles.total}>{inr(data.salary_to_pay)}</Text>} />
+                    <Row title="Salary to pay" right={<Text style={styles.total} numberOfLines={1}>{inr(data.salary_to_pay)}</Text>} />
                 </Group>
 
                 <Group title="Payment">
@@ -294,7 +321,7 @@ function SalaryTrackerDetailScreen({ route, navigation }) {
                     ) : (
                         payments.map((p, index) => (
                             <Row
-                                key={index}
+                                key={p.idx ?? index}
                                 title={p.payment_mode || 'Payment'}
                                 subtitle={[
                                     [dateLabel(p.payment_date), p.reference ? `Ref ${p.reference}` : null].filter(Boolean).join('  ·  '),

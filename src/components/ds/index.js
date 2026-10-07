@@ -3,7 +3,7 @@
 // Shared building blocks for the admin screens (see src/theme/tokens.js):
 // grouped lists with hairline dividers instead of a card per item, quiet stat strips
 // instead of coloured tiles, dot + text for status, outline icons, bottom sheets for dialogs.
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
     View,
     Text,
@@ -17,6 +17,7 @@ import {
     KeyboardAvoidingView,
     Platform,
     StatusBar,
+    Keyboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from 'react-native-vector-icons/Feather';
@@ -46,6 +47,51 @@ export const ModalTopInset = ({ background = color.surface }) => (
     MODAL_TOP > 0 ? <View style={[s.topInset, { height: MODAL_TOP, backgroundColor: background }]} /> : null
 );
 
+// ------------------------------------------------------------------ keyboard
+// How much of a view the on-screen keyboard covers. Android doesn't shrink translucent / edge-to-edge
+// Modals when the keyboard opens, so their lower inputs and buttons end up under it; pad by this amount.
+// It is measured, so it stays 0 wherever the system already made room (no double gap).
+// `lifts`: the caller moves the view itself up by the overlap (margin), so a later measurement must add
+// the current lift back; with padding the view's frame doesn't move.
+export const useKeyboardOverlap = ({ lifts = false } = {}) => {
+    const ref = useRef(null);
+    const current = useRef(0);
+    const [overlap, setOverlapState] = useState(0);
+    const setOverlap = (value) => {
+        current.current = value;
+        setOverlapState(value);
+    };
+    useEffect(() => {
+        const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+        const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+        const onShow = (e) => {
+            const keyboardTop = e?.endCoordinates?.screenY;
+            if (!ref.current || !keyboardTop) {
+                return;
+            }
+            ref.current.measureInWindow((x, y, w, h) => {
+                const bottom = y + h + (lifts ? current.current : 0);
+                setOverlap(Math.max(0, Math.round(bottom - keyboardTop)));
+            });
+        };
+        const subs = [Keyboard.addListener(showEvent, onShow), Keyboard.addListener(hideEvent, () => setOverlap(0))];
+        return () => subs.forEach((sub) => sub.remove());
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- listeners are set once; `lifts` is fixed per caller
+    }, []);
+    return [ref, overlap];
+};
+
+// Full-screen form pages in a Modal: on Android the content stays above the keyboard (useKeyboardOverlap);
+// iOS keeps using the page's own KeyboardAvoidingView.
+export const KeyboardSafeView = ({ style, children }) => {
+    const [ref, overlap] = useKeyboardOverlap();
+    return (
+        <View ref={ref} style={[s.flex, style, Platform.OS === 'android' && overlap > 0 && { paddingBottom: overlap }]} collapsable={false}>
+            {children}
+        </View>
+    );
+};
+
 // ------------------------------------------------------------------ layout
 export const Screen = ({ children, scroll = true, refreshing = false, onRefresh, contentStyle, footer, keyboardShouldPersistTaps }) => (
     <View style={s.screen}>
@@ -72,9 +118,9 @@ export const Group = ({ title, action, onAction, footer, children, style, flush 
         <View style={[s.group, style]}>
             {title || action ? (
                 <View style={s.groupHeader}>
-                    {title ? <Text style={s.groupTitle}>{title}</Text> : <View />}
+                    {title ? <Text style={s.groupTitle} numberOfLines={1}>{title}</Text> : <View />}
                     {action ? (
-                        <Pressable onPress={onAction} hitSlop={8}>
+                        <Pressable onPress={onAction} hitSlop={8} style={s.groupAction}>
                             <Text style={s.link}>{action}</Text>
                         </Pressable>
                     ) : null}
@@ -148,7 +194,7 @@ export const Row = ({
 const AVATAR_TONES = ['#E0EAFF', '#DCFAE6', '#FEF0C7', '#FCE7F6', '#D1E9FF', '#EBE9FE', '#FEE4E2', '#CCFBEF'];
 const AVATAR_TEXT = ['#3538CD', '#067647', '#B54708', '#C11574', '#175CD3', '#5925DC', '#B42318', '#107569'];
 export const initialsOf = (name) => {
-    const parts = String(name || '?').trim().split(/\s+/);
+    const parts = (String(name || '').trim() || '?').split(/\s+/);
     return (parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : parts[0].slice(0, 2)).toUpperCase();
 };
 export const Avatar = ({ name, size = 36 }) => {
@@ -204,8 +250,8 @@ export const StatStrip = ({ items, style, onPress }) => {
                 <React.Fragment key={it.label}>
                     {i > 0 ? <View style={s.statDivider} /> : null}
                     <View style={s.stat}>
-                        <Text style={[s.statValue, it.tone && { color: tones[it.tone]?.fg }]} numberOfLines={1}>{it.value}</Text>
-                        <Text style={s.statLabel} numberOfLines={1}>{it.label}</Text>
+                        <Text style={[s.statValue, it.tone && { color: tones[it.tone]?.fg }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{it.value}</Text>
+                        <Text style={s.statLabel} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{it.label}</Text>
                     </View>
                 </React.Fragment>
             ))}
@@ -229,11 +275,11 @@ export const Segmented = ({ options, value, onChange, style }) => (
             const active = key === value;
             return (
                 <Pressable key={key} onPress={() => onChange(key)} style={[s.segment, active && s.segmentActive]}>
-                    <Text style={[s.segmentText, active && s.segmentTextActive]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                    <Text style={[s.segmentText, active && s.segmentTextActive]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
                         {label}
                     </Text>
                     {typeof o === 'object' && o.count !== undefined ? (
-                        <Text style={[s.segmentCount, active && s.segmentCountActive]}>{o.count}</Text>
+                        <Text style={[s.segmentCount, active && s.segmentCountActive]} numberOfLines={1}>{o.count}</Text>
                     ) : null}
                 </Pressable>
             );
@@ -270,7 +316,11 @@ export const Button = ({ title, onPress, variant = 'primary', size = 'md', icon,
             ) : icon ? (
                 <Icon name={icon} size={size === 'sm' ? 14 : 16} color={v.fg} />
             ) : null}
-            {title ? <Text style={[s.buttonText, size === 'sm' && s.buttonTextSm, { color: v.fg }]}>{title}</Text> : null}
+            {title ? (
+                <Text style={[s.buttonText, size === 'sm' && s.buttonTextSm, { color: v.fg }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+                    {title}
+                </Text>
+            ) : null}
         </Pressable>
     );
 };
@@ -364,11 +414,22 @@ export const Notice = ({ tone = 'neutral', icon, title, children, style, onPress
 
 // ------------------------------------------------------------------ dialogs
 // Bottom sheet: title, optional subtitle, content, and a footer (usually Buttons).
-export const Sheet = ({ visible, title, subtitle, onClose, children, footer, dismissable = true }) => (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={() => dismissable && onClose?.()} statusBarTranslucent>
+export const Sheet = (props) => (
+    <Modal visible={props.visible} transparent animationType="slide" onRequestClose={() => props.dismissable !== false && props.onClose?.()} statusBarTranslucent>
+        <SheetBody {...props} />
+        {/* toasts are drawn at the app root, which sits under this Modal; this host shows them above the sheet */}
+        <Toast config={toastConfig} />
+    </Modal>
+);
+
+// Inside the Modal so it mounts with it: the sheet is lifted above the keyboard on Android, where a
+// translucent Modal doesn't resize (useKeyboardOverlap); iOS uses KeyboardAvoidingView as before.
+const SheetBody = ({ title, subtitle, onClose, children, footer, dismissable = true }) => {
+    const [ref, overlap] = useKeyboardOverlap({ lifts: true });
+    return (
         <KeyboardAvoidingView style={s.sheetWrap} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
             <Pressable style={s.sheetBackdrop} onPress={() => dismissable && onClose?.()} />
-            <View style={s.sheet}>
+            <View ref={ref} collapsable={false} style={[s.sheet, Platform.OS === 'android' && overlap > 0 && { marginBottom: overlap }]}>
                 <View style={s.sheetHandle} />
                 {title ? <Text style={s.sheetTitle}>{title}</Text> : null}
                 {subtitle ? <Text style={s.sheetSubtitle}>{subtitle}</Text> : null}
@@ -378,10 +439,8 @@ export const Sheet = ({ visible, title, subtitle, onClose, children, footer, dis
                 {footer ? <View style={s.sheetFooter}>{footer}</View> : null}
             </View>
         </KeyboardAvoidingView>
-        {/* toasts are drawn at the app root, which sits under this Modal; this host shows them above the sheet */}
-        <Toast config={toastConfig} />
-    </Modal>
-);
+    );
+};
 
 // ------------------------------------------------------------------ date navigation
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -395,8 +454,8 @@ export const DateNav = ({ date, onPrev, onNext, onPick, nextDisabled, caption })
         <View style={s.dateNav}>
             <IconButton name="chevron-left" onPress={onPrev} label="Previous day" />
             <Pressable style={s.dateNavCenter} onPress={onPick} hitSlop={6}>
-                <Text style={s.dateNavTitle}>{isToday ? 'Today' : formatLongDate(date)}</Text>
-                <Text style={s.dateNavCaption}>{isToday ? formatLongDate(date) : String(date.getFullYear())}{caption ? `  ·  ${caption}` : ''}</Text>
+                <Text style={s.dateNavTitle} numberOfLines={1}>{isToday ? 'Today' : formatLongDate(date)}</Text>
+                <Text style={s.dateNavCaption} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{isToday ? formatLongDate(date) : String(date.getFullYear())}{caption ? `  ·  ${caption}` : ''}</Text>
             </Pressable>
             <IconButton name="chevron-right" onPress={onNext} disabled={nextDisabled} label="Next day" />
         </View>
@@ -420,7 +479,8 @@ const s = StyleSheet.create({
 
     group: { marginBottom: space.xl },
     groupHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: space.sm, paddingHorizontal: space.xs },
-    groupTitle: { ...type.label },
+    groupTitle: { ...type.label, flexShrink: 1 },
+    groupAction: { marginLeft: space.md },
     groupBody: {
         backgroundColor: color.surface,
         borderRadius: radius.lg,
@@ -441,18 +501,18 @@ const s = StyleSheet.create({
     rowTitle: { ...type.bodyStrong },
     rowSubtitle: { ...type.secondary, marginTop: 2, lineHeight: 18 },
     rowMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
-    rowValue: { fontSize: 15, color: color.textSecondary, fontVariant: ['tabular-nums'], marginLeft: space.sm },
+    rowValue: { fontSize: 15, color: color.textSecondary, fontVariant: ['tabular-nums'], marginLeft: space.sm, flexShrink: 1, maxWidth: '55%', textAlign: 'right' },
     chevron: { marginLeft: space.xs },
 
     avatar: { alignItems: 'center', justifyContent: 'center', marginRight: space.md },
     avatarText: { fontWeight: '600' },
 
-    status: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    status: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 },
     statusDot: { width: 7, height: 7, borderRadius: 3.5 },
-    statusLabel: { fontWeight: '500' },
-    tag: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: radius.sm },
+    statusLabel: { fontWeight: '500', flexShrink: 1 },
+    tag: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: radius.sm, maxWidth: '100%' },
     tagText: { fontSize: 12, fontWeight: '500' },
-    count: { minWidth: 22, paddingHorizontal: 7, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginLeft: space.sm },
+    count: { minWidth: 22, paddingHorizontal: 7, minHeight: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginLeft: space.sm },
     countText: { fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
 
     stats: {
@@ -480,9 +540,9 @@ const s = StyleSheet.create({
         shadowOffset: { width: 0, height: 1 },
         elevation: 1,
     },
-    segmentText: { fontSize: 13, fontWeight: '500', color: color.textSecondary },
+    segmentText: { fontSize: 13, fontWeight: '500', color: color.textSecondary, flexShrink: 1 },
     segmentTextActive: { color: color.text, fontWeight: '600' },
-    segmentCount: { fontSize: 12, color: color.textTertiary, fontVariant: ['tabular-nums'] },
+    segmentCount: { fontSize: 12, color: color.textTertiary, fontVariant: ['tabular-nums'], flexShrink: 0 },
     segmentCountActive: { color: color.textSecondary },
 
     button: {
@@ -490,14 +550,15 @@ const s = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        height: 44,
+        minHeight: 44,
+        paddingVertical: 8,
         paddingHorizontal: space.lg,
         borderRadius: radius.md,
         borderWidth: 1,
     },
-    buttonSm: { height: 34, paddingHorizontal: space.md, gap: 6, borderRadius: 8 },
+    buttonSm: { minHeight: 34, paddingVertical: 5, paddingHorizontal: space.md, gap: 6, borderRadius: 8 },
     buttonFull: { alignSelf: 'stretch' },
-    buttonText: { fontSize: 15, fontWeight: '600' },
+    buttonText: { fontSize: 15, fontWeight: '600', flexShrink: 1, textAlign: 'center' },
     buttonTextSm: { fontSize: 13 },
     iconButton: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
 
@@ -505,7 +566,7 @@ const s = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
-        height: 40,
+        minHeight: 40,
         paddingHorizontal: space.md,
         borderRadius: radius.md,
         backgroundColor: '#EAECF0',

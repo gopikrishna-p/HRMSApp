@@ -3,7 +3,7 @@
 // The employee's monthly salary records and what has been paid against each. Approved
 // records feed the overview totals. "Request pending salary" sends a month to HR for
 // review, either with an amount the employee enters or calculated from attendance.
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import ApiService from '../../services/api.service';
@@ -22,6 +22,7 @@ import {
     SelectField,
     EmptyState,
     Loading,
+    Notice,
     Icon,
     color,
     space,
@@ -50,6 +51,12 @@ const inr = (value) => {
 
 const plural = (n, one, many) => `${n} ${Number(n) === 1 ? one : many}`;
 
+// "30000" or "30000.50" -> number; anything else (e.g. "30,000", where parseFloat would read 30) -> NaN
+const parseAmount = (text) => {
+    const t = String(text || '').trim();
+    return /^\d+(\.\d+)?$/.test(t) ? parseFloat(t) : NaN;
+};
+
 // Options shown inside the sheet in place of a nested picker
 const OptionList = ({ options, value, onSelect }) => (
     <Group>
@@ -72,7 +79,8 @@ const OptionList = ({ options, value, onSelect }) => (
 function MySalaryTrackerScreen({ navigation }) {
     const [records, setRecords] = useState([]);
     const [overview, setOverview] = useState({});
-    const [loading, setLoading] = useState(true);
+    const [loaded, setLoaded] = useState(false); // first load finished (successfully or not)
+    const [loadError, setLoadError] = useState(null);
     const [refreshing, setRefreshing] = useState(false);
     const [showRequestModal, setShowRequestModal] = useState(false);
     const [requestMonth, setRequestMonth] = useState(MONTHS[new Date().getMonth()]);
@@ -81,6 +89,7 @@ function MySalaryTrackerScreen({ navigation }) {
     const [manualAmount, setManualAmount] = useState('');
     const [requestRemarks, setRequestRemarks] = useState('');
     const [submitting, setSubmitting] = useState(false);
+    const submitBusy = useRef(false); // blocks a second Submit tap before the re-render disables it
     const [employeeId, setEmployeeId] = useState(null);
     const [picker, setPicker] = useState(null); // 'month' | 'year' inside the request sheet
 
@@ -90,34 +99,41 @@ function MySalaryTrackerScreen({ navigation }) {
     );
 
     const loadData = async () => {
-        setLoading(true);
         try {
             // Get employee ID
             const empResp = await ApiService.getCurrentEmployee();
             const empData = empResp?.data?.message;
             const empId = empData?.name || empData?.employee_id;
-            setEmployeeId(empId);
             if (!empId) {
                 // without our own employee id an HR login would get everyone's records
-                throw new Error('Your employee record was not found');
+                throw new Error((empResp?.success === false && empResp.message) || 'Your employee record was not found');
             }
+            setEmployeeId(empId);
 
             const [listResp, overviewResp] = await Promise.all([
                 // employee_id keeps the list to our own months (the server returns everyone's for HR)
                 ApiService.getSalaryTrackerList({ employee_id: empId }),
                 ApiService.getEmployeeSalaryOverview({ employee_id: empId }),
             ]);
+            // the API wrapper never throws: a failed call comes back with success false and the
+            // server's message, and must not read as "no salary records"
+            if (!listResp?.success) {
+                throw new Error(listResp?.message || 'Could not load salary records');
+            }
 
             const listData = listResp?.data?.message || listResp?.data;
             const listArr = listData?.data || [];
             setRecords(Array.isArray(listArr) ? listArr : []);
 
-            const ovData = overviewResp?.data?.message || overviewResp?.data;
+            // totals are optional; when they fail to load the overview is hidden, not left stale
+            const ovData = overviewResp?.success ? (overviewResp.data?.message || overviewResp.data) : null;
             setOverview(ovData?.data || {});
+            setLoadError(null);
         } catch (err) {
             console.error('Load salary tracker error:', err);
+            setLoadError(err?.message || 'Could not load salary records');
         } finally {
-            setLoading(false);
+            setLoaded(true);
         }
     };
 
@@ -132,10 +148,15 @@ function MySalaryTrackerScreen({ navigation }) {
             showToast({ type: 'error', text1: 'No employee profile', text2: 'Employee not found' });
             return;
         }
-        if (entryMode === 'manual' && (!manualAmount || isNaN(parseFloat(manualAmount)) || parseFloat(manualAmount) <= 0)) {
-            showToast({ type: 'error', text1: 'Check the amount', text2: 'Enter a valid pending salary amount' });
+        const amount = parseAmount(manualAmount);
+        if (entryMode === 'manual' && !(amount > 0)) {
+            showToast({ type: 'error', text1: 'Check the amount', text2: 'Enter the pending amount in digits only, e.g. 30000' });
             return;
         }
+        if (submitBusy.current) {
+            return;
+        }
+        submitBusy.current = true;
         setSubmitting(true);
         try {
             const params = {
@@ -145,7 +166,7 @@ function MySalaryTrackerScreen({ navigation }) {
                 remarks: requestRemarks || undefined,
             };
             if (entryMode === 'manual') {
-                params.manual_amount = parseFloat(manualAmount);
+                params.manual_amount = amount;
             }
             const resp = await ApiService.requestPendingSalary(params);
             const data = resp?.data?.message || resp?.data;
@@ -154,13 +175,14 @@ function MySalaryTrackerScreen({ navigation }) {
                 setShowRequestModal(false);
                 setManualAmount('');
                 setRequestRemarks('');
-                loadData();
+                await loadData();
             } else {
                 showToast({ type: 'error', text1: 'Not sent', text2: (resp?.success === false && resp.message) || data?.message || 'Failed to submit' });
             }
         } catch (err) {
             showToast({ type: 'error', text1: 'Not sent', text2: err.message || 'Failed' });
         } finally {
+            submitBusy.current = false;
             setSubmitting(false);
         }
     };
@@ -175,8 +197,9 @@ function MySalaryTrackerScreen({ navigation }) {
         setPicker(null);
     };
 
-    // A full-screen spinner only on the first load; later reloads keep the list on screen
-    if (loading && records.length === 0) {
+    // A full-screen spinner only on the first load; later reloads (focus, pull to refresh)
+    // keep the list or the empty state on screen
+    if (!loaded) {
         return (
             <View style={styles.screen}>
                 <Loading label="Loading salary records" />
@@ -185,10 +208,11 @@ function MySalaryTrackerScreen({ navigation }) {
     }
 
     const renderOverview = () => {
-        if (!overview.total_salary) {
+        const totalSalary = Number(overview.total_salary) || 0;
+        if (totalSalary <= 0) {
             return null;
         }
-        const paidPct = overview.total_salary > 0 ? (overview.total_paid / overview.total_salary) * 100 : 0;
+        const paidPct = ((Number(overview.total_paid) || 0) / totalSalary) * 100;
         const months = [
             plural(overview.fully_paid_months || 0, 'month paid', 'months paid'),
             `${overview.partially_paid_months || 0} partly paid`,
@@ -198,7 +222,7 @@ function MySalaryTrackerScreen({ navigation }) {
             <Group title="Overview" footer={months}>
                 <Row title="Total salary" value={inr(overview.total_salary)} />
                 <Row title="Paid" value={inr(overview.total_paid)} />
-                <Row title="Pending" right={<Text style={styles.total}>{inr(overview.total_pending)}</Text>} />
+                <Row title="Pending" right={<Text style={styles.total} numberOfLines={1}>{inr(overview.total_pending)}</Text>} />
                 <View style={styles.progress}>
                     <View style={styles.progressHeader}>
                         <Text style={type.secondary}>Paid so far</Text>
@@ -213,12 +237,12 @@ function MySalaryTrackerScreen({ navigation }) {
     const renderRecord = (item) => {
         const partlyPaid = Number(item.total_paid) > 0 && Number(item.pending_amount) > 0;
         // "Present" counts office, WFH and on-site days, as on the detail screen
-        const present = (item.present_days || 0) + (item.wfh_days || 0) + (item.onsite_days || 0);
+        const present = (Number(item.present_days) || 0) + (Number(item.wfh_days) || 0) + (Number(item.onsite_days) || 0);
         const review = REVIEW_TAG[item.status];
         return (
             <Row
                 key={item.name}
-                title={item.salary_month || `${item.month} ${item.year}`}
+                title={item.salary_month || [item.month, item.year].filter(Boolean).join(' ') || 'Salary record'}
                 subtitle={item.working_days != null ? `${item.working_days} working days  ·  ${present} present` : undefined}
                 meta={item.payment_status || review ? (
                     <>
@@ -245,12 +269,24 @@ function MySalaryTrackerScreen({ navigation }) {
                 onRefresh={onRefresh}
                 footer={<Button title="Request pending salary" onPress={openRequest} />}
             >
+                {loadError && records.length > 0 ? (
+                    <Notice tone="danger" icon="alert-circle" title="Could not refresh">{loadError}</Notice>
+                ) : null}
+
                 {renderOverview()}
 
                 {records.length > 0 ? (
                     <Group title="Months">
                         {records.map(renderRecord)}
                     </Group>
+                ) : loadError ? (
+                    <EmptyState
+                        icon="alert-circle"
+                        title="Could not load salary records"
+                        message={loadError}
+                        action="Try again"
+                        onAction={onRefresh}
+                    />
                 ) : (
                     <EmptyState
                         icon="credit-card"
@@ -295,8 +331,8 @@ function MySalaryTrackerScreen({ navigation }) {
                                 : 'Worked out from your attendance and salary structure. Best for recent months.'}
                         </Text>
                         <View style={styles.fieldRow}>
-                            <SelectField label="Month" value={requestMonth} onPress={() => setPicker('month')} style={styles.flex} />
-                            <SelectField label="Year" value={String(requestYear)} onPress={() => setPicker('year')} style={styles.flex} />
+                            <SelectField label="Month" value={requestMonth} onPress={() => setPicker('month')} disabled={submitting} style={styles.monthField} />
+                            <SelectField label="Year" value={String(requestYear)} onPress={() => setPicker('year')} disabled={submitting} style={styles.yearField} />
                         </View>
                         {entryMode === 'manual' ? (
                             <TextField
@@ -331,6 +367,9 @@ const styles = StyleSheet.create({
     metaText: { ...type.caption, color: color.textSecondary },
     modeHint: { ...type.caption, color: color.textSecondary, marginTop: space.sm, marginBottom: space.lg, paddingHorizontal: space.xs, lineHeight: 17 },
     fieldRow: { flexDirection: 'row', gap: space.sm },
+    // "September" needs more room than "2026" on a 320 dp phone
+    monthField: { flex: 3 },
+    yearField: { flex: 2 },
 });
 
 export default MySalaryTrackerScreen;

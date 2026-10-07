@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { StatusBar } from 'react-native';
+import { StatusBar, Text, TextInput } from 'react-native';
 import { Provider as PaperProvider } from 'react-native-paper';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
@@ -10,6 +10,10 @@ import { toastConfig } from './config/toastConfig';
 import { AuthProvider } from './context/AuthContext';
 import AppNavigator from './navigation/AppNavigator';
 import { theme } from './theme/theme';
+
+// Respect the phone's font size setting, but cap it so every screen keeps its layout on every phone
+Text.defaultProps = { ...(Text.defaultProps || {}), maxFontSizeMultiplier: 1.3 };
+TextInput.defaultProps = { ...(TextInput.defaultProps || {}), maxFontSizeMultiplier: 1.3 };
 
 const App = () => {
     useEffect(() => {

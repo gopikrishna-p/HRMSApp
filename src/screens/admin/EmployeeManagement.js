@@ -3,7 +3,7 @@
 // Employee directory for admins: search and filter employees, open a profile, edit it,
 // manage profile edit access (grant / revoke, approve or reject an employee's request)
 // and jump to the employee's leave, attendance, WFH, on-site, expense and travel records.
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     View,
     Text,
@@ -18,7 +18,7 @@ import {
     Platform,
 } from 'react-native';
 import Toast from 'react-native-toast-message';
-import ApiService from '../../services/api.service';
+import ApiService, { getApiErrorMessage } from '../../services/api.service';
 import showToast from '../../utils/Toast';
 import { toastConfig } from '../../config/toastConfig';
 import {
@@ -29,7 +29,6 @@ import {
     StatusText,
     Tag,
     StatStrip,
-    Segmented,
     SearchField,
     Sheet,
     Button,
@@ -45,6 +44,7 @@ import {
     radius,
     type,
     ModalTopInset,
+    KeyboardSafeView,
 } from '../../components/ds';
 
 const STATUS_OPTIONS = ['All', 'Active', 'Inactive', 'Suspended', 'Left'];
@@ -82,21 +82,28 @@ const EmployeeManagement = ({ navigation }) => {
     const [selectedDepartment, setSelectedDepartment] = useState('All');
     const [statistics, setStatistics] = useState({});
     const [filterOptions, setFilterOptions] = useState({ departments: [], companies: [] });
+    // Message of the last failed employee load (shown when there is no list to fall back on)
+    const [loadError, setLoadError] = useState(null);
 
     // Modals and sheets
     const [detailsModalVisible, setDetailsModalVisible] = useState(false);
     const [editModalVisible, setEditModalVisible] = useState(false);
     const [departmentSheetVisible, setDepartmentSheetVisible] = useState(false);
+    const [statusSheetVisible, setStatusSheetVisible] = useState(false);
     const [selectedRequest, setSelectedRequest] = useState(null);
 
     // Selected employee
     const [selectedEmployee, setSelectedEmployee] = useState(null);
     const [employeeDetails, setEmployeeDetails] = useState(null);
     const [loadingDetails, setLoadingDetails] = useState(false);
+    const [detailsError, setDetailsError] = useState(null);
+    // Only the newest profile request may update the page (an older, slower one is ignored)
+    const detailsRequestId = useRef(0);
 
     // Edit form
     const [editForm, setEditForm] = useState({});
     const [savingEdit, setSavingEdit] = useState(false);
+    const savingRef = useRef(false);
     // Save errors are shown inside the edit page (toasts render behind full-screen modals)
     const [saveError, setSaveError] = useState(null);
 
@@ -105,8 +112,10 @@ const EmployeeManagement = ({ navigation }) => {
     const [pendingRequests, setPendingRequests] = useState([]);
     const [, setLoadingRequests] = useState(false);
 
-    // Edit-access action in progress: 'grant' | 'revoke' | 'reject'
+    // Edit-access action in progress: 'grant' | 'revoke' | 'reject'. The ref blocks a second
+    // tap that lands before the buttons re-render as disabled.
     const [permissionAction, setPermissionAction] = useState(null);
+    const permissionBusy = useRef(false);
 
     useEffect(() => {
         fetchEmployees();
@@ -164,19 +173,27 @@ const EmployeeManagement = ({ navigation }) => {
                     // Extract unique departments
                     const depts = [...new Set(message.map(e => e.department).filter(Boolean))];
                     setFilterOptions({ departments: depts, companies: [] });
+                    setLoadError(null);
                 } else if (message.status === 'success') {
                     // Wrapped object format
                     setEmployees(message.employees || []);
                     setStatistics(message.statistics || {});
                     setFilterOptions(message.filters || { departments: [], companies: [] });
+                    setLoadError(null);
                 } else {
                     console.error('Unexpected message format:', message);
+                    setLoadError('The server sent an unexpected response.');
                 }
             } else {
-                console.error('Failed to fetch employees - response not success');
+                // keep the list already on screen; the toast (and the empty state when there is
+                // no list yet) carry the server's message
+                const reason = getApiErrorMessage(response, 'Please try again');
+                setLoadError(reason);
+                showToast({ type: 'error', text1: 'Could not load employees', text2: reason });
             }
         } catch (error) {
             console.error('Error fetching employees:', error);
+            setLoadError('Please try again');
             showToast({ type: 'error', text1: 'Could not load employees', text2: 'Please try again' });
         } finally {
             setLoading(false);
@@ -202,14 +219,25 @@ const EmployeeManagement = ({ navigation }) => {
         }
     };
 
-    const fetchEmployeeDetails = async (employeeId) => {
-        // drop the previous employee's profile first, so a failed load can never be edited and
-        // saved onto this employee
-        setEmployeeDetails(null);
-        setEditForm({});
-        try {
+    // `quiet` reloads the profile that is already open (after an edit-access change) without
+    // blanking the page or jumping it back to the top; a failure then keeps what is shown.
+    const fetchEmployeeDetails = async (employeeId, { quiet = false } = {}) => {
+        const requestId = ++detailsRequestId.current;
+        const isCurrent = () => requestId === detailsRequestId.current;
+        if (!quiet) {
+            // drop the previous employee's profile first, so a failed load can never be edited and
+            // saved onto this employee
+            setEmployeeDetails(null);
+            setEditForm({});
+            setDetailsError(null);
             setLoadingDetails(true);
+        }
+        let failure = null;
+        try {
             const response = await ApiService.get(`/api/method/hrms.api.get_employee_details?employee=${employeeId}`);
+            if (!isCurrent()) {
+                return;
+            }
 
             if (response.success && response.data?.message) {
                 const message = response.data.message;
@@ -223,17 +251,26 @@ const EmployeeManagement = ({ navigation }) => {
                     setEditForm(message);
                 } else {
                     console.error('Invalid employee details format:', message);
-                    showToast({ type: 'error', text1: 'Could not load employee details' });
+                    failure = 'The server sent an unexpected response.';
                 }
             } else {
                 console.error('Employee details response not success:', response);
-                showToast({ type: 'error', text1: 'Could not load employee details' });
+                failure = getApiErrorMessage(response, 'Check your connection and try again.');
             }
         } catch (error) {
             console.error('Error fetching employee details:', error);
-            showToast({ type: 'error', text1: 'Could not load employee details' });
+            failure = 'Check your connection and try again.';
         } finally {
-            setLoadingDetails(false);
+            if (isCurrent()) {
+                setLoadingDetails(false);
+                if (failure) {
+                    if (quiet) {
+                        showToast({ type: 'error', text1: 'Could not refresh employee details', text2: failure });
+                    } else {
+                        setDetailsError(failure);
+                    }
+                }
+            }
         }
     };
 
@@ -251,10 +288,14 @@ const EmployeeManagement = ({ navigation }) => {
     };
 
     const handleSaveEdit = async () => {
+        if (savingRef.current) {
+            return;
+        }
         if (!employeeDetails || employeeDetails.name !== selectedEmployee?.name) {
             setSaveError('This profile did not load correctly. Close it and open the employee again.');
             return;
         }
+        savingRef.current = true;
         try {
             setSavingEdit(true);
             setSaveError(null);
@@ -268,20 +309,38 @@ const EmployeeManagement = ({ navigation }) => {
                 setEditModalVisible(false);
                 fetchEmployees();
             } else {
-                setSaveError(response.data?.message?.message || 'Failed to update employee');
+                setSaveError(getApiErrorMessage(response, 'Failed to update employee'));
             }
         } catch (error) {
             console.error('Error updating employee:', error);
             setSaveError('Failed to update employee profile');
         } finally {
+            savingRef.current = false;
             setSavingEdit(false);
         }
     };
 
     // ---------------------------------------------------------------- edit access
-    // Returns true when the server accepted the change.
+    // Each returns true when the server accepted the change, false otherwise (also when another
+    // edit-access action is still running).
+    const startPermissionAction = (action) => {
+        if (permissionBusy.current) {
+            return false;
+        }
+        permissionBusy.current = true;
+        setPermissionAction(action);
+        return true;
+    };
+
+    const endPermissionAction = () => {
+        permissionBusy.current = false;
+        setPermissionAction(null);
+    };
+
     const grantPermission = async (employeeId, employeeName) => {
-        setPermissionAction('grant');
+        if (!startPermissionAction('grant')) {
+            return false;
+        }
         try {
             const response = await ApiService.post('/api/method/hrms.api.grant_edit_permission', {
                 employee: employeeId,
@@ -293,22 +352,24 @@ const EmployeeManagement = ({ navigation }) => {
                 fetchEmployees();
                 fetchPendingRequests();
                 if (detailsModalVisible) {
-                    fetchEmployeeDetails(employeeId);
+                    fetchEmployeeDetails(employeeId, { quiet: true });
                 }
                 return true;
             }
-            showToast({ type: 'error', text1: 'Access not granted', text2: response.data?.message?.message || 'Failed to grant permission' });
+            showToast({ type: 'error', text1: 'Access not granted', text2: getApiErrorMessage(response, 'Failed to grant permission') });
         } catch (error) {
             console.error('Error granting permission:', error);
             showToast({ type: 'error', text1: 'Access not granted', text2: 'Failed to grant permission' });
         } finally {
-            setPermissionAction(null);
+            endPermissionAction();
         }
         return false;
     };
 
     const revokePermission = async (employeeId, employeeName) => {
-        setPermissionAction('revoke');
+        if (!startPermissionAction('revoke')) {
+            return false;
+        }
         try {
             const response = await ApiService.post('/api/method/hrms.api.revoke_edit_permission', {
                 employee: employeeId,
@@ -319,22 +380,24 @@ const EmployeeManagement = ({ navigation }) => {
                 showToast({ type: 'success', text1: 'Edit access revoked', text2: employeeName });
                 fetchEmployees();
                 if (detailsModalVisible) {
-                    fetchEmployeeDetails(employeeId);
+                    fetchEmployeeDetails(employeeId, { quiet: true });
                 }
                 return true;
             }
-            showToast({ type: 'error', text1: 'Access not revoked', text2: response.data?.message?.message || 'Failed to revoke permission' });
+            showToast({ type: 'error', text1: 'Access not revoked', text2: getApiErrorMessage(response, 'Failed to revoke permission') });
         } catch (error) {
             console.error('Error revoking permission:', error);
             showToast({ type: 'error', text1: 'Access not revoked', text2: 'Failed to revoke permission' });
         } finally {
-            setPermissionAction(null);
+            endPermissionAction();
         }
         return false;
     };
 
     const rejectRequest = async (employeeId, employeeName) => {
-        setPermissionAction('reject');
+        if (!startPermissionAction('reject')) {
+            return false;
+        }
         try {
             const response = await ApiService.post('/api/method/hrms.api.reject_edit_request', {
                 employee: employeeId,
@@ -344,14 +407,19 @@ const EmployeeManagement = ({ navigation }) => {
             if (response.success && response.data?.message?.status === 'success') {
                 showToast({ type: 'success', text1: 'Request rejected', text2: employeeName });
                 fetchPendingRequests();
+                // the list rows ("Edit requested") and the open profile show the request too
+                fetchEmployees();
+                if (detailsModalVisible) {
+                    fetchEmployeeDetails(employeeId, { quiet: true });
+                }
                 return true;
             }
-            showToast({ type: 'error', text1: 'Request not rejected', text2: response.data?.message?.message || 'Failed to reject request' });
+            showToast({ type: 'error', text1: 'Request not rejected', text2: getApiErrorMessage(response, 'Failed to reject request') });
         } catch (error) {
             console.error('Error rejecting request:', error);
             showToast({ type: 'error', text1: 'Request not rejected', text2: 'Failed to reject request' });
         } finally {
-            setPermissionAction(null);
+            endPermissionAction();
         }
         return false;
     };
@@ -406,7 +474,17 @@ const EmployeeManagement = ({ navigation }) => {
         setSelectedDepartment('All');
     };
 
+    // Short department name, or the full one when two departments share the short name
+    const departmentLabel = (dept) => {
+        const short = shortDept(dept);
+        const clash = (filterOptions.departments || []).some((d) => d !== dept && shortDept(d) === short);
+        return clash ? dept : short;
+    };
+
     const openRecord = (link) => {
+        if (!employeeDetails) {
+            return;
+        }
         setDetailsModalVisible(false);
         navigation.navigate(link.route, {
             preselectEmployee: employeeDetails.name,
@@ -416,18 +494,19 @@ const EmployeeManagement = ({ navigation }) => {
 
     // ---------------------------------------------------------------- list
     const renderEmployeeRow = (item) => {
+        // a non-active status sits with the tags under the text, so long names keep the row width
         const tags = [
+            item.status && item.status !== 'Active' && <StatusText key="status" label={item.status} tone={STATUS_TONE[item.status]} />,
             item.has_edit_permission && <Tag key="edit" label="Can edit profile" />,
             item.has_pending_request && <Tag key="request" label="Edit requested" tone="warning" />,
         ].filter(Boolean);
         return (
             <Row
                 key={item.name}
-                left={<PhotoAvatar name={item.employee_name} image={item.image} />}
-                title={item.employee_name}
+                left={<PhotoAvatar name={item.employee_name || item.name} image={item.image} />}
+                title={item.employee_name || item.name}
                 subtitle={roleOf(item) || item.name}
                 meta={tags.length ? tags : null}
-                right={item.status && item.status !== 'Active' ? <StatusText label={item.status} tone={STATUS_TONE[item.status]} /> : null}
                 onPress={() => handleViewDetails(item)}
             />
         );
@@ -460,17 +539,27 @@ const EmployeeManagement = ({ navigation }) => {
                         {pendingRequests.map((req) => (
                             <Row
                                 key={req.employee}
-                                left={<Avatar name={req.employee_name} />}
-                                title={req.employee_name}
+                                left={<Avatar name={req.employee_name || req.employee} />}
+                                title={req.employee_name || req.employee}
                                 subtitle={req.reason || 'No reason given'}
-                                value={displayDate(req.requested_on)}
+                                meta={displayDate(req.requested_on) ? (
+                                    <Text style={styles.metaText} numberOfLines={1}>{`Requested ${displayDate(req.requested_on)}`}</Text>
+                                ) : null}
                                 onPress={() => setSelectedRequest(req)}
                             />
                         ))}
                     </Group>
                 ) : null}
 
-                {employees.length === 0 ? (
+                {employees.length === 0 && loadError ? (
+                    <EmptyState
+                        icon="alert-circle"
+                        title="Could not load employees"
+                        message={loadError}
+                        action="Try again"
+                        onAction={fetchEmployees}
+                    />
+                ) : employees.length === 0 ? (
                     <EmptyState icon="users" title="No employees" message="Pull down to refresh." />
                 ) : filteredEmployees.length === 0 ? (
                     <EmptyState
@@ -562,7 +651,7 @@ const EmployeeManagement = ({ navigation }) => {
                 <View style={styles.profileAvatar}>
                     <PhotoAvatar key={d.name} name={d.employee_name} image={d.image} size={64} />
                 </View>
-                <Text style={styles.profileName}>{d.employee_name}</Text>
+                <Text style={styles.profileName}>{d.employee_name || d.name}</Text>
                 {roleOf(d) ? <Text style={styles.profileRole}>{roleOf(d)}</Text> : null}
                 <View style={styles.profileMeta}>
                     <Text style={styles.profileId} selectable>{d.name}</Text>
@@ -617,7 +706,7 @@ const EmployeeManagement = ({ navigation }) => {
 
             <Group title="Bank details">
                 <InfoRow label="Bank name" value={d.bank_name} />
-                <InfoRow label="Account number" value={d.bank_ac_no ? '••••' + d.bank_ac_no.slice(-4) : null} />
+                <InfoRow label="Account number" value={d.bank_ac_no ? '••••' + String(d.bank_ac_no).slice(-4) : null} />
                 <InfoRow label="IBAN" value={d.iban} />
                 <InfoRow label="Salary mode" value={d.salary_mode} />
             </Group>
@@ -651,7 +740,7 @@ const EmployeeManagement = ({ navigation }) => {
                         <EmptyState
                             icon="alert-circle"
                             title="Could not load details"
-                            message="Check your connection and try again."
+                            message={detailsError || 'Check your connection and try again.'}
                             action="Try again"
                             onAction={() => selectedEmployee && fetchEmployeeDetails(selectedEmployee.name)}
                         />
@@ -674,6 +763,7 @@ const EmployeeManagement = ({ navigation }) => {
             <SafeAreaView style={styles.page}>
                 <ModalTopInset />
                 <PageHeader title="Edit employee" onClose={() => setEditModalVisible(false)} />
+                <KeyboardSafeView>
                 <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
                     <Screen
                         footer={(
@@ -730,6 +820,7 @@ const EmployeeManagement = ({ navigation }) => {
                         </FormSection>
                     </Screen>
                 </KeyboardAvoidingView>
+                </KeyboardSafeView>
             </SafeAreaView>
         </Modal>
     );
@@ -740,7 +831,7 @@ const EmployeeManagement = ({ navigation }) => {
         return (
             <Sheet
                 visible={Boolean(selectedRequest)}
-                title={selectedRequest?.employee_name}
+                title={selectedRequest?.employee_name || selectedRequest?.employee}
                 subtitle="Profile edit request"
                 onClose={() => !busy && setSelectedRequest(null)}
                 dismissable={!busy}
@@ -786,7 +877,9 @@ const EmployeeManagement = ({ navigation }) => {
                 {['All', ...(filterOptions.departments || [])].map((dept) => (
                     <Row
                         key={dept}
-                        title={dept === 'All' ? 'All departments' : shortDept(dept)}
+                        title={dept === 'All' ? 'All departments' : departmentLabel(dept)}
+                        titleLines={2}
+                        selected={selectedDepartment === dept}
                         right={selectedDepartment === dept ? <Icon name="check" size={18} color={color.accent} /> : null}
                         chevron={false}
                         onPress={() => {
@@ -799,35 +892,67 @@ const EmployeeManagement = ({ navigation }) => {
         </Sheet>
     );
 
+    // Status filter: a sheet instead of a five-way segmented control, which cannot fit
+    // "Suspended" and "Inactive" on a 320 dp phone
+    const renderStatusSheet = () => (
+        <Sheet
+            visible={statusSheetVisible}
+            title="Status"
+            onClose={() => setStatusSheetVisible(false)}
+        >
+            <Group>
+                {STATUS_OPTIONS.map((status) => {
+                    const count = status === 'All' ? employees.length : employees.filter((e) => e.status === status).length;
+                    return (
+                        <Row
+                            key={status}
+                            title={status === 'All' ? 'All statuses' : status}
+                            value={employees.length ? count : undefined}
+                            selected={selectedStatus === status}
+                            right={selectedStatus === status ? <Icon name="check" size={18} color={color.accent} /> : null}
+                            chevron={false}
+                            onPress={() => {
+                                setSelectedStatus(status);
+                                setStatusSheetVisible(false);
+                            }}
+                        />
+                    );
+                })}
+            </Group>
+        </Sheet>
+    );
+
     const departmentActive = selectedDepartment !== 'All';
+    const statusActive = selectedStatus !== 'Active';
 
     return (
         <View style={styles.container}>
             <StatusBar barStyle="dark-content" backgroundColor={color.surface} />
 
             <View style={styles.toolbar}>
-                <Segmented value={selectedStatus} onChange={setSelectedStatus} options={STATUS_OPTIONS} />
-                <View style={styles.searchRow}>
-                    <SearchField
-                        value={searchQuery}
-                        onChangeText={setSearchQuery}
-                        placeholder="Search employees"
-                        style={styles.flex}
+                <SearchField
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    placeholder="Search employees"
+                />
+                <View style={styles.filters}>
+                    <FilterChip
+                        label={selectedStatus === 'All' ? 'All statuses' : selectedStatus}
+                        active={statusActive}
+                        onPress={() => setStatusSheetVisible(true)}
+                        accessibilityLabel="Filter by status"
                     />
-                    <Pressable
+                    <FilterChip
+                        label={departmentActive ? departmentLabel(selectedDepartment) : 'All departments'}
+                        active={departmentActive}
                         onPress={() => setDepartmentSheetVisible(true)}
                         accessibilityLabel="Filter by department"
-                        style={({ pressed }) => [
-                            styles.deptButton,
-                            departmentActive && styles.deptButtonActive,
-                            pressed && styles.pressed,
-                        ]}
-                    >
-                        <Text style={[styles.deptButtonText, departmentActive && styles.deptButtonTextActive]} numberOfLines={1}>
-                            {departmentActive ? shortDept(selectedDepartment) : 'Department'}
-                        </Text>
-                        <Icon name="chevron-down" size={16} color={departmentActive ? color.accent : color.textSecondary} />
-                    </Pressable>
+                    />
+                    {statusActive || departmentActive ? (
+                        <Pressable onPress={clearFilters} hitSlop={8} style={styles.clear}>
+                            <Text style={styles.link}>Clear</Text>
+                        </Pressable>
+                    ) : null}
                 </View>
             </View>
 
@@ -837,9 +962,22 @@ const EmployeeManagement = ({ navigation }) => {
             {renderEditModal()}
             {renderRequestSheet()}
             {renderDepartmentSheet()}
+            {renderStatusSheet()}
         </View>
     );
 };
+
+// Filter button in the toolbar: current choice + chevron; accent when it narrows the list.
+const FilterChip = ({ label, active, onPress, accessibilityLabel }) => (
+    <Pressable
+        onPress={onPress}
+        accessibilityLabel={accessibilityLabel}
+        style={({ pressed }) => [styles.chip, active && styles.chipActive, pressed && styles.pressed]}
+    >
+        <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={1}>{label}</Text>
+        <Icon name="chevron-down" size={14} color={active ? color.accent : color.textSecondary} />
+    </Pressable>
+);
 
 // ------------------------------------------------------------------ local building blocks
 
@@ -908,7 +1046,7 @@ const FormSection = ({ title, children }) => (
 const EditField = ({ label, field, value, onChange, keyboardType = 'default', multiline = false, placeholder }) => (
     <TextField
         label={label}
-        value={value || ''}
+        value={value === null || value === undefined ? '' : String(value)}
         onChangeText={(text) => onChange(prev => ({ ...prev, [field]: text }))}
         placeholder={placeholder}
         keyboardType={keyboardType}
@@ -931,23 +1069,27 @@ const styles = StyleSheet.create({
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: color.border,
     },
-    searchRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.md },
-    deptButton: {
+    filters: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.sm },
+    chip: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        height: 40,
-        maxWidth: 150,
+        flexShrink: 1,
+        gap: 4,
+        minHeight: 32,
         paddingHorizontal: space.md,
-        borderRadius: radius.md,
-        backgroundColor: '#EAECF0',
+        paddingVertical: 4,
+        borderRadius: 16,
+        backgroundColor: color.neutralSoft,
     },
-    deptButtonActive: { backgroundColor: color.accentSoft },
-    deptButtonText: { flexShrink: 1, fontSize: 15, color: color.textSecondary },
-    deptButtonTextActive: { color: color.accent, fontWeight: '500' },
+    chipActive: { backgroundColor: color.accentSoft },
+    chipText: { flexShrink: 1, fontSize: 13, fontWeight: '500', color: color.textSecondary },
+    chipTextActive: { color: color.accent },
+    clear: { marginLeft: 'auto', paddingLeft: space.sm },
+    link: { fontSize: 13, fontWeight: '600', color: color.accent },
 
     // List
     stats: { marginBottom: space.xl },
+    metaText: { ...type.caption, flexShrink: 1 },
     photo: { marginRight: space.md, backgroundColor: color.neutralSoft },
 
     // Full-screen pages
@@ -973,7 +1115,7 @@ const styles = StyleSheet.create({
     profileAvatar: { marginRight: -space.md, marginBottom: space.md },
     profileName: { ...type.title, textAlign: 'center' },
     profileRole: { ...type.secondary, marginTop: 2, textAlign: 'center' },
-    profileMeta: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: space.sm },
+    profileMeta: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: space.md, marginTop: space.sm },
     profileId: { ...type.secondary, color: color.textTertiary, fontVariant: ['tabular-nums'] },
 
     // Profile rows

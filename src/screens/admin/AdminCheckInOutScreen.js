@@ -4,7 +4,7 @@
 // device. Shows the person's attendance for today so only the right action is offered
 // (Check In -> Check Out -> done). Office mode needs the device inside the office geofence;
 // the server checks the geofence and WFH / On Site eligibility again.
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Switch, Alert, ActivityIndicator } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import AttendanceService from '../../services/attendance.service';
@@ -44,6 +44,12 @@ const WORK_MODES = [
     { value: 'Onsite', label: 'On site' },
 ];
 
+const LIST_LIMIT = 8;
+
+// 'Check-In' / 'Check-Out' are the API's action names; this is how they read on screen
+const actionLabel = (action) => (action === 'Check-In' ? 'Check in' : 'Check out');
+const formatDistance = (m) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`);
+
 const NO_STATUS = { hasCheckedIn: false, hasCheckedOut: false, checkInTime: null, checkOutTime: null, status: null, workType: null };
 
 const errorMessage = (res) => {
@@ -61,6 +67,8 @@ const AdminCheckInOutScreen = () => {
 
     const [kioskMode, setKioskMode] = useState(false);
     const [employeeList, setEmployeeList] = useState([]);
+    const [employeesState, setEmployeesState] = useState('idle'); // idle | loading | error | done
+    const [employeesError, setEmployeesError] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedEmployee, setSelectedEmployee] = useState(null);
 
@@ -78,11 +86,12 @@ const AdminCheckInOutScreen = () => {
     const [today, setToday] = useState(NO_STATUS);
     const [statusLoading, setStatusLoading] = useState(false);
     const [busy, setBusy] = useState(false);
+    const busyRef = useRef(false); // blocks a second tap before the re-render disables the button
     const [refreshing, setRefreshing] = useState(false);
 
     // the person being checked in / out
     const targetId = kioskMode ? selectedEmployee?.name : adminId;
-    const targetName = kioskMode ? selectedEmployee?.employee_name : adminName;
+    const targetName = kioskMode ? (selectedEmployee?.employee_name || selectedEmployee?.name) : adminName;
 
     // ------------------------------------------------------------------ data
     const loadEligibility = useCallback(async () => {
@@ -99,6 +108,7 @@ const AdminCheckInOutScreen = () => {
             return;
         }
         setOfficeError(null);
+        setLocationStatus('checking'); // the old result belonged to the previous office
         const res = await AttendanceService.getOfficeLocation(empId);
         if (res.success && res.data?.message?.latitude != null) {
             setOfficeLocation(res.data.message);
@@ -115,7 +125,13 @@ const AdminCheckInOutScreen = () => {
         }
         setStatusLoading(true);
         try {
-            setToday(await AttendanceService.getTodayAttendanceStatus(empId));
+            const status = await AttendanceService.getTodayAttendanceStatus(empId);
+            if (status.error) {
+                // unknown, not "not checked in": block the action until a refresh works
+                setToday({ ...NO_STATUS, error: status.error });
+                return;
+            }
+            setToday(status);
         } finally {
             setStatusLoading(false);
         }
@@ -159,32 +175,50 @@ const AdminCheckInOutScreen = () => {
         }
     }, [workMode, officeLocation, checkGeofence]);
 
-    useEffect(() => {
-        if (kioskMode && employeeList.length === 0) {
-            AttendanceService.getEmployeeWFHList().then((res) => {
-                if (res.success && Array.isArray(res.data?.message)) {
-                    setEmployeeList(res.data.message);
-                } else {
-                    showToast({ type: 'error', text1: 'Could not load employees', text2: errorMessage(res) });
-                }
-            });
+    const loadEmployees = useCallback(async () => {
+        setEmployeesState('loading');
+        const res = await AttendanceService.getEmployeeWFHList();
+        if (res.success && Array.isArray(res.data?.message)) {
+            setEmployeeList(res.data.message);
+            setEmployeesState('done');
+        } else {
+            setEmployeesError(errorMessage(res));
+            setEmployeesState('error');
         }
-    }, [kioskMode, employeeList.length]);
+    }, []);
+
+    useEffect(() => {
+        if (kioskMode && employeesState === 'idle') {
+            loadEmployees();
+        }
+    }, [kioskMode, employeesState, loadEmployees]);
 
     const onRefresh = async () => {
         setRefreshing(true);
-        await Promise.all([loadToday(targetId), workMode === 'Office' ? checkGeofence() : Promise.resolve()]);
+        const tasks = [loadToday(targetId)];
+        if (adminId) {
+            tasks.push(loadEligibility());
+        }
+        if (officeError || !officeLocation) {
+            tasks.push(loadOfficeLocation(targetId || adminId)); // the location check follows when it arrives
+        } else if (workMode === 'Office') {
+            tasks.push(checkGeofence());
+        }
+        if (kioskMode && employeesState === 'error') {
+            tasks.push(loadEmployees());
+        }
+        await Promise.all(tasks);
         setRefreshing(false);
     };
 
     // ------------------------------------------------------------------ derived
-    const filteredEmployees = useMemo(() => {
+    const matchingEmployees = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();
-        const list = q
+        return q
             ? employeeList.filter((e) => e.employee_name?.toLowerCase().includes(q) || e.name?.toLowerCase().includes(q))
             : employeeList;
-        return list.slice(0, 8);
     }, [employeeList, searchQuery]);
+    const filteredEmployees = matchingEmployees.slice(0, LIST_LIMIT);
 
     // eligibility: own flags for the admin; for kiosk the server decides per employee
     const wfhAllowed = kioskMode ? Boolean(selectedEmployee?.wfh_today ?? selectedEmployee?.custom_wfh_eligible) : adminWfhEligible;
@@ -198,8 +232,12 @@ const AdminCheckInOutScreen = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [wfhAllowed, onsiteAllowed]);
 
-    const nextAction = !today.hasCheckedIn ? 'Check-In' : !today.hasCheckedOut ? 'Check-Out' : null;
+    const nextAction = today.error ? null : !today.hasCheckedIn ? 'Check-In' : !today.hasCheckedOut ? 'Check-Out' : null;
+    const radiusText = officeLocation?.radius != null ? formatDistance(officeLocation.radius) : null;
     const blockedReason = (() => {
+        if (!kioskMode && !adminId) {
+            return 'No employee record is linked to your account.';
+        }
         if (kioskMode && !selectedEmployee) {
             return 'Select an employee first.';
         }
@@ -217,7 +255,7 @@ const AdminCheckInOutScreen = () => {
                 return 'Location unavailable. Tap Refresh under Location.';
             }
             if (locationStatus === 'outside') {
-                return `${distance} m from the office. Move within ${officeLocation?.radius} m or choose WFH / On Site.`;
+                return `${formatDistance(distance)} from the office. ${radiusText ? `Move within ${radiusText} or choose` : 'Choose'} WFH or On site.`;
             }
         }
         return null;
@@ -225,6 +263,10 @@ const AdminCheckInOutScreen = () => {
 
     // ------------------------------------------------------------------ action
     const performAction = async () => {
+        if (busyRef.current) {
+            return;
+        }
+        busyRef.current = true;
         setBusy(true);
         try {
             let latitude;
@@ -250,7 +292,7 @@ const AdminCheckInOutScreen = () => {
                 const time = formatTimeOfDay(result.timestamp || result.checkout_time || new Date());
                 showToast({
                     type: 'success',
-                    text1: `${nextAction === 'Check-In' ? 'Checked in' : 'Checked out'}: ${targetName}`,
+                    text1: `${nextAction === 'Check-In' ? 'Checked in' : 'Checked out'}: ${targetName || targetId}`,
                     text2: time ? `at ${time}` : undefined,
                 });
                 if (kioskMode) {
@@ -259,11 +301,12 @@ const AdminCheckInOutScreen = () => {
                 }
                 loadToday(kioskMode ? null : targetId);
             } else {
-                Alert.alert(`${nextAction} failed`, errorMessage(res));
+                Alert.alert(`${actionLabel(nextAction)} failed`, errorMessage(res));
             }
         } catch (e) {
-            Alert.alert('Error', e?.message || 'Something went wrong.');
+            Alert.alert(`${actionLabel(nextAction)} failed`, e?.message || 'Something went wrong.');
         } finally {
+            busyRef.current = false;
             setBusy(false);
         }
     };
@@ -274,7 +317,7 @@ const AdminCheckInOutScreen = () => {
         }
         if (kioskMode) {
             const mode = WORK_MODES.find((m) => m.value === workMode)?.label;
-            Alert.alert('Confirm', `${nextAction} for ${targetName} (${targetId})\nWork mode: ${mode}`, [
+            Alert.alert('Confirm', `${actionLabel(nextAction)} ${targetName} (${targetId})\nWork mode: ${mode}`, [
                 { text: 'Cancel', style: 'cancel' },
                 { text: 'Confirm', onPress: performAction },
             ]);
@@ -286,7 +329,7 @@ const AdminCheckInOutScreen = () => {
     // ------------------------------------------------------------------ render
     const checkIn = formatTimeOfDay(today.checkInTime);
     const checkOut = formatTimeOfDay(today.checkOutTime);
-    const todayState = !today.hasCheckedIn ? 'Not checked in' : !today.hasCheckedOut ? 'Checked in' : 'Completed';
+    const todayState = today.error ? 'Status unknown' : !today.hasCheckedIn ? 'Not checked in' : !today.hasCheckedOut ? 'Checked in' : 'Completed';
     const todayDetail = [checkIn && `In ${checkIn}`, checkOut && `Out ${checkOut}`].filter(Boolean).join('  \u00B7  ');
 
     const location = (() => {
@@ -299,7 +342,7 @@ const AdminCheckInOutScreen = () => {
         if (locationStatus === 'error') {
             return { title: 'Location unavailable', subtitle: locationError, tone: 'danger' };
         }
-        const where = `${distance} m from ${officeLocation?.location_name || 'the office'}, allowed ${officeLocation?.radius} m`;
+        const where = `${distance != null ? formatDistance(distance) : '–'} from ${officeLocation?.location_name || 'the office'}${radiusText ? `, allowed ${radiusText}` : ''}`;
         return locationStatus === 'inside'
             ? { title: 'Inside the office area', subtitle: where, tone: 'success' }
             : { title: 'Outside the office area', subtitle: where, tone: 'danger' };
@@ -339,8 +382,11 @@ const AdminCheckInOutScreen = () => {
                     <Row
                         left={<Avatar name={targetName} />}
                         title={targetName}
+                        titleLines={2}
                         subtitle={todayDetail || targetId}
-                        right={statusLoading ? <ActivityIndicator size="small" color={color.textTertiary} /> : <StatusText label={todayState} tone={todayState === 'Not checked in' ? 'neutral' : undefined} />}
+                        meta={statusLoading
+                            ? <ActivityIndicator size="small" color={color.textTertiary} />
+                            : <StatusText label={todayState} tone={todayState === 'Not checked in' ? 'neutral' : undefined} />}
                     />
                 )}
                 <Row
@@ -365,20 +411,24 @@ const AdminCheckInOutScreen = () => {
             {kioskMode ? (
                 selectedEmployee ? (
                     <Group title="Employee" action="Change" onAction={() => { setSelectedEmployee(null); setSearchQuery(''); }}>
-                        <Row left={<Avatar name={selectedEmployee.employee_name} />} title={selectedEmployee.employee_name}
+                        <Row left={<Avatar name={targetName} />} title={targetName} titleLines={2}
                             subtitle={[selectedEmployee.name, (selectedEmployee.department || '').replace(' - DG', '')].filter(Boolean).join('  \u00B7  ')} />
                     </Group>
                 ) : (
                     <View style={styles.block}>
                         <SearchField value={searchQuery} onChangeText={setSearchQuery} placeholder="Search by name or ID" style={styles.search} />
-                        {employeeList.length === 0 ? (
+                        {employeesState === 'error' ? (
+                            <EmptyState icon="alert-circle" title="Could not load employees" message={employeesError} action="Try again" onAction={loadEmployees} />
+                        ) : employeesState !== 'done' ? (
                             <ActivityIndicator color={color.accent} style={styles.loader} />
+                        ) : employeeList.length === 0 ? (
+                            <EmptyState icon="users" title="No employees" message="No active employees were found." />
                         ) : filteredEmployees.length === 0 ? (
-                            <EmptyState icon="search" title="No match" message={`No employee matches \u201C${searchQuery}\u201D.`} />
+                            <EmptyState icon="search" title="No match" message={`No employee matches \u201C${searchQuery.trim()}\u201D.`} />
                         ) : (
-                            <Group>
+                            <Group footer={matchingEmployees.length > LIST_LIMIT ? `Showing ${LIST_LIMIT} of ${matchingEmployees.length}. Search to find others.` : undefined}>
                                 {filteredEmployees.map((emp) => (
-                                    <Row key={emp.name} left={<Avatar name={emp.employee_name} />} title={emp.employee_name} subtitle={emp.name} onPress={() => setSelectedEmployee(emp)} />
+                                    <Row key={emp.name} left={<Avatar name={emp.employee_name} />} title={emp.employee_name || emp.name} subtitle={emp.name} onPress={() => setSelectedEmployee(emp)} />
                                 ))}
                             </Group>
                         )}
@@ -411,13 +461,11 @@ const AdminCheckInOutScreen = () => {
                     <Row
                         icon="map-pin"
                         title={location.title}
+                        titleLines={2}
                         subtitle={location.subtitle}
-                        right={(
-                            <View style={styles.locationRight}>
-                                <StatusText label={location.tone === 'success' ? 'In range' : location.tone === 'danger' ? 'Blocked' : 'Wait'} tone={location.tone} />
-                                <IconButton name="refresh-cw" onPress={checkGeofence} disabled={!officeLocation || locationStatus === 'checking'} label="Refresh location" />
-                            </View>
-                        )}
+                        subtitleLines={3}
+                        meta={<StatusText label={location.tone === 'success' ? 'In range' : location.tone === 'danger' ? 'Blocked' : 'Wait'} tone={location.tone} />}
+                        right={<IconButton name="refresh-cw" onPress={checkGeofence} disabled={!officeLocation || locationStatus === 'checking'} label="Refresh location" />}
                     />
                 </Group>
             ) : (
@@ -433,7 +481,6 @@ const styles = StyleSheet.create({
     block: { marginBottom: space.xl },
     search: { marginBottom: space.md },
     loader: { marginVertical: space.lg },
-    locationRight: { flexDirection: 'row', alignItems: 'center', gap: 2 },
     modeNote: { ...type.secondary, paddingHorizontal: space.xs, marginTop: -space.md },
     blocked: { ...type.secondary, textAlign: 'center', marginBottom: space.sm },
 });

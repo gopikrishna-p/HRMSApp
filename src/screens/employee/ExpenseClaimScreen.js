@@ -6,9 +6,9 @@
 // least one receipt photo; photos upload as soon as they are taken (ReceiptPicker). The approver
 // sets the approved amounts and HR records the payments.
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Platform, Alert } from 'react-native';
+import { View, Text, StyleSheet, Platform, Alert, useWindowDimensions } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import apiService, { extractFrappeData } from '../../services/api.service';
+import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import { formatLocalDate } from '../../utils/dateFormat';
 import showToast from '../../utils/Toast';
 import {
@@ -33,6 +33,7 @@ import {
     SelectField,
     EmptyState,
     Loading,
+    Notice,
     Icon,
     color,
     space,
@@ -140,6 +141,10 @@ const ExpenseClaimScreen = ({ navigation }) => {
     const [loading, setLoading] = useState(true); // employee and expense types are fetched on mount
     const [refreshing, setRefreshing] = useState(false);
     const [employeeId, setEmployeeId] = useState('');
+    const [employeeError, setEmployeeError] = useState(null); // employee record could not be loaded
+    const [typesError, setTypesError] = useState(null); // expense types could not be loaded
+    const [submitting, setSubmitting] = useState(false);
+    const submittingRef = useRef(false); // blocks a second tap before the re-render disables the button
 
     // Submit form state
     const [expenses, setExpenses] = useState(() => [newExpenseLine()]);
@@ -150,9 +155,13 @@ const ExpenseClaimScreen = ({ navigation }) => {
 
     // History state
     const [claims, setClaims] = useState([]);
+    const [claimsLoading, setClaimsLoading] = useState(false);
+    const [claimsError, setClaimsError] = useState(null);
+    const claimsRequest = useRef(0); // ignores an answer for a filter that is no longer selected
+    const claimsFilter = useRef(null); // the filter the claims on screen belong to
     const [filterStatus, setFilterStatus] = useState(''); // '', Draft, Approved, Rejected
-    const [totalClaimed, setTotalClaimed] = useState(0);
-    const [totalApproved, setTotalApproved] = useState(0);
+    const [totalClaimed, setTotalClaimed] = useState(null); // null until loaded ('–')
+    const [totalApproved, setTotalApproved] = useState(null);
     const [summary, setSummary] = useState(null); // in review / awaiting payment / paid amounts
 
     // Claim detail sheet: the list row (shown at once) and its full detail (lines, photos, payments)
@@ -161,6 +170,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
     const [detailLoading, setDetailLoading] = useState(false);
     const [detailError, setDetailError] = useState(null);
     const [withdrawing, setWithdrawing] = useState(false);
+    const withdrawingRef = useRef(false);
     const detailRequest = useRef(0); // ignores a slow answer for a claim that is no longer open
     const lastSelected = useRef(null); // keeps the detail sheet filled while it slides out
 
@@ -173,9 +183,15 @@ const ExpenseClaimScreen = ({ navigation }) => {
     // Presentation only: expense-type picker
     const [typePicker, setTypePicker] = useState(null); // { index, open }
 
+    // On a narrow phone with large text the stage moves under the amount, so a long stage
+    // ("Awaiting payment") never squeezes the amount into "₹1,2…" (app text grows up to 1.3x).
+    const { width: windowWidth, fontScale } = useWindowDimensions();
+    const stageBelow = windowWidth / Math.min(Math.max(fontScale || 1, 1), 1.3) < 280;
+
     useEffect(() => {
         loadInitialData();
         loadSummary();
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- employee, expense types and the summary are loaded once on mount
     }, []);
 
     useEffect(() => {
@@ -185,6 +201,22 @@ const ExpenseClaimScreen = ({ navigation }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when the list is shown, the filter changes or the employee is known
     }, [activeTab, filterStatus, employeeId]);
 
+    const loadExpenseTypes = async () => {
+        try {
+            const typesResponse = await apiService.getExpenseClaimTypes();
+            if (!isApiSuccess(typesResponse)) {
+                setTypesError(getApiErrorMessage(typesResponse, 'Please try again.'));
+                return;
+            }
+            const types = extractFrappeData(typesResponse, []);
+            setExpenseTypes(Array.isArray(types) ? types : []);
+            setTypesError(null);
+        } catch (error) {
+            console.error('Error loading expense types:', error);
+            setTypesError(error.message || 'Please try again.');
+        }
+    };
+
     const loadInitialData = async () => {
         setLoading(true);
         try {
@@ -193,26 +225,38 @@ const ExpenseClaimScreen = ({ navigation }) => {
             const empData = extractFrappeData(empResponse, null);
             if (empData && empData.name) {
                 setEmployeeId(empData.name);
+                setEmployeeError(null);
+            } else {
+                setEmployeeError(getApiErrorMessage(empResponse, 'Pull down to try again.'));
             }
 
             // Get expense types
-            const typesResponse = await apiService.getExpenseClaimTypes();
-            const types = extractFrappeData(typesResponse, []);
-            setExpenseTypes(Array.isArray(types) ? types : []);
+            await loadExpenseTypes();
         } catch (error) {
             console.error('Error loading initial data:', error);
-            showToast({ type: 'error', text1: 'Could not load expense types', text2: error.message });
+            setEmployeeError(error.message || 'Pull down to try again.');
         } finally {
             setLoading(false);
         }
     };
 
+    // A failed reload of the same filter keeps the claims on screen and says so; a failed load
+    // for another filter clears them, so claims of the previous filter are never shown under it.
     const loadClaims = async () => {
         if (!employeeId) {
             return;
         }
 
-        setLoading(true);
+        const request = ++claimsRequest.current;
+        const filter = filterStatus;
+        const fail = (message) => {
+            if (claimsFilter.current !== filter) {
+                setClaims([]);
+                claimsFilter.current = filter;
+            }
+            setClaimsError(message);
+        };
+        setClaimsLoading(true);
         try {
             const filters = {
                 employee: employeeId,
@@ -221,15 +265,28 @@ const ExpenseClaimScreen = ({ navigation }) => {
             };
 
             const response = await apiService.getEmployeeExpenseClaims(filters);
+            if (request !== claimsRequest.current) {
+                return;
+            }
+            if (!isApiSuccess(response)) {
+                fail(getApiErrorMessage(response, 'Pull down to try again.'));
+                return;
+            }
             const data = extractFrappeData(response, {});
-            setClaims(data.claims || []);
+            setClaims(Array.isArray(data.claims) ? data.claims : []);
+            claimsFilter.current = filter;
             setTotalClaimed(data.total_claimed_amount || 0);
             setTotalApproved(data.total_approved_amount || 0);
+            setClaimsError(null);
         } catch (error) {
             console.error('Error loading claims:', error);
-            showToast({ type: 'error', text1: 'Could not load expense claims', text2: error.message });
+            if (request === claimsRequest.current) {
+                fail(error.message || 'Pull down to try again.');
+            }
         } finally {
-            setLoading(false);
+            if (request === claimsRequest.current) {
+                setClaimsLoading(false);
+            }
         }
     };
 
@@ -247,16 +304,19 @@ const ExpenseClaimScreen = ({ navigation }) => {
 
     const onRefresh = async () => {
         setRefreshing(true);
-        if (activeTab === 'history') {
+        if (activeTab !== 'history') {
+            await loadInitialData();
+        } else if (employeeId) {
             await Promise.all([loadClaims(), loadSummary()]);
         } else {
-            await loadInitialData();
+            // the employee record did not load: load it again (the claims follow once it is known)
+            await Promise.all([loadInitialData(), loadSummary()]);
         }
         setRefreshing(false);
     };
 
     const addExpenseItem = () => {
-        setExpenses([...expenses, newExpenseLine()]);
+        setExpenses((list) => [...list, newExpenseLine()]);
     };
 
     const removeExpenseItem = (index) => {
@@ -280,13 +340,16 @@ const ExpenseClaimScreen = ({ navigation }) => {
     };
 
     const updateExpenseItem = (index, field, value) => {
-        const newExpenses = [...expenses];
-        newExpenses[index][field] = value;
-
         // sanctioned_amount is not set here: the backend defaults it to the amount and the
         // approver changes it during approval.
+        setExpenses((list) => list.map((exp, i) => (i === index ? { ...exp, [field]: value } : exp)));
+    };
 
-        setExpenses(newExpenses);
+    // digits and one decimal point, so the amount sent is the amount typed ("1,500" -> "1500";
+    // parseFloat would read "1,500" as 1)
+    const cleanAmount = (text) => {
+        const [whole, ...rest] = String(text).replace(/[^0-9.]/g, '').split('.');
+        return rest.length ? `${whole}.${rest.join('').slice(0, 2)}` : whole;
     };
 
     // ReceiptPicker calls onChange with updater functions while uploads progress
@@ -323,7 +386,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
                 return false;
             }
 
-            if (!exp.amount || parseFloat(exp.amount) <= 0) {
+            if (!(parseFloat(exp.amount) > 0)) {
                 showToast({ type: 'error', text1: `Expense ${i + 1}: enter an amount above zero` });
                 return false;
             }
@@ -362,11 +425,12 @@ const ExpenseClaimScreen = ({ navigation }) => {
     };
 
     const handleSubmit = async () => {
-        if (!validateForm()) {
+        if (submittingRef.current || !validateForm()) {
             return;
         }
 
-        setLoading(true);
+        submittingRef.current = true;
+        setSubmitting(true);
         try {
             // Prepare expense items. sanctioned_amount is not sent by the employee: the
             // backend defaults it to the amount and the approver changes it during approval.
@@ -385,8 +449,8 @@ const ExpenseClaimScreen = ({ navigation }) => {
             );
 
             // Check if API returned success
-            if (!response.success) {
-                showToast({ type: 'error', text1: 'Claim not submitted', text2: response.message || 'Failed to submit expense claim' });
+            if (!isApiSuccess(response)) {
+                showToast({ type: 'error', text1: 'Claim not submitted', text2: getApiErrorMessage(response, 'Failed to submit expense claim') });
                 return;
             }
 
@@ -408,7 +472,8 @@ const ExpenseClaimScreen = ({ navigation }) => {
             console.error('Submit expense claim error:', error);
             showToast({ type: 'error', text1: 'Claim not submitted', text2: error.message || 'Failed to submit expense claim' });
         } finally {
-            setLoading(false);
+            submittingRef.current = false;
+            setSubmitting(false);
         }
     };
 
@@ -429,10 +494,10 @@ const ExpenseClaimScreen = ({ navigation }) => {
                 return;
             }
             const data = extractFrappeData(response, null);
-            if (response.success && data?.name) {
+            if (isApiSuccess(response) && data?.name) {
                 setClaimDetail(data);
             } else {
-                setDetailError(response.message || 'Please try again');
+                setDetailError(getApiErrorMessage(response, 'Please try again'));
             }
         } catch (error) {
             console.error('Error loading expense claim:', error);
@@ -458,21 +523,25 @@ const ExpenseClaimScreen = ({ navigation }) => {
     };
 
     const withdrawClaim = async (claimId) => {
+        if (withdrawingRef.current) {
+            return;
+        }
+        withdrawingRef.current = true;
         setWithdrawing(true);
         try {
             const response = await apiService.withdrawExpenseClaim(claimId);
-            if (!response.success) {
-                showToast({ type: 'error', text1: 'Claim not withdrawn', text2: response.message || 'Please try again' });
+            if (!isApiSuccess(response)) {
+                showToast({ type: 'error', text1: 'Claim not withdrawn', text2: getApiErrorMessage(response, 'Please try again') });
                 return;
             }
             setSelected(null);
             showToast({ type: 'success', text1: 'Claim withdrawn' });
-            loadClaims();
-            loadSummary();
+            await Promise.all([loadClaims(), loadSummary()]);
         } catch (error) {
             console.error('Withdraw expense claim error:', error);
             showToast({ type: 'error', text1: 'Claim not withdrawn', text2: error.message || 'Please try again' });
         } finally {
+            withdrawingRef.current = false;
             setWithdrawing(false);
         }
     };
@@ -495,10 +564,10 @@ const ExpenseClaimScreen = ({ navigation }) => {
         try {
             const response = await apiService.getExpensePaymentAccount();
             const data = extractFrappeData(response, null);
-            if (response.success && data) {
+            if (isApiSuccess(response) && data) {
                 setAccount(data);
             } else {
-                setAccountError(response.message || 'Please try again');
+                setAccountError(getApiErrorMessage(response, 'Please try again'));
             }
         } catch (error) {
             console.error('Error loading expense payments:', error);
@@ -528,7 +597,8 @@ const ExpenseClaimScreen = ({ navigation }) => {
     }
     const detail = selected || lastSelected.current;
     const fullDetail = claimDetail && detail && claimDetail.name === detail.name ? claimDetail : null;
-    const busy = loading && !refreshing;
+    // the claims list shows a spinner on the first load and on a filter change, not on pull-to-refresh
+    const listBusy = !refreshing && (loading || claimsLoading);
 
     // ------------------------------------------------------------------ new claim form
     const renderSubmitTab = () => (
@@ -537,12 +607,12 @@ const ExpenseClaimScreen = ({ navigation }) => {
             onRefresh={onRefresh}
             footer={(
                 <View style={styles.footerButtons}>
-                    <Button title="Cancel" variant="secondary" onPress={() => setActiveTab('history')} disabled={loading} style={styles.flex} />
+                    <Button title="Cancel" variant="secondary" onPress={() => setActiveTab('history')} disabled={submitting} style={styles.flex} />
                     <Button
                         title="Submit claim"
                         onPress={handleSubmit}
-                        loading={loading && !refreshing}
-                        disabled={loading || expenses.length === 0}
+                        loading={submitting}
+                        disabled={submitting || loading || expenses.length === 0}
                         style={styles.flex}
                     />
                 </View>
@@ -565,7 +635,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
                         <TextField
                             label="Amount (₹)"
                             value={expense.amount}
-                            onChangeText={(text) => updateExpenseItem(index, 'amount', text)}
+                            onChangeText={(text) => updateExpenseItem(index, 'amount', cleanAmount(text))}
                             placeholder="0.00"
                             keyboardType="decimal-pad"
                         />
@@ -597,7 +667,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
                             <ReceiptPicker
                                 value={photosByLine[expense.key] || []}
                                 onChange={setLinePhotos(expense.key)}
-                                disabled={busy}
+                                disabled={submitting}
                             />
                         </Field>
                     </View>
@@ -607,7 +677,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
             <Button title="Add another expense" variant="secondary" onPress={addExpenseItem} style={styles.addButton} />
 
             <Group>
-                <Row title="Total" right={<Text style={styles.totalValue}>{formatINR(calculateTotal(), 2)}</Text>} />
+                <Row title="Total" right={<Text style={styles.totalValue} numberOfLines={1}>{formatINR(calculateTotal(), 2)}</Text>} />
             </Group>
 
             <Group title="Remarks">
@@ -631,6 +701,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
             && Number(claim.total_sanctioned_amount) !== Number(claim.total_claimed_amount);
         const photoCount = Number(claim.receipt_count) || 0;
         const tags = [
+            stageBelow ? <StageText key="stage" claim={claim} /> : null,
             approvedDiffers ? <Tag key="approved" label={`${formatINR(claim.total_sanctioned_amount)} approved`} /> : null,
             photoCount > 0 ? <Tag key="photos" label={photosLabel(photoCount)} /> : null,
         ].filter(Boolean);
@@ -640,7 +711,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
                 title={formatINR(claim.total_claimed_amount)}
                 subtitle={[dateLabel(claim.posting_date), typesLabel(claim)].filter(Boolean).join('  ·  ')}
                 meta={tags.length ? tags : null}
-                right={<StageText claim={claim} />}
+                right={stageBelow ? null : <StageText claim={claim} />}
                 onPress={() => openClaim(claim)}
             />
         );
@@ -665,8 +736,8 @@ const ExpenseClaimScreen = ({ navigation }) => {
                 />
                 <Group footer="Totals cover all your claims, whatever filter is on.">
                     <Row title="Payments received" onPress={openPayments} />
-                    <Row title="Total claimed" value={formatINR(totalClaimed)} />
-                    <Row title="Total approved" value={formatINR(totalApproved)} />
+                    <Row title="Total claimed" value={totalClaimed === null ? '–' : formatINR(totalClaimed)} />
+                    <Row title="Total approved" value={totalApproved === null ? '–' : formatINR(totalApproved)} />
                 </Group>
 
                 <Text style={styles.sectionTitle}>Claims</Text>
@@ -677,8 +748,24 @@ const ExpenseClaimScreen = ({ navigation }) => {
                     style={styles.filter}
                 />
 
-                {busy ? (
+                {listBusy ? (
                     <Loading />
+                ) : !employeeId && employeeError ? (
+                    <EmptyState
+                        icon="alert-circle"
+                        title="Could not load your employee record"
+                        message={employeeError}
+                        action="Try again"
+                        onAction={onRefresh}
+                    />
+                ) : claimsError && claims.length === 0 ? (
+                    <EmptyState
+                        icon="alert-circle"
+                        title="Could not load your claims"
+                        message={claimsError}
+                        action="Try again"
+                        onAction={onRefresh}
+                    />
                 ) : claims.length === 0 ? (
                     <EmptyState
                         icon="file-text"
@@ -686,7 +773,13 @@ const ExpenseClaimScreen = ({ navigation }) => {
                         message={filterStatus ? undefined : 'Claims you submit appear here.'}
                     />
                 ) : (
-                    <Group>{claims.map(renderClaimItem)}</Group>
+                    <>
+                        {/* a failed refresh keeps the last list on screen */}
+                        {claimsError ? (
+                            <Notice tone="warning" icon="alert-circle" title="Could not refresh the list">{claimsError}</Notice>
+                        ) : null}
+                        <Group>{claims.map(renderClaimItem)}</Group>
+                    </>
                 )}
             </Screen>
         );
@@ -702,7 +795,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
                         {[dateLabel(line.expense_date), line.description].filter(Boolean).join('  ·  ')}
                     </Text>
                 </View>
-                <View>
+                <View style={styles.lineAmounts}>
                     <Text style={styles.lineAmount}>{formatINR(line.amount)}</Text>
                     {approved ? (
                         <Text style={styles.lineApproved}>{`${formatINR(line.sanctioned_amount)} approved`}</Text>
@@ -745,7 +838,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
                     {approved ? <Row title="Paid" value={formatINR(d.custom_paid_amount)} /> : null}
                     {approved ? <Row title="Still to be paid" value={formatINR(d.outstanding_amount)} /> : null}
                     {d.reviewed_on ? <Row title="Reviewed" value={dateLabel(d.reviewed_on)} /> : null}
-                    {d.expense_approver ? <Row title="Approver" value={d.expense_approver} /> : null}
+                    {d.expense_approver ? <Row title="Approver" value={d.expense_approver_name || d.expense_approver} /> : null}
                 </Group>
 
                 {rejected && d.rejection_reason ? (
@@ -869,7 +962,17 @@ const ExpenseClaimScreen = ({ navigation }) => {
 
             <Sheet visible={Boolean(typePicker?.open)} title="Expense type" onClose={closeTypePicker}>
                 {expenseTypes.length === 0 ? (
-                    <EmptyState icon="list" title="No expense types" />
+                    typesError ? (
+                        <EmptyState
+                            icon="alert-circle"
+                            title="Could not load expense types"
+                            message={typesError}
+                            action="Try again"
+                            onAction={loadExpenseTypes}
+                        />
+                    ) : (
+                        <EmptyState icon="list" title="No expense types" />
+                    )
                 ) : (
                     <Group>
                         {expenseTypes.map((t) => (
@@ -900,6 +1003,7 @@ const styles = StyleSheet.create({
     lineText: { flex: 1, paddingRight: space.sm },
     lineTitle: { ...type.bodyStrong },
     lineSubtitle: { ...type.secondary, marginTop: 2, lineHeight: 18 },
+    lineAmounts: { maxWidth: '50%', alignItems: 'flex-end' },
     lineAmount: { fontSize: 15, color: color.textSecondary, fontVariant: ['tabular-nums'], textAlign: 'right' },
     lineApproved: { ...type.caption, color: color.textSecondary, marginTop: 2, textAlign: 'right', fontVariant: ['tabular-nums'] },
     lineReceipts: { marginTop: space.md },
