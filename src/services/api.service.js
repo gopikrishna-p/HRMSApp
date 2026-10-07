@@ -14,7 +14,7 @@ const API_TIMEOUT = parseInt(process.env.API_TIMEOUT || '30000', 10);
 
 // Helper to build /api/method/hrms.api.<name>
 const m = (name) => `/api/method/hrms.api.${name}`;
-const e = (name) => `/api/method/hrms.api.expenses.${name}`;
+const xm = (name) => `/api/method/hrms.api.expenses.${name}`;
 
 /**
  * Helper to extract data from Frappe API responses.
@@ -1196,7 +1196,7 @@ class ApiService {
         if (employee) {
             form.append('employee', employee);
         }
-        return this.api.post(e('upload_expense_receipt'), form, {
+        return this.api.post(xm('upload_expense_receipt'), form, {
             headers: { 'Content-Type': 'multipart/form-data' },
             transformRequest: (data) => data, // let React Native set the multipart boundary
             timeout: 90000,
@@ -1207,42 +1207,42 @@ class ApiService {
     }
 
     deleteExpenseReceipt(receiptId) {
-        return this.post(e('delete_expense_receipt'), { receipt_id: receiptId });
+        return this.post(xm('delete_expense_receipt'), { receipt_id: receiptId });
     }
 
     /** Claim with lines, receipt photos (signed links), duplicate-photo warnings (HR) and payments. */
     getExpenseClaimDetail(claimId) {
-        return this.get(e('get_expense_claim_detail'), { claim_id: claimId });
+        return this.get(xm('get_expense_claim_detail'), { claim_id: claimId });
     }
 
     /** Employee withdraws a claim HR hasn't reviewed yet (photos are deleted too). */
     withdrawExpenseClaim(claimId) {
-        return this.post(e('withdraw_expense_claim'), { claim_id: claimId });
+        return this.post(xm('withdraw_expense_claim'), { claim_id: claimId });
     }
 
     /** Employee: pending review / awaiting payment / paid totals. */
     getMyExpenseSummary() {
-        return this.get(e('get_my_expense_summary'));
+        return this.get(xm('get_my_expense_summary'));
     }
 
     /** HR: employees owed money for approved expenses. */
     getExpensePayables() {
-        return this.get(e('get_expense_payables'));
+        return this.get(xm('get_expense_payables'));
     }
 
     /** What is owed and what was paid for one employee (HR: any employee; employee: themselves, omit the id). */
     getExpensePaymentAccount(employee) {
-        return this.get(e('get_expense_payment_account'), employee ? { employee } : {});
+        return this.get(xm('get_expense_payment_account'), employee ? { employee } : {});
     }
 
     /** HR: record a payment; it is split over the employee's approved claims, oldest first. */
     recordExpensePayout({ employee, amount, payout_date, payment_mode, reference, remarks }) {
-        return this.post(e('record_expense_payout'), { employee, amount, payout_date, payment_mode, reference, remarks });
+        return this.post(xm('record_expense_payout'), { employee, amount, payout_date, payment_mode, reference, remarks });
     }
 
     /** HR: undo a payment recorded by mistake. */
     deleteExpensePayout(payoutId) {
-        return this.post(e('delete_expense_payout'), { payout_id: payoutId });
+        return this.post(xm('delete_expense_payout'), { payout_id: payoutId });
     }
 
     /* -------------------------
@@ -1334,6 +1334,11 @@ class ApiService {
      * @param {string} requestId - Travel Request ID
      * @returns {Promise} Response with complete request details and comments
      */
+    /** Employee takes back a request HR hasn't decided on yet (it is deleted). */
+    withdrawTravelRequest(requestId) {
+        return this.post(m('withdraw_travel_request'), { request_id: requestId });
+    }
+
     getTravelRequestDetails(requestId) {
         return this.get(m('get_travel_request_details'), {
             request_id: requestId

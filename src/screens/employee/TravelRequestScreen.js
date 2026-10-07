@@ -14,6 +14,7 @@ import {
     ActivityIndicator,
     KeyboardAvoidingView,
     Platform,
+    Alert,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Toast from 'react-native-toast-message';
@@ -43,6 +44,7 @@ import {
     type,
     formatShortDate,
     ModalTopInset,
+    Notice,
 } from '../../components/ds';
 
 const FILTERS = [
@@ -158,6 +160,8 @@ const TravelRequestScreen = ({ navigation }) => {
     const [refreshing, setRefreshing] = useState(false);
     const [showForm, setShowForm] = useState(false);
     const [requests, setRequests] = useState([]);
+    const [counts, setCounts] = useState({}); // per status, over all requests (server statistics)
+    const [withdrawing, setWithdrawing] = useState(false);
     const [purposes, setPurposes] = useState([]);
     const [currentEmployee, setCurrentEmployee] = useState(null);
     const [expenseTypes, setExpenseTypes] = useState([]);
@@ -257,6 +261,7 @@ const TravelRequestScreen = ({ navigation }) => {
                 const data = extractFrappeData(response, { requests: [] });
                 const requestsData = data.requests || (Array.isArray(data) ? data : []);
                 setRequests(requestsData);
+                setCounts(data.statistics || {});
             } else {
                 setRequests([]);
             }
@@ -873,6 +878,33 @@ const TravelRequestScreen = ({ navigation }) => {
         </Modal>
     );
 
+    const confirmWithdraw = (r) => {
+        Alert.alert('Withdraw this request?', 'It is removed and HR will no longer see it.', [
+            { text: 'Keep', style: 'cancel' },
+            {
+                text: 'Withdraw',
+                style: 'destructive',
+                onPress: async () => {
+                    setWithdrawing(true);
+                    try {
+                        const res = await apiService.withdrawTravelRequest(r.request_id);
+                        if (isApiSuccess(res)) {
+                            setShowDetailsModal(false);
+                            showToast({ type: 'success', text1: 'Request withdrawn' });
+                            await loadRequests();
+                        } else {
+                            showToast({ type: 'error', text1: 'Not withdrawn', text2: res?.message || 'Try again' });
+                        }
+                    } catch (error) {
+                        showToast({ type: 'error', text1: 'Not withdrawn', text2: error?.message || 'Try again' });
+                    } finally {
+                        setWithdrawing(false);
+                    }
+                },
+            },
+        ]);
+    };
+
     // ------------------------------------------------------------------ details
     const renderDetailsSheet = () => {
         const r = selectedRequest;
@@ -883,12 +915,25 @@ const TravelRequestScreen = ({ navigation }) => {
                 visible={showDetailsModal && Boolean(r)}
                 title={r?.purpose_of_travel || 'Travel request'}
                 subtitle={r ? joinDot([r.request_id, r.travel_type]) || undefined : undefined}
-                onClose={() => setShowDetailsModal(false)}
-                footer={<Button title="Close" variant="secondary" onPress={() => setShowDetailsModal(false)} style={styles.flex} />}
+                onClose={() => !withdrawing && setShowDetailsModal(false)}
+                footer={(
+                    <>
+                        <Button title="Close" variant="secondary" onPress={() => setShowDetailsModal(false)} disabled={withdrawing} style={styles.flex} />
+                        {r?.can_withdraw ? (
+                            <Button title="Withdraw" variant="danger" onPress={() => confirmWithdraw(r)} loading={withdrawing} style={styles.flex} />
+                        ) : null}
+                    </>
+                )}
             >
                 {r ? (
                     <>
                         {r.status_label ? <Detail label="Status" value={<StatusText label={r.status_label} size={15} />} /> : null}
+                        {r.rejection_reason ? (
+                            <Notice tone="danger" title="Not approved">{r.rejection_reason}</Notice>
+                        ) : null}
+                        {r.approval_remarks ? (
+                            <Notice tone="success" title="Note from HR">{r.approval_remarks}</Notice>
+                        ) : null}
                         <View style={styles.pair}>
                             <Detail label="Travel type" value={r.travel_type || '—'} style={styles.flex} />
                             <Detail label="Funding" value={r.travel_funding ? labelOf(FUNDING_OPTIONS, r.travel_funding) : '—'} style={styles.flex} />
@@ -904,7 +949,10 @@ const TravelRequestScreen = ({ navigation }) => {
                                         subtitle={joinDot([
                                             leg.mode_of_travel,
                                             tripDates(leg.departure_date, leg.arrival_date, true),
-                                            leg.lodging_required ? `Lodging${leg.preferred_area_for_lodging ? `: ${leg.preferred_area_for_lodging}` : ''}` : '',
+                                            leg.lodging_required
+                                                ? `Hotel${leg.preferred_area_for_lodging ? ` in ${leg.preferred_area_for_lodging}` : ''}${leg.check_in_date ? ` ${tripDates(leg.check_in_date, leg.check_out_date)}` : ''}`
+                                                : '',
+                                            Number(leg.travel_advance_required) ? `Advance ${inr(leg.advance_amount)}` : '',
                                         ]) || undefined}
                                     />
                                 ))}
@@ -938,7 +986,11 @@ const TravelRequestScreen = ({ navigation }) => {
     return (
         <View style={styles.container}>
             <View style={styles.toolbar}>
-                <Segmented options={FILTERS} value={filterStatus} onChange={setFilterStatus} />
+                <Segmented
+                    options={FILTERS.map((f) => ({ ...f, count: (f.value === 'all' ? counts.total : counts[f.value]) || undefined }))}
+                    value={filterStatus}
+                    onChange={setFilterStatus}
+                />
             </View>
 
             <Screen

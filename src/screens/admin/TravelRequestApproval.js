@@ -55,6 +55,8 @@ const MODE_OPTIONS = [
     { value: 'Train', label: 'Train' },
     { value: 'Taxi', label: 'Taxi' },
     { value: 'Rented Car', label: 'Rented car' },
+    { value: 'Bus', label: 'Bus' },
+    { value: 'Own Vehicle', label: 'Own vehicle' },
 ];
 const SWITCH_TRACK = { false: '#D0D5DD', true: color.accent };
 
@@ -319,7 +321,8 @@ const TravelRequestApproval = ({ navigation, route }) => {
                 setActionReason('');
                 loadRequests();
             } else {
-                setSheetError(response.data?.message?.message || `Could not ${actionType} this request`);
+                // server errors arrive on response.message (the API wrapper doesn't throw)
+                setSheetError(response.message || response.data?.message?.message || `Could not ${actionType} this request`);
             }
         } catch (error) {
             console.error('Action error:', error);
@@ -934,6 +937,8 @@ const TravelRequestApproval = ({ navigation, route }) => {
         return (
             <>
                 {!isPending ? <Detail label="Status" value={<StatusText label={r.status_label} size={15} />} /> : null}
+                {r.rejection_reason ? <Notice tone="danger" title="Rejection reason">{r.rejection_reason}</Notice> : null}
+                {r.approval_remarks ? <Notice tone="success" title="Approval remarks">{r.approval_remarks}</Notice> : null}
                 <Detail label="Purpose" value={r.purpose_of_travel || '-'} />
                 <View style={styles.pair}>
                     <Detail label="Travel type" value={r.travel_type || '-'} style={styles.flex} />
@@ -954,7 +959,11 @@ const TravelRequestApproval = ({ navigation, route }) => {
                                 subtitle={joinDot([
                                     leg.mode_of_travel,
                                     tripDates(leg.departure_date, leg.arrival_date, true),
-                                    leg.lodging_required ? `Lodging${leg.preferred_area_for_lodging ? `: ${leg.preferred_area_for_lodging}` : ''}` : '',
+                                    leg.lodging_required
+                                        ? `Hotel${leg.preferred_area_for_lodging ? ` in ${leg.preferred_area_for_lodging}` : ''}${leg.check_in_date ? ` ${tripDates(leg.check_in_date, leg.check_out_date)}` : ''}`
+                                        : '',
+                                    leg.meal_preference,
+                                    Number(leg.travel_advance_required) ? `Advance ${money(leg.advance_amount)}` : '',
                                 ])}
                             />
                         ))}
