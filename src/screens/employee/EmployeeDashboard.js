@@ -19,6 +19,7 @@ import {
     space,
     type,
     formatLongDate,
+    TopInset,
 } from '../../components/ds';
 
 const greeting = () => {
@@ -169,6 +170,7 @@ const EmployeeDashboard = ({ navigation }) => {
 
     return (
         <View style={styles.container}>
+            <TopInset />
             <View style={styles.topBar}>
                 <Image source={require('../../assets/images/mainLogo.jpg')} style={styles.logo} />
                 <View>

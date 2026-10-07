@@ -1,0 +1,10 @@
+<resources>
+
+    <!-- Android 15+: apps targeting SDK 35 are drawn edge-to-edge (under the status bar) unless they opt out.
+         The app lays its screens out below the status bar, so keep the classic behaviour. -->
+    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
+    </style>
+
+</resources>

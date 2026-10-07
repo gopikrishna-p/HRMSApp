@@ -53,7 +53,7 @@ const App = () => {
             <SafeAreaProvider>
                 <PaperProvider theme={theme}>
                     <AuthProvider>
-                        <StatusBar barStyle="light-content" />
+                        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
                         <AppNavigator />
                         <Toast config={toastConfig} />
                     </AuthProvider>

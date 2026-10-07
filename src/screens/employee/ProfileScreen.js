@@ -34,6 +34,7 @@ import {
     space,
     type,
     formatShortDate,
+    ModalTopInset,
 } from '../../components/ds';
 
 const STATUS_TONE = { Active: 'success', Inactive: 'neutral', Suspended: 'warning', Left: 'danger' };
@@ -303,9 +304,11 @@ const ProfileScreen = ({ navigation }) => {
         <Modal
             visible={editModalVisible}
             animationType="slide"
+            statusBarTranslucent
             onRequestClose={() => setEditModalVisible(false)}
         >
             <SafeAreaView style={styles.page}>
+                <ModalTopInset />
                 <PageHeader title="Edit profile" onClose={() => setEditModalVisible(false)} />
                 <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
                     <Screen footer={<Button title="Save changes" onPress={handleSaveProfile} loading={savingEdit} full />}>

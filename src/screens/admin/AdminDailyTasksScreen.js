@@ -32,6 +32,7 @@ import {
     radius,
     type,
     formatLongDate,
+    TopInset,
 } from '../../components/ds';
 
 const PRIORITIES = ['Low', 'Medium', 'High', 'Urgent'];
@@ -641,6 +642,7 @@ const AdminDailyTasksScreen = ({ navigation }) => {
 
     return (
         <View style={styles.container}>
+            <TopInset />
             <View style={styles.topBar}>
                 <IconButton name="arrow-left" onPress={() => navigation.goBack()} color={color.text} label="Back" />
                 <Text style={styles.topTitle} numberOfLines={1}>Daily tasks</Text>

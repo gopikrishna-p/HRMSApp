@@ -42,6 +42,7 @@ import {
     space,
     type,
     formatShortDate,
+    ModalTopInset,
 } from '../../components/ds';
 
 const FILTERS = [
@@ -765,8 +766,9 @@ const TravelRequestScreen = ({ navigation }) => {
     );
 
     const renderForm = () => (
-        <Modal visible={showForm} animationType="slide" onRequestClose={() => setShowForm(false)}>
+        <Modal visible={showForm} animationType="slide" statusBarTranslucent onRequestClose={() => setShowForm(false)}>
             <SafeAreaView style={styles.page}>
+                <ModalTopInset />
                 <PageHeader title="New travel request" onClose={() => setShowForm(false)} />
                 <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
                     <Screen

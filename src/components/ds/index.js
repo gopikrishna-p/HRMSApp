@@ -16,7 +16,9 @@ import {
     Modal,
     KeyboardAvoidingView,
     Platform,
+    StatusBar,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from 'react-native-vector-icons/Feather';
 import Toast from 'react-native-toast-message';
 import { toastConfig } from '../../config/toastConfig';
@@ -27,6 +29,21 @@ export { color, tones, space, radius, type, statusTone };
 // ------------------------------------------------------------------ icon
 export const Icon = ({ name, size = 18, color: c = color.textSecondary, style }) => (
     <Feather name={name} size={size} color={c} style={style} />
+);
+
+// ------------------------------------------------------------------ status bar / notch
+// Screens that hide the native header (dashboards) put <TopInset /> above their own top bar, so the bar
+// never sits under the status bar or a notch. It is 0 high when the app is already laid out below it.
+export const TopInset = ({ background = color.surface }) => {
+    const insets = useSafeAreaInsets();
+    return insets.top > 0 ? <View style={[s.topInset, { height: insets.top, backgroundColor: background }]} /> : null;
+};
+
+// Full-screen Modals: open them with `statusBarTranslucent` (same behaviour on every Android version) and
+// put <ModalTopInset /> first, so their header starts below the status bar.
+const MODAL_TOP = Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 0;
+export const ModalTopInset = ({ background = color.surface }) => (
+    MODAL_TOP > 0 ? <View style={[s.topInset, { height: MODAL_TOP, backgroundColor: background }]} /> : null
 );
 
 // ------------------------------------------------------------------ layout
@@ -387,6 +404,7 @@ export const DateNav = ({ date, onPrev, onNext, onPick, nextDisabled, caption })
 };
 
 const s = StyleSheet.create({
+    topInset: { width: '100%' },
     flex: { flex: 1 },
     disabled: { opacity: 0.45 },
     screen: { flex: 1, backgroundColor: color.bg },

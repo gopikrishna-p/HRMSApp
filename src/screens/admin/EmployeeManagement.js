@@ -44,6 +44,7 @@ import {
     space,
     radius,
     type,
+    ModalTopInset,
 } from '../../components/ds';
 
 const STATUS_OPTIONS = ['All', 'Active', 'Inactive', 'Suspended', 'Left'];
@@ -627,9 +628,11 @@ const EmployeeManagement = ({ navigation }) => {
         <Modal
             visible={detailsModalVisible}
             animationType="slide"
+            statusBarTranslucent
             onRequestClose={() => setDetailsModalVisible(false)}
         >
             <SafeAreaView style={styles.page}>
+                <ModalTopInset />
                 <PageHeader
                     title="Employee"
                     onClose={() => setDetailsModalVisible(false)}
@@ -665,9 +668,11 @@ const EmployeeManagement = ({ navigation }) => {
         <Modal
             visible={editModalVisible}
             animationType="slide"
+            statusBarTranslucent
             onRequestClose={() => setEditModalVisible(false)}
         >
             <SafeAreaView style={styles.page}>
+                <ModalTopInset />
                 <PageHeader title="Edit employee" onClose={() => setEditModalVisible(false)} />
                 <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
                     <Screen
