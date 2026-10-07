@@ -198,6 +198,13 @@ const ProfileScreen = ({ navigation }) => {
     };
 
     const handleSaveProfile = async () => {
+        // passport dates go into Date fields, so they must be YYYY-MM-DD (or empty)
+        const badDate = [['valid_upto', 'Valid until'], ['date_of_issue', 'Issue date']]
+            .find(([field]) => editForm[field] && !/^\d{4}-\d{2}-\d{2}$/.test(String(editForm[field]).trim()));
+        if (badDate) {
+            showToast({ type: 'warning', text1: `${badDate[1]}: use YYYY-MM-DD`, text2: 'For example 2030-04-15' });
+            return;
+        }
         try {
             setSavingEdit(true);
             const response = await ApiService.post('/api/method/hrms.api.update_employee_profile', {
@@ -382,7 +389,7 @@ const ProfileScreen = ({ navigation }) => {
                     {/* employment type, grade and shift are not in the profile response; shown only when present */}
                     {profileData.employment_type ? <InfoRow label="Employment type" value={profileData.employment_type} /> : null}
                     {profileData.grade ? <InfoRow label="Grade" value={profileData.grade} /> : null}
-                    <InfoRow label="Reports to" value={profileData.reports_to} />
+                    <InfoRow label="Reports to" value={profileData.reports_to_name || profileData.reports_to} />
                     {profileData.default_shift ? <InfoRow label="Shift" value={profileData.default_shift} /> : null}
                     <InfoRow
                         label="Status"
@@ -395,10 +402,24 @@ const ProfileScreen = ({ navigation }) => {
                     <InfoRow label="Permanent address" value={profileData.permanent_address} stacked />
                 </Group>
 
+                <Group title="Emergency contact">
+                    <InfoRow label="Contact person" value={profileData.person_to_be_contacted} />
+                    <InfoRow label="Phone" value={profileData.emergency_phone_number} />
+                    <InfoRow label="Relation" value={profileData.relation} />
+                </Group>
+
                 <Group title="Bank details">
                     <InfoRow label="Bank name" value={profileData.bank_name} />
                     <InfoRow label="Account number" value={masked(profileData.bank_ac_no)} />
+                    {profileData.iban ? <InfoRow label="IBAN" value={masked(profileData.iban)} /> : null}
                     {profileData.pan_number ? <InfoRow label="PAN" value={masked(profileData.pan_number)} /> : null}
+                </Group>
+
+                <Group title="Passport">
+                    <InfoRow label="Passport number" value={masked(profileData.passport_number)} />
+                    <InfoRow label="Valid until" value={displayDate(profileData.valid_upto)} />
+                    <InfoRow label="Issue date" value={displayDate(profileData.date_of_issue)} />
+                    <InfoRow label="Place of issue" value={profileData.place_of_issue} />
                 </Group>
 
                 <Button title="Log out" variant="danger" onPress={handleLogout} full />

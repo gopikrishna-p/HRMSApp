@@ -8,6 +8,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import apiService from '../../services/api.service';
 import { loadAllEmployees } from '../../utils/employeeData';
 import { formatLocalDateTime } from '../../utils/dateFormat';
+import { validateItinerary } from '../../utils/travelValidation';
 import showToast from '../../utils/Toast';
 import {
     Screen,
@@ -394,6 +395,11 @@ const TravelRequestApproval = ({ navigation, route }) => {
         }
         if (!formData.purpose_of_travel) {
             showToast({ type: 'error', text1: 'Select the purpose of travel' });
+            return false;
+        }
+        const legProblem = validateItinerary(itinerary);
+        if (legProblem) {
+            showToast({ type: 'error', ...legProblem });
             return false;
         }
         return true;
@@ -802,6 +808,7 @@ const TravelRequestApproval = ({ navigation, route }) => {
                             <DateTimePicker
                                 value={item.arrival_date}
                                 mode="date"
+                                minimumDate={item.departure_date || undefined}
                                 display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                                 onChange={(event, date) => {
                                     setShowArrivalPicker({ show: false, index: -1 });

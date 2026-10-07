@@ -257,6 +257,11 @@ class ApiService {
         return this.post('/api/method/logout');
     }
 
+    // Frappe's built-in reset: emails the user a link to set a new password (rate limited per hour)
+    requestPasswordReset(email) {
+        return this.post('/api/method/frappe.core.doctype.user.user.reset_password', { user: email });
+    }
+
     getCurrentUser() {
         return this.get(m('get_current_user_info'));
     }

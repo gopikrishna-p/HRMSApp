@@ -20,6 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import NetInfo from '@react-native-community/netinfo';
 
 import { useAuth } from '../../context/AuthContext';
+import { ROUTES } from '../../config/constants';
 import { validateLoginForm } from '../../utils/validators';
 import {
     Button,
@@ -133,13 +134,9 @@ const LoginScreen = ({ navigation }) => {
     };
 
     const handleForgotPassword = () => {
-        Toast.show({
-            type: 'info',
-            text1: 'Forgot password',
-            text2: 'Please contact your HR administrator',
-            position: 'top',
-            visibilityTime: 4000,
-        });
+        // carry the email over when the user already typed one
+        const typed = username.trim();
+        navigation.navigate(ROUTES.FORGOT_PASSWORD, { email: typed.includes('@') ? typed : '' });
     };
 
     const handleContactSupport = () => {

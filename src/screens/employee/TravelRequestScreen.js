@@ -20,6 +20,7 @@ import Toast from 'react-native-toast-message';
 import { toastConfig } from '../../config/toastConfig';
 import apiService, { extractFrappeData, isApiSuccess } from '../../services/api.service';
 import { formatLocalDate, formatLocalDateTime, formatTimeOfDay } from '../../utils/dateFormat';
+import { validateItinerary } from '../../utils/travelValidation';
 import showToast from '../../utils/Toast';
 import {
     Screen,
@@ -327,6 +328,11 @@ const TravelRequestScreen = ({ navigation }) => {
             showToast({ type: 'warning', text1: 'Select the purpose of travel' });
             return;
         }
+        const legProblem = validateItinerary(itinerary);
+        if (legProblem) {
+            showToast({ type: 'warning', ...legProblem });
+            return;
+        }
 
         if (!currentEmployee) {
             showToast({ type: 'error', text1: 'Employee record not found', text2: 'Go back and open this screen again.' });
@@ -542,6 +548,8 @@ const TravelRequestScreen = ({ navigation }) => {
             <DateTimePicker
                 value={item[field]}
                 mode="date"
+                // arrival can't be before departure, hotel check-out not before check-in
+                minimumDate={{ arrival_date: item.departure_date, check_out_date: item.check_in_date }[field] || undefined}
                 display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                 onChange={(event, date) => {
                     setState({ show: false, index: -1 });

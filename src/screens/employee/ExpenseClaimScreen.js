@@ -99,6 +99,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
     const [filterStatus, setFilterStatus] = useState(''); // '', Draft, Approved, Rejected
     const [statusSummary, setStatusSummary] = useState({});
     const [totalClaimed, setTotalClaimed] = useState(0);
+    const [totalApproved, setTotalApproved] = useState(0);
 
     // Presentation only: claim open in the detail sheet, expense-type picker
     const [selected, setSelected] = useState(null);
@@ -156,6 +157,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
             setClaims(data.claims || []);
             setStatusSummary(data.status_summary || {});
             setTotalClaimed(data.total_claimed_amount || 0);
+            setTotalApproved(data.total_approved_amount || 0);
         } catch (error) {
             console.error('Error loading claims:', error);
             showToast({ type: 'error', text1: 'Could not load expense claims', text2: error.message });
@@ -442,8 +444,9 @@ const ExpenseClaimScreen = ({ navigation }) => {
                         { label: 'Rejected', value: statusSummary.Rejected || 0 },
                     ]}
                 />
-                <Group>
+                <Group footer="Totals cover all your claims, whatever filter is on.">
                     <Row title="Total claimed" value={formatINR(totalClaimed)} />
+                    <Row title="Total approved" value={formatINR(totalApproved)} />
                 </Group>
 
                 <Text style={styles.sectionTitle}>Claims</Text>

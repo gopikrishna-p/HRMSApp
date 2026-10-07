@@ -108,11 +108,10 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
     // History states
     const [myRequests, setMyRequests] = useState([]);
     const [filterStatus, setFilterStatus] = useState(null); // null, 0, 1, 2
-    const [totalDays, setTotalDays] = useState(0);
-    // The server counts these over the filtered list only, so they are not shown as per-status
-    // totals (the strip shows the count and days of the list on screen instead).
-    // eslint-disable-next-line no-unused-vars
+    const [totalDays, setTotalDays] = useState(0); // approved days, all requests
+    // counts over all of the employee's requests, whatever filter is on
     const [statusSummary, setStatusSummary] = useState({
+        all: 0,
         pending: 0,
         approved: 0,
         cancelled: 0
@@ -337,8 +336,9 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
                 <StatStrip
                     style={styles.strip}
                     items={[
-                        { label: 'Requests', value: myRequests.length },
-                        { label: 'Days', value: formatDays(totalDays) },
+                        { label: 'Days earned', value: formatDays(totalDays) },
+                        { label: 'Pending', value: statusSummary.pending || 0, tone: statusSummary.pending ? 'warning' : undefined },
+                        { label: 'Requests', value: statusSummary.all ?? myRequests.length },
                     ]}
                 />
                 <Group title="Requests" footer="Approved days are added to your leave balance.">
@@ -363,7 +363,10 @@ const CompensatoryLeaveScreen = ({ navigation }) => {
                 <Segmented
                     value={filterStatus === null ? 'all' : String(filterStatus)}
                     onChange={(value) => setFilterStatus(value === 'all' ? null : Number(value))}
-                    options={STATUS_FILTERS}
+                    options={STATUS_FILTERS.map((o) => ({
+                        ...o,
+                        count: { all: statusSummary.all, 0: statusSummary.pending, 1: statusSummary.approved, 2: statusSummary.cancelled }[o.value] || undefined,
+                    }))}
                 />
             </View>
 
