@@ -206,15 +206,18 @@ const TravelRequestScreen = ({ navigation }) => {
         try {
             // Get current employee
             const empResponse = await apiService.getCurrentEmployee();
+            let empId = null;
             if (isApiSuccess(empResponse)) {
-                setCurrentEmployee(extractFrappeData(empResponse, {}));
+                const emp = extractFrappeData(empResponse, {});
+                setCurrentEmployee(emp);
+                empId = emp?.name || null;
             }
 
             // Load purposes, expense types and requests in parallel
             await Promise.all([
                 loadPurposes(),
                 loadExpenseTypes(),
-                loadRequests(),
+                loadRequests(empId),
             ]);
         } catch (error) {
             console.error('Load initial data error:', error);
@@ -248,9 +251,14 @@ const TravelRequestScreen = ({ navigation }) => {
         }
     };
 
-    const loadRequests = async () => {
+    // Always the signed-in employee's own requests: for an HR login (Self-Service) the server would
+    // otherwise return everyone's. Skipped until the employee record is known.
+    const loadRequests = async (employeeId = currentEmployee?.name) => {
+        if (!employeeId) {
+            return;
+        }
         try {
-            const filters = { limit: 200 };
+            const filters = { limit: 200, employee: employeeId };
             if (filterStatus !== 'all') {
                 filters.status = filterStatus;
             }

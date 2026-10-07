@@ -33,6 +33,8 @@ import OnSiteRequestScreen from '../screens/employee/OnSiteRequestScreen';
 import HolidayListScreen from '../screens/employee/HolidayListScreen';
 import ProfileScreen from '../screens/employee/ProfileScreen';
 import SalaryStructureScreen from '../screens/employee/SalaryStructureScreen';
+import MySalaryTrackerScreen from '../screens/employee/MySalaryTrackerScreen';
+import SalaryTrackerDetailScreen from '../screens/employee/SalaryTrackerDetailScreen';
 import MyTasksScreen from '../screens/employee/MyTasksScreen';
 import MyProjectsScreen from '../screens/employee/MyProjectsScreen';
 import MyLogsScreen from '../screens/employee/MyLogsScreen';
@@ -95,6 +97,9 @@ const AdminNavigator = () => {
             <Stack.Screen name="MyHolidayList" component={HolidayListScreen} options={{ title: 'Holidays' }} />
             <Stack.Screen name="MyProfile" component={ProfileScreen} options={{ title: 'My Profile' }} />
             <Stack.Screen name="MySalaryStructure" component={SalaryStructureScreen} options={{ title: 'My Salary Structure' }} />
+            {/* Self-Service: own salary months only (MySalaryTracker opens SalaryTrackerDetail) */}
+            <Stack.Screen name="MySalaryTracker" component={MySalaryTrackerScreen} options={{ title: 'My Salary Payments' }} />
+            <Stack.Screen name="SalaryTrackerDetail" component={SalaryTrackerDetailScreen} options={{ title: 'Salary Detail' }} />
             <Stack.Screen name="MyTasks" component={MyTasksScreen} options={{ title: 'Tasks' }} />
             <Stack.Screen name="MyProjects" component={MyProjectsScreen} options={{ title: 'My Projects' }} />
             <Stack.Screen name="MyLogs" component={MyLogsScreen} options={{ title: 'Work Logs' }} />

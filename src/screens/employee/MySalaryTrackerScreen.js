@@ -97,9 +97,14 @@ function MySalaryTrackerScreen({ navigation }) {
             const empData = empResp?.data?.message;
             const empId = empData?.name || empData?.employee_id;
             setEmployeeId(empId);
+            if (!empId) {
+                // without our own employee id an HR login would get everyone's records
+                throw new Error('Your employee record was not found');
+            }
 
             const [listResp, overviewResp] = await Promise.all([
-                ApiService.getSalaryTrackerList({}),
+                // employee_id keeps the list to our own months (the server returns everyone's for HR)
+                ApiService.getSalaryTrackerList({ employee_id: empId }),
                 ApiService.getEmployeeSalaryOverview({ employee_id: empId }),
             ]);
 

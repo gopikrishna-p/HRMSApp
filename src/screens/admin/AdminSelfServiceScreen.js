@@ -44,9 +44,9 @@ const AdminSelfServiceScreen = ({ navigation }) => {
                 <Row icon="layers" title="Salary structure" onPress={go('MySalaryStructure')} />
                 <Row
                     icon="credit-card"
-                    title="Salary tracker"
-                    subtitle="Request pending salary"
-                    onPress={go('AdminSalaryTracker', { preselectEmployee: employee?.name })}
+                    title="Salary payments"
+                    subtitle="Your pending salary and what you received"
+                    onPress={go('MySalaryTracker')}
                 />
                 <Row icon="file-text" title="Expense claims" onPress={go('MyExpenseClaim')} />
                 <Row icon="navigation" title="Travel requests" onPress={go('MyTravelRequest')} />
