@@ -1,62 +1,62 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-    View, FlatList, RefreshControl, TouchableOpacity, Modal,
-    TextInput, ActivityIndicator, StyleSheet, Dimensions,
-} from 'react-native';
-import Icon from 'react-native-vector-icons/FontAwesome5';
-import { Text, useTheme } from 'react-native-paper';
-import { useAuth } from '../../context/AuthContext';
-import AppHeader from '../../components/ui/AppHeader';
-import EmptyState from '../../components/ui/EmptyState';
+// src/screens/employee/DailyTasksScreen.js
+//
+// The signed-in employee's daily tasks for one day (hrms.api.get_my_daily_tasks). Open tasks
+// can be started, edited or deleted; tasks in progress can be marked complete. New tasks are
+// added from the footer button.
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, StyleSheet } from 'react-native';
 import ApiService from '../../services/api.service';
 import showToast from '../../utils/Toast';
-import { colors } from '../../theme/colors';
-
-const { width } = Dimensions.get('window');
+import {
+    Screen,
+    Group,
+    Row,
+    Segmented,
+    StatStrip,
+    StatusText,
+    Tag,
+    DateNav,
+    Sheet,
+    Button,
+    Field,
+    TextField,
+    EmptyState,
+    Loading,
+    color,
+    space,
+    formatLongDate,
+} from '../../components/ds';
 
 const PRIORITIES = ['Low', 'Medium', 'High', 'Urgent'];
 const STATUS_TABS = ['All', 'Open', 'In Progress', 'Completed'];
 
-const PRIORITY_COLORS = {
-    Low: '#6B7280',
-    Medium: '#3B82F6',
-    High: '#F59E0B',
-    Urgent: '#EF4444',
-};
+// task status -> StatusText tone
+const STATUS_TONE = { Open: 'warning', 'In Progress': 'info', Completed: 'success', Cancelled: 'neutral' };
+// only high and urgent tasks get a tag; low and medium priority is plain secondary text
+const PRIORITY_TAG = { High: { label: 'High priority', tone: 'warning' }, Urgent: { label: 'Urgent', tone: 'danger' } };
 
-const STATUS_COLORS = {
-    Open: '#6B7280',
-    'In Progress': '#3B82F6',
-    Completed: '#10B981',
-    Cancelled: '#EF4444',
-};
+const statusLabel = (status) => (status === 'In Progress' ? 'In progress' : status);
+const toOptions = (values) => values.map((v) => ({ value: v, label: statusLabel(v) }));
+// "Took 2 Days" -> "Took 2 days"
+const sentenceCase = (text) => (text ? text.charAt(0) + text.slice(1).toLowerCase() : text);
 
-const STATUS_ICONS = {
-    Open: 'circle',
-    'In Progress': 'spinner',
-    Completed: 'check-circle',
-    Cancelled: 'times-circle',
-};
-
-const DailyTasksScreen = ({ navigation }) => {
-    const { custom } = useTheme();
-    const { employee } = useAuth();
-
+const DailyTasksScreen = () => {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [tasks, setTasks] = useState([]);
+    const statusBusy = useRef(false);
     const [summary, setSummary] = useState({});
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [activeTab, setActiveTab] = useState('All');
 
-    // Create task modal
+    // Create task sheet
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [newTitle, setNewTitle] = useState('');
     const [newDescription, setNewDescription] = useState('');
     const [newPriority, setNewPriority] = useState('Medium');
     const [creating, setCreating] = useState(false);
 
-    // Edit task modal
+    // Edit task sheet
     const [showEditModal, setShowEditModal] = useState(false);
     const [editTask, setEditTask] = useState(null);
     const [editTitle, setEditTitle] = useState('');
@@ -72,16 +72,23 @@ const DailyTasksScreen = ({ navigation }) => {
         return `${y}-${m}-${day}`;
     };
 
+    // "today", "yesterday", "tomorrow" or "Tuesday, 6 October"
     const getDisplayDate = (d) => {
         const today = new Date();
         const yesterday = new Date(today);
         yesterday.setDate(today.getDate() - 1);
         const tomorrow = new Date(today);
         tomorrow.setDate(today.getDate() + 1);
-        if (formatDate(d) === formatDate(today)) return 'Today';
-        if (formatDate(d) === formatDate(yesterday)) return 'Yesterday';
-        if (formatDate(d) === formatDate(tomorrow)) return 'Tomorrow';
-        return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+        if (formatDate(d) === formatDate(today)) {
+            return 'today';
+        }
+        if (formatDate(d) === formatDate(yesterday)) {
+            return 'yesterday';
+        }
+        if (formatDate(d) === formatDate(tomorrow)) {
+            return 'tomorrow';
+        }
+        return formatLongDate(d);
     };
 
     const fetchTasks = useCallback(async () => {
@@ -104,6 +111,9 @@ const DailyTasksScreen = ({ navigation }) => {
             }
         } catch (error) {
             console.error('Fetch tasks error:', error);
+            setTasks([]);
+            setSummary({});
+            showToast({ type: 'error', text1: 'Could not load tasks', text2: error?.message || 'Check your connection and try again' });
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -128,7 +138,7 @@ const DailyTasksScreen = ({ navigation }) => {
 
     const handleCreate = async () => {
         if (!newTitle.trim()) {
-            showToast({ type: 'error', text1: 'Error', text2: 'Task title is required' });
+            showToast({ type: 'error', text1: 'Title is required', text2: 'Enter a task title' });
             return;
         }
         setCreating(true);
@@ -139,33 +149,40 @@ const DailyTasksScreen = ({ navigation }) => {
                 priority: newPriority,
             });
             if (response?.success && response?.data?.message?.status === 'success') {
-                showToast({ type: 'success', text1: 'Task Created', text2: response.data.message.message });
+                showToast({ type: 'success', text1: 'Task added', text2: response.data.message.message });
                 setShowCreateModal(false);
                 setNewTitle('');
                 setNewDescription('');
                 setNewPriority('Medium');
                 fetchTasks();
             } else {
-                showToast({ type: 'error', text1: 'Error', text2: response?.data?.message?.message || 'Failed to create task' });
+                showToast({ type: 'error', text1: 'Task not added', text2: response?.data?.message?.message || 'Failed to create task' });
             }
         } catch (error) {
-            showToast({ type: 'error', text1: 'Error', text2: 'Failed to create task' });
+            showToast({ type: 'error', text1: 'Task not added', text2: 'Failed to create task' });
         } finally {
             setCreating(false);
         }
     };
 
     const handleStatusChange = async (taskName, newStatus) => {
+        // ignore a second tap while the first update is still running
+        if (statusBusy.current) {
+            return;
+        }
+        statusBusy.current = true;
         try {
             const response = await ApiService.updateTaskStatus({ task_name: taskName, new_status: newStatus });
             if (response?.success && response?.data?.message?.status === 'success') {
-                showToast({ type: 'success', text1: 'Updated', text2: response.data.message.message });
+                showToast({ type: 'success', text1: 'Task updated', text2: response.data.message.message });
                 fetchTasks();
             } else {
-                showToast({ type: 'error', text1: 'Error', text2: response?.data?.message?.message || 'Update failed' });
+                showToast({ type: 'error', text1: 'Not updated', text2: response?.data?.message?.message || 'Update failed' });
             }
         } catch (error) {
-            showToast({ type: 'error', text1: 'Error', text2: 'Update failed' });
+            showToast({ type: 'error', text1: 'Not updated', text2: 'Update failed' });
+        } finally {
+            statusBusy.current = false;
         }
     };
 
@@ -180,7 +197,7 @@ const DailyTasksScreen = ({ navigation }) => {
 
     const handleEdit = async () => {
         if (!editTitle.trim()) {
-            showToast({ type: 'error', text1: 'Error', text2: 'Task title is required' });
+            showToast({ type: 'error', text1: 'Title is required', text2: 'Enter a task title' });
             return;
         }
         setSaving(true);
@@ -193,15 +210,15 @@ const DailyTasksScreen = ({ navigation }) => {
                 remarks: editRemarks.trim(),
             });
             if (response?.success && response?.data?.message?.status === 'success') {
-                showToast({ type: 'success', text1: 'Updated', text2: 'Task updated' });
+                showToast({ type: 'success', text1: 'Task updated' });
                 setShowEditModal(false);
                 setEditTask(null);
                 fetchTasks();
             } else {
-                showToast({ type: 'error', text1: 'Error', text2: response?.data?.message?.message || 'Update failed' });
+                showToast({ type: 'error', text1: 'Not updated', text2: response?.data?.message?.message || 'Update failed' });
             }
         } catch (error) {
-            showToast({ type: 'error', text1: 'Error', text2: 'Update failed' });
+            showToast({ type: 'error', text1: 'Not updated', text2: 'Update failed' });
         } finally {
             setSaving(false);
         }
@@ -211,394 +228,237 @@ const DailyTasksScreen = ({ navigation }) => {
         try {
             const response = await ApiService.deleteDailyTask(taskName);
             if (response?.success && response?.data?.message?.status === 'success') {
-                showToast({ type: 'success', text1: 'Deleted', text2: 'Task deleted' });
+                showToast({ type: 'success', text1: 'Task deleted' });
                 fetchTasks();
             } else {
-                showToast({ type: 'error', text1: 'Error', text2: response?.data?.message?.message || 'Delete failed' });
+                showToast({ type: 'error', text1: 'Not deleted', text2: response?.data?.message?.message || 'Delete failed' });
             }
         } catch (error) {
-            showToast({ type: 'error', text1: 'Error', text2: 'Delete failed' });
+            showToast({ type: 'error', text1: 'Not deleted', text2: 'Delete failed' });
         }
     };
 
-    const renderSummaryCard = () => (
-        <View style={[styles.summaryCard, { backgroundColor: custom.palette.primary + '10' }]}>
-            <View style={styles.summaryRow}>
-                <View style={styles.summaryItem}>
-                    <Text style={[styles.summaryNumber, { color: custom.palette.primary }]}>{summary.total || 0}</Text>
-                    <Text style={styles.summaryLabel}>Total</Text>
-                </View>
-                <View style={styles.summaryItem}>
-                    <Text style={[styles.summaryNumber, { color: '#3B82F6' }]}>{summary.in_progress || 0}</Text>
-                    <Text style={styles.summaryLabel}>In Progress</Text>
-                </View>
-                <View style={styles.summaryItem}>
-                    <Text style={[styles.summaryNumber, { color: '#10B981' }]}>{summary.completed || 0}</Text>
-                    <Text style={styles.summaryLabel}>Done</Text>
-                </View>
-                <View style={styles.summaryItem}>
-                    <Text style={[styles.summaryNumber, { color: '#F59E0B' }]}>{summary.carried_forward || 0}</Text>
-                    <Text style={styles.summaryLabel}>Carried</Text>
-                </View>
-            </View>
-        </View>
-    );
+    // delete lives in the edit sheet, which only opens for open tasks (the same tasks the
+    // delete button used to be shown for)
+    const deleteFromSheet = () => {
+        const taskName = editTask?.name;
+        setShowEditModal(false);
+        if (taskName) {
+            handleDelete(taskName);
+        }
+    };
 
-    const renderTaskCard = ({ item }) => {
+    // ------------------------------------------------------------------ list
+
+    const renderTaskRow = (item) => {
         const isOpen = item.status === 'Open';
         const isInProgress = item.status === 'In Progress';
         const isCompleted = item.status === 'Completed';
         const canEdit = isOpen; // Only Open tasks can be edited
 
+        const priorityTag = PRIORITY_TAG[item.priority];
+        const facts = [
+            priorityTag ? null : item.priority ? `${item.priority} priority` : null,
+            item.assigned_by_name ? `From ${item.assigned_by_name}` : null,
+            isCompleted && item.time_taken_hours > 0 ? `${item.time_taken_hours}h` : null,
+            isCompleted ? sentenceCase(item.completion_label) : null,
+        ].filter(Boolean).join('  ·  ');
+        const subtitle = [item.task_description, facts].filter(Boolean).join('\n');
+
+        const meta = [
+            <StatusText key="s" label={statusLabel(item.status)} tone={STATUS_TONE[item.status]} />,
+            priorityTag ? <Tag key="p" label={priorityTag.label} tone={priorityTag.tone} /> : null,
+            item.carry_forward_count > 0 ? (
+                <Tag
+                    key="cf"
+                    label={item.carry_forward_count === 1 ? 'Carried forward' : `Carried forward ${item.carry_forward_count} times`}
+                    tone="warning"
+                />
+            ) : null,
+        ].filter(Boolean);
+
+        let action = null;
+        if (isOpen) {
+            action = (
+                <Button
+                    title="Start"
+                    variant="secondary"
+                    size="sm"
+                    onPress={() => handleStatusChange(item.name, 'In Progress')}
+                    style={styles.rowAction}
+                />
+            );
+        } else if (isInProgress) {
+            action = (
+                <Button
+                    title="Complete"
+                    variant="secondary"
+                    size="sm"
+                    onPress={() => handleStatusChange(item.name, 'Completed')}
+                    style={styles.rowAction}
+                />
+            );
+        }
+
         return (
-            <View style={[styles.taskCard, { borderLeftColor: STATUS_COLORS[item.status] || '#6B7280' }]}>
-                <TouchableOpacity
-                    style={styles.taskContent}
-                    onPress={() => canEdit ? openEditModal(item) : null}
-                    activeOpacity={canEdit ? 0.7 : 1}
-                >
-                    <View style={styles.taskHeader}>
-                        <View style={styles.taskTitleRow}>
-                            <Icon
-                                name={STATUS_ICONS[item.status] || 'circle'}
-                                size={14}
-                                color={STATUS_COLORS[item.status]}
-                                solid={isCompleted}
-                                style={{ marginRight: 8 }}
-                            />
-                            <Text style={[styles.taskTitle, isCompleted && styles.taskTitleCompleted]} numberOfLines={2}>
-                                {item.task_title}
-                            </Text>
-                        </View>
-                        <View style={[styles.priorityBadge, { backgroundColor: PRIORITY_COLORS[item.priority] + '20' }]}>
-                            <Text style={[styles.priorityText, { color: PRIORITY_COLORS[item.priority] }]}>{item.priority}</Text>
-                        </View>
-                    </View>
-
-                    {item.task_description ? (
-                        <Text style={styles.taskDescription} numberOfLines={2}>{item.task_description}</Text>
-                    ) : null}
-
-                    <View style={styles.taskMeta}>
-                        {item.carry_forward_count > 0 && (
-                            <View style={styles.metaChip}>
-                                <Icon name="redo" size={10} color="#F59E0B" />
-                                <Text style={[styles.metaText, { color: '#F59E0B' }]}> CF x{item.carry_forward_count}</Text>
-                            </View>
-                        )}
-                        {isCompleted && item.completion_label && (
-                            <View style={[styles.metaChip, { backgroundColor: '#D1FAE5' }]}>
-                                <Icon name="clock" size={10} color="#10B981" />
-                                <Text style={[styles.metaText, { color: '#10B981' }]}> {item.completion_label}</Text>
-                            </View>
-                        )}
-                        {isCompleted && item.time_taken_hours > 0 && (
-                            <View style={styles.metaChip}>
-                                <Icon name="hourglass-half" size={10} color="#6B7280" />
-                                <Text style={styles.metaText}> {item.time_taken_hours}h</Text>
-                            </View>
-                        )}
-                        {item.assigned_by_name && (
-                            <View style={styles.metaChip}>
-                                <Icon name="user-tag" size={10} color="#8B5CF6" />
-                                <Text style={[styles.metaText, { color: '#8B5CF6' }]}> {item.assigned_by_name}</Text>
-                            </View>
-                        )}
-                    </View>
-                </TouchableOpacity>
-
-                {/* Action Buttons */}
-                {isOpen && (
-                    <View style={styles.actionRow}>
-                        <TouchableOpacity
-                            style={styles.startTaskBtn}
-                            onPress={() => handleStatusChange(item.name, 'In Progress')}
-                        >
-                            <Icon name="play" size={14} color="#FFF" />
-                            <Text style={styles.startTaskBtnText}>  Start Task</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[styles.actionBtnSmall, { backgroundColor: '#EF444415' }]}
-                            onPress={() => handleDelete(item.name)}
-                        >
-                            <Icon name="trash" size={13} color="#EF4444" />
-                        </TouchableOpacity>
-                    </View>
-                )}
-                {isInProgress && (
-                    <View style={styles.actionRow}>
-                        <TouchableOpacity
-                            style={styles.completeTaskBtn}
-                            onPress={() => handleStatusChange(item.name, 'Completed')}
-                        >
-                            <Icon name="check-circle" size={15} color="#FFF" solid />
-                            <Text style={styles.completeTaskBtnText}>  Mark as Complete</Text>
-                        </TouchableOpacity>
-                    </View>
-                )}
-            </View>
+            <Row
+                key={item.name}
+                title={item.task_title}
+                titleLines={2}
+                subtitle={subtitle || undefined}
+                subtitleLines={3}
+                meta={meta}
+                right={action}
+                chevron={false}
+                onPress={canEdit ? () => openEditModal(item) : undefined}
+            />
         );
     };
 
-    const renderCreateModal = () => (
-        <Modal visible={showCreateModal} transparent animationType="slide" onRequestClose={() => setShowCreateModal(false)}>
-            <View style={styles.modalOverlay}>
-                <View style={styles.modalContent}>
-                    <View style={styles.modalHeader}>
-                        <Text style={styles.modalTitle}>New Task</Text>
-                        <TouchableOpacity onPress={() => setShowCreateModal(false)}>
-                            <Icon name="times" size={20} color="#6B7280" />
-                        </TouchableOpacity>
-                    </View>
+    const renderBody = () => {
+        if (loading) {
+            return <Loading />;
+        }
+        if (tasks.length === 0) {
+            const which = activeTab === 'All' ? '' : `${statusLabel(activeTab).toLowerCase()} `;
+            return <EmptyState icon="check-square" title="No tasks" message={`No ${which}tasks for ${getDisplayDate(selectedDate)}.`} />;
+        }
+        return (
+            <>
+                <StatStrip
+                    style={styles.strip}
+                    items={[
+                        { label: 'Total', value: summary.total || 0 },
+                        { label: 'In progress', value: summary.in_progress || 0 },
+                        { label: 'Done', value: summary.completed || 0 },
+                        { label: 'Carried', value: summary.carried_forward || 0 },
+                    ]}
+                />
+                <Group>
+                    {tasks.map(renderTaskRow)}
+                </Group>
+            </>
+        );
+    };
 
-                    <Text style={styles.inputLabel}>Title *</Text>
-                    <TextInput
-                        style={styles.input}
-                        value={newTitle}
-                        onChangeText={setNewTitle}
-                        placeholder="What needs to be done?"
-                        placeholderTextColor="#9CA3AF"
-                        maxLength={140}
-                    />
+    // ------------------------------------------------------------------ sheets
 
-                    <Text style={styles.inputLabel}>Description</Text>
-                    <TextInput
-                        style={[styles.input, styles.textArea]}
-                        value={newDescription}
-                        onChangeText={setNewDescription}
-                        placeholder="Add details (optional)"
-                        placeholderTextColor="#9CA3AF"
-                        multiline
-                        numberOfLines={3}
-                        maxLength={500}
-                    />
-
-                    <Text style={styles.inputLabel}>Priority</Text>
-                    <View style={styles.priorityRow}>
-                        {PRIORITIES.map((p) => (
-                            <TouchableOpacity
-                                key={p}
-                                style={[styles.priorityOption, newPriority === p && { backgroundColor: PRIORITY_COLORS[p] + '20', borderColor: PRIORITY_COLORS[p] }]}
-                                onPress={() => setNewPriority(p)}
-                            >
-                                <Text style={[styles.priorityOptionText, newPriority === p && { color: PRIORITY_COLORS[p], fontWeight: '600' }]}>{p}</Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-
-                    <TouchableOpacity
-                        style={[styles.createBtn, { backgroundColor: custom.palette.primary }, creating && { opacity: 0.6 }]}
-                        onPress={handleCreate}
-                        disabled={creating}
-                    >
-                        {creating ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={styles.createBtnText}>Create Task</Text>}
-                    </TouchableOpacity>
-                </View>
-            </View>
-        </Modal>
+    const renderCreateSheet = () => (
+        <Sheet
+            visible={showCreateModal}
+            title="New task"
+            onClose={() => !creating && setShowCreateModal(false)}
+            dismissable={!creating}
+            footer={(
+                <>
+                    <Button title="Cancel" variant="secondary" onPress={() => setShowCreateModal(false)} disabled={creating} style={styles.flex} />
+                    <Button title="Add task" onPress={handleCreate} loading={creating} style={styles.flex} />
+                </>
+            )}
+        >
+            <TextField
+                label="Title"
+                placeholder="What needs to be done"
+                value={newTitle}
+                onChangeText={setNewTitle}
+                maxLength={140}
+            />
+            <TextField
+                label="Description"
+                placeholder="Optional"
+                value={newDescription}
+                onChangeText={setNewDescription}
+                multiline
+                numberOfLines={3}
+                maxLength={500}
+            />
+            <Field label="Priority">
+                <Segmented options={PRIORITIES} value={newPriority} onChange={setNewPriority} />
+            </Field>
+        </Sheet>
     );
 
-    const renderEditModal = () => (
-        <Modal visible={showEditModal} transparent animationType="slide" onRequestClose={() => setShowEditModal(false)}>
-            <View style={styles.modalOverlay}>
-                <View style={styles.modalContent}>
-                    <View style={styles.modalHeader}>
-                        <Text style={styles.modalTitle}>Edit Task</Text>
-                        <TouchableOpacity onPress={() => setShowEditModal(false)}>
-                            <Icon name="times" size={20} color="#6B7280" />
-                        </TouchableOpacity>
-                    </View>
-
-                    <Text style={styles.inputLabel}>Title *</Text>
-                    <TextInput style={styles.input} value={editTitle} onChangeText={setEditTitle} maxLength={140} />
-
-                    <Text style={styles.inputLabel}>Description</Text>
-                    <TextInput style={[styles.input, styles.textArea]} value={editDescription} onChangeText={setEditDescription} multiline numberOfLines={3} maxLength={500} />
-
-                    <Text style={styles.inputLabel}>Priority</Text>
-                    <View style={styles.priorityRow}>
-                        {PRIORITIES.map((p) => (
-                            <TouchableOpacity
-                                key={p}
-                                style={[styles.priorityOption, editPriority === p && { backgroundColor: PRIORITY_COLORS[p] + '20', borderColor: PRIORITY_COLORS[p] }]}
-                                onPress={() => setEditPriority(p)}
-                            >
-                                <Text style={[styles.priorityOptionText, editPriority === p && { color: PRIORITY_COLORS[p], fontWeight: '600' }]}>{p}</Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-
-                    <Text style={styles.inputLabel}>Remarks</Text>
-                    <TextInput style={[styles.input, styles.textArea]} value={editRemarks} onChangeText={setEditRemarks} placeholder="Add notes..." placeholderTextColor="#9CA3AF" multiline numberOfLines={2} maxLength={500} />
-
-                    <TouchableOpacity
-                        style={[styles.createBtn, { backgroundColor: custom.palette.primary }, saving && { opacity: 0.6 }]}
-                        onPress={handleEdit}
-                        disabled={saving}
-                    >
-                        {saving ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={styles.createBtnText}>Save Changes</Text>}
-                    </TouchableOpacity>
-                </View>
-            </View>
-        </Modal>
+    const renderEditSheet = () => (
+        <Sheet
+            visible={showEditModal}
+            title="Edit task"
+            onClose={() => !saving && setShowEditModal(false)}
+            dismissable={!saving}
+            footer={(
+                <>
+                    <Button title="Cancel" variant="secondary" onPress={() => setShowEditModal(false)} disabled={saving} style={styles.flex} />
+                    <Button title="Save" onPress={handleEdit} loading={saving} style={styles.flex} />
+                </>
+            )}
+        >
+            <TextField label="Title" value={editTitle} onChangeText={setEditTitle} maxLength={140} />
+            <TextField
+                label="Description"
+                placeholder="Optional"
+                value={editDescription}
+                onChangeText={setEditDescription}
+                multiline
+                numberOfLines={3}
+                maxLength={500}
+            />
+            <Field label="Priority">
+                <Segmented options={PRIORITIES} value={editPriority} onChange={setEditPriority} />
+            </Field>
+            <TextField
+                label="Remarks"
+                placeholder="Optional"
+                value={editRemarks}
+                onChangeText={setEditRemarks}
+                multiline
+                numberOfLines={2}
+                maxLength={500}
+            />
+            <Group style={styles.deleteGroup}>
+                <Row icon="trash-2" title="Delete task" destructive chevron={false} disabled={saving} onPress={deleteFromSheet} />
+            </Group>
+        </Sheet>
     );
 
     return (
-        <View style={[styles.container, { backgroundColor: colors.background }]}>
-            <AppHeader title="Daily Tasks" canGoBack onBack={() => navigation.goBack()} />
+        <View style={styles.container}>
+            <DateNav
+                date={selectedDate}
+                onPrev={() => changeDate(-1)}
+                onNext={() => changeDate(1)}
+                onPick={() => setSelectedDate(new Date())}
+            />
 
-            {/* Date Selector */}
-            <View style={styles.dateSelector}>
-                <TouchableOpacity onPress={() => changeDate(-1)} style={styles.dateArrow}>
-                    <Icon name="chevron-left" size={16} color={custom.palette.primary} />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setSelectedDate(new Date())} style={styles.dateCenter}>
-                    <Text style={[styles.dateText, { color: colors.textPrimary }]}>{getDisplayDate(selectedDate)}</Text>
-                    <Text style={styles.dateSubtext}>{formatDate(selectedDate)}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => changeDate(1)} style={styles.dateArrow}>
-                    <Icon name="chevron-right" size={16} color={custom.palette.primary} />
-                </TouchableOpacity>
+            <View style={styles.toolbar}>
+                <Segmented value={activeTab} onChange={setActiveTab} options={toOptions(STATUS_TABS)} />
             </View>
 
-            {/* Status Tabs */}
-            <View style={styles.tabRow}>
-                {STATUS_TABS.map((tab) => (
-                    <TouchableOpacity
-                        key={tab}
-                        style={[styles.tab, activeTab === tab && { backgroundColor: custom.palette.primary, borderColor: custom.palette.primary }]}
-                        onPress={() => setActiveTab(tab)}
-                    >
-                        <Text style={[styles.tabText, activeTab === tab && { color: '#FFF' }]}>{tab}</Text>
-                    </TouchableOpacity>
-                ))}
-            </View>
+            <Screen
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                footer={<Button title="Add task" onPress={() => setShowCreateModal(true)} />}
+            >
+                {renderBody()}
+            </Screen>
 
-            {renderSummaryCard()}
-
-            {loading ? (
-                <ActivityIndicator size="large" color={custom.palette.primary} style={{ marginTop: 40 }} />
-            ) : (
-                <FlatList
-                    data={tasks}
-                    keyExtractor={(item) => item.name}
-                    renderItem={renderTaskCard}
-                    contentContainerStyle={styles.listContainer}
-                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[custom.palette.primary]} />}
-                    ListEmptyComponent={<EmptyState icon="clipboard-list" title="No tasks" message={`No ${activeTab !== 'All' ? activeTab.toLowerCase() : ''} tasks for ${getDisplayDate(selectedDate)}`} />}
-                />
-            )}
-
-            {/* FAB - Create Task */}
-            <TouchableOpacity style={[styles.fab, { backgroundColor: custom.palette.primary }]} onPress={() => setShowCreateModal(true)}>
-                <Icon name="plus" size={22} color="#FFF" />
-            </TouchableOpacity>
-
-            {renderCreateModal()}
-            {renderEditModal()}
+            {renderCreateSheet()}
+            {renderEditSheet()}
         </View>
     );
 };
 
 const styles = StyleSheet.create({
-    container: { flex: 1 },
-    dateSelector: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-        paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#FFF',
-        borderBottomWidth: 1, borderBottomColor: colors.border,
+    container: { flex: 1, backgroundColor: color.bg },
+    flex: { flex: 1 },
+    toolbar: {
+        backgroundColor: color.surface,
+        paddingHorizontal: space.lg,
+        paddingVertical: space.md,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: color.border,
     },
-    dateArrow: { padding: 8 },
-    dateCenter: { alignItems: 'center' },
-    dateText: { fontSize: 18, fontWeight: '700' },
-    dateSubtext: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
-    tabRow: {
-        flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 10,
-        backgroundColor: '#FFF', gap: 8,
-    },
-    tab: {
-        flex: 1, paddingVertical: 8, borderRadius: 20, alignItems: 'center',
-        borderWidth: 1, borderColor: colors.border, backgroundColor: colors.background,
-    },
-    tabText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
-    summaryCard: {
-        marginHorizontal: 16, marginTop: 12, borderRadius: 12, padding: 16,
-    },
-    summaryRow: { flexDirection: 'row', justifyContent: 'space-around' },
-    summaryItem: { alignItems: 'center' },
-    summaryNumber: { fontSize: 22, fontWeight: '800' },
-    summaryLabel: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
-    listContainer: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 100 },
-    taskCard: {
-        backgroundColor: '#FFF', borderRadius: 12, marginBottom: 10, padding: 14,
-        borderLeftWidth: 4, elevation: 1,
-        shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 3,
-    },
-    taskContent: {},
-    taskHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-    taskTitleRow: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 },
-    taskTitle: { fontSize: 15, fontWeight: '600', color: colors.textPrimary, flex: 1 },
-    taskTitleCompleted: { textDecorationLine: 'line-through', color: colors.textSecondary },
-    priorityBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
-    priorityText: { fontSize: 11, fontWeight: '600' },
-    taskDescription: { fontSize: 13, color: colors.textSecondary, marginTop: 6, marginLeft: 22 },
-    taskMeta: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8, gap: 6, marginLeft: 22 },
-    metaChip: {
-        flexDirection: 'row', alignItems: 'center',
-        backgroundColor: colors.lightGray, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10,
-    },
-    metaText: { fontSize: 11, color: colors.textSecondary },
-    actionRow: {
-        flexDirection: 'row', marginTop: 10, paddingTop: 10,
-        borderTopWidth: 1, borderTopColor: colors.borderLight, gap: 8,
-    },
-    startTaskBtn: {
-        flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-        backgroundColor: '#3B82F6', paddingVertical: 10, borderRadius: 10,
-    },
-    startTaskBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
-    completeTaskBtn: {
-        flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-        backgroundColor: '#10B981', paddingVertical: 12, borderRadius: 10,
-    },
-    completeTaskBtnText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
-    actionBtnSmall: {
-        width: 42, height: 42, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginLeft: 8,
-    },
-    fab: {
-        position: 'absolute', bottom: 24, right: 20,
-        width: 56, height: 56, borderRadius: 28,
-        justifyContent: 'center', alignItems: 'center',
-        elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.3, shadowRadius: 4,
-    },
-    modalOverlay: {
-        flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
-        justifyContent: 'flex-end',
-    },
-    modalContent: {
-        backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20,
-        padding: 24, maxHeight: '85%',
-    },
-    modalHeader: {
-        flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20,
-    },
-    modalTitle: { fontSize: 20, fontWeight: '700', color: colors.textPrimary },
-    inputLabel: { fontSize: 13, fontWeight: '600', color: colors.textSecondary, marginBottom: 6, marginTop: 12 },
-    input: {
-        borderWidth: 1, borderColor: colors.border, borderRadius: 10,
-        padding: 12, fontSize: 15, color: colors.textPrimary, backgroundColor: colors.background,
-    },
-    textArea: { height: 80, textAlignVertical: 'top' },
-    priorityRow: { flexDirection: 'row', gap: 8 },
-    priorityOption: {
-        flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center',
-        borderWidth: 1, borderColor: colors.border,
-    },
-    priorityOptionText: { fontSize: 13, color: colors.textSecondary },
-    createBtn: {
-        marginTop: 24, paddingVertical: 14, borderRadius: 12, alignItems: 'center',
-    },
-    createBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
+    strip: { marginBottom: space.xl },
+    rowAction: { marginLeft: space.sm },
+    deleteGroup: { marginTop: space.xs, marginBottom: 0 },
 });
 
 export default DailyTasksScreen;

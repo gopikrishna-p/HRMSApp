@@ -1,92 +1,67 @@
 // src/screens/employee/MyLogsScreen.js
-import React, { useEffect, useState, useCallback } from 'react';
-import {
-    View,
-    FlatList,
-    RefreshControl,
-    ActivityIndicator,
-    Alert,
-    TouchableOpacity,
-    Text,
-    StyleSheet,
-    Modal,
-    Pressable,
-    TextInput,
-    SafeAreaView,
-} from 'react-native';
+//
+// The signed-in employee's work logs (timesheet entries) on a task (hrms.api.my_task_logs).
+// The task's progress can be set here; new entries are added from the footer button.
+import React, { useState, useCallback, useLayoutEffect } from 'react';
+import { View, Text, StyleSheet, Alert } from 'react-native';
 import { useFocusEffect, useRoute, useNavigation } from '@react-navigation/native';
-import Icon from 'react-native-vector-icons/FontAwesome5';
-
+import showToast from '../../utils/Toast';
+import { formatTimeOfDay } from '../../utils/dateFormat';
 import { listProjectLogs, startLog, stopLog, updateTask } from '../../services/project.service';
+import {
+    Screen,
+    Group,
+    Row,
+    StatusText,
+    ProgressBar,
+    Segmented,
+    Sheet,
+    Button,
+    TextField,
+    EmptyState,
+    Loading,
+    color,
+    space,
+    type,
+} from '../../components/ds';
 
-const LogListItem = ({ log, onStop }) => {
-    const getStatusColor = (status) => {
-        switch (status) {
-            case 'In Progress': return '#8B5CF6';
-            case 'Completed': return '#10B981';
-            case 'Paused': return '#F59E0B';
-            default: return '#6B7280';
-        }
-    };
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const PROGRESS_STEPS = [0, 25, 50, 75, 100].map((v) => ({ value: v, label: `${v}%` }));
+const LOG_TONE = { 'In Progress': 'info', Paused: 'warning' };
 
-    const formatDate = (dateString) => {
-        if (!dateString) return 'N/A';
-        try {
-            const date = new Date(dateString);
-            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-        } catch {
-            return dateString;
-        }
-    };
+// 'YYYY-MM-DD[ HH:MM:SS]' -> '12 Oct' (or '12 Oct 2027' outside the current year)
+const shortDate = (value) => {
+    const [y, m, d] = String(value || '').slice(0, 10).split('-').map(Number);
+    if (!y || !m || !d) {
+        return null;
+    }
+    return `${d} ${MONTHS[m - 1]}${y !== new Date().getFullYear() ? ` ${y}` : ''}`;
+};
 
-    const isInProgress = log.status === 'In Progress';
+// '12 Oct, 10:00 AM – 12:30 PM'
+const whenLabel = (log) => {
+    const from = formatTimeOfDay(log.from_time);
+    const to = formatTimeOfDay(log.to_time);
+    return [shortDate(log.from_time), from && to ? `${from} – ${to}` : from].filter(Boolean).join(', ');
+};
 
+const hoursLabel = (hours) => {
+    const h = Math.round(Number(hours) * 100) / 100;
+    return h ? `${h} h` : undefined;
+};
+
+const LogRow = ({ log, showTask, onStop }) => {
+    const facts = [whenLabel(log), showTask ? log.task : null].filter(Boolean).join('  ·  ');
     return (
-        <View style={styles.logCard}>
-            <View style={styles.logHeader}>
-                <View style={[styles.logIcon, { backgroundColor: getStatusColor(log.status) + '20' }]}>
-                    <Icon name={isInProgress ? 'play-circle' : 'check-circle'} size={18} color={getStatusColor(log.status)} />
-                </View>
-                <View style={{ flex: 1 }}>
-                    <View style={styles.logTitleRow}>
-                        <Text style={styles.logTitle} numberOfLines={1}>Work Log</Text>
-                        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(log.status) + '15' }]}>
-                            <View style={[styles.statusDot, { backgroundColor: getStatusColor(log.status) }]} />
-                            <Text style={[styles.statusText, { color: getStatusColor(log.status) }]}>
-                                {log.status}
-                            </Text>
-                        </View>
-                    </View>
-                    {log.message && <Text style={styles.logMessage} numberOfLines={2}>{log.message}</Text>}
-                </View>
-            </View>
-
-            <View style={styles.logDetails}>
-                <View style={styles.logDetailRow}>
-                    <Icon name="clock" size={12} color="#6B7280" />
-                    <Text style={styles.logDetailText}>Started: {formatDate(log.from_time)}</Text>
-                </View>
-                {log.to_time && (
-                    <View style={styles.logDetailRow}>
-                        <Icon name="flag-checkered" size={12} color="#6B7280" />
-                        <Text style={styles.logDetailText}>Ended: {formatDate(log.to_time)}</Text>
-                    </View>
-                )}
-                {log.hours && (
-                    <View style={styles.logDetailRow}>
-                        <Icon name="hourglass-half" size={12} color="#6B7280" />
-                        <Text style={styles.logDetailText}>Duration: {log.hours} hrs</Text>
-                    </View>
-                )}
-            </View>
-
-            {isInProgress && onStop && (
-                <TouchableOpacity onPress={onStop} style={styles.stopButton}>
-                    <Icon name="stop-circle" size={14} color="#FFFFFF" />
-                    <Text style={styles.stopButtonText}>Stop Log</Text>
-                </TouchableOpacity>
-            )}
-        </View>
+        <Row
+            title={log.description || 'Work log'}
+            titleLines={3}
+            subtitle={[facts, log.message].filter(Boolean).join('\n') || undefined}
+            subtitleLines={3}
+            meta={log.status ? <StatusText label={log.status} tone={LOG_TONE[log.status]} /> : null}
+            value={log.hours ? hoursLabel(log.hours) : undefined}
+            right={onStop ? <Button title="Stop" variant="danger" size="sm" onPress={onStop} style={styles.stop} /> : null}
+        />
     );
 };
 
@@ -106,36 +81,50 @@ const ProjectLogsScreen = () => {
     const [taskProgress, setTaskProgress] = useState(initialProgress || 0);
     const [updatingProgress, setUpdatingProgress] = useState(false);
 
+    const headerTitle = taskSubject || projectName;
+
+    useLayoutEffect(() => {
+        if (headerTitle) {
+            navigation.setOptions({ title: headerTitle });
+        }
+    }, [navigation, headerTitle]);
+
     const onUpdateProgress = async (newProgress) => {
-        if (!taskId) return;
+        if (!taskId) {
+            return;
+        }
         setUpdatingProgress(true);
         try {
             await updateTask(taskId, { progress: newProgress });
             setTaskProgress(newProgress);
         } catch (e) {
             console.warn('Update progress error', e);
-            Alert.alert('Error', 'Failed to update progress');
+            showToast({ type: 'error', text1: 'Progress not updated', text2: e?.message });
         } finally {
             setUpdatingProgress(false);
         }
     };
 
-    const fetch = async () => {
+    const fetch = useCallback(async () => {
         setLoading(true);
         try {
             const data = await listProjectLogs(projectId, { task: taskId });
             setLogs(Array.isArray(data) ? data : []);
         } catch (e) {
             console.warn('Logs fetch error', e);
+            setLogs([]);
+            if (projectId) {
+                showToast({ type: 'error', text1: 'Could not load logs', text2: e?.message });
+            }
         } finally {
             setLoading(false);
         }
-    };
+    }, [projectId, taskId]);
 
     useFocusEffect(
         useCallback(() => {
             fetch();
-        }, [projectId, taskId])
+        }, [fetch])
     );
 
     const onRefresh = async () => {
@@ -158,13 +147,14 @@ const ProjectLogsScreen = () => {
             fetch();
         } catch (e) {
             console.warn('Start log error', e);
+            showToast({ type: 'error', text1: 'Log not saved', text2: e?.message });
         } finally {
             setStarting(false);
         }
     };
 
     const onStop = async (log) => {
-        Alert.alert('Stop Log', 'Mark this log as completed?', [
+        Alert.alert('Stop log', 'Mark this log as completed?', [
             { text: 'Cancel', style: 'cancel' },
             {
                 text: 'Stop',
@@ -175,538 +165,125 @@ const ProjectLogsScreen = () => {
                         fetch();
                     } catch (e) {
                         console.warn('Stop log error', e);
+                        showToast({ type: 'error', text1: 'Log not stopped', text2: e?.message });
                     }
                 },
             },
         ]);
     };
 
-    const renderLog = ({ item }) => (
-        <LogListItem
-            log={item}
-            onStop={item.status === 'In Progress' ? () => onStop(item) : undefined}
-        />
-    );
+    const closeStart = () => setStartVisible(false);
+
+    const renderLogs = () => {
+        if (loading && !refreshing && logs.length === 0) {
+            return <Loading />;
+        }
+        if (!projectId) {
+            return <EmptyState icon="clock" title="No task selected" message="Open a task from My projects to see its work logs." />;
+        }
+        if (logs.length === 0) {
+            return (
+                <EmptyState
+                    icon="clock"
+                    title="No logs yet"
+                    message={taskId ? 'Work you log on this task appears here.' : 'Work you log on this project appears here.'}
+                />
+            );
+        }
+        return (
+            <Group title={`${logs.length} ${logs.length === 1 ? 'log' : 'logs'}`}>
+                {logs.map((item) => (
+                    <LogRow
+                        key={item.log_id || `${item.timesheet}_${item.from_time}`}
+                        log={item}
+                        showTask={!taskId}
+                        onStop={item.status === 'In Progress' ? () => onStop(item) : undefined}
+                    />
+                ))}
+            </Group>
+        );
+    };
 
     return (
-        <SafeAreaView style={styles.container}>
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-                    <Icon name="arrow-left" size={18} color="#111827" />
-                </TouchableOpacity>
-                <View style={{ flex: 1 }}>
-                    <Text style={styles.headerTitle} numberOfLines={1}>
-                        {taskSubject || projectName || 'Logs'}
-                    </Text>
-                    {taskSubject && projectName && (
-                        <Text style={styles.headerSubtitle} numberOfLines={1}>{projectName}</Text>
-                    )}
-                    <Text style={styles.headerCount}>{logs.length} log{logs.length !== 1 ? 's' : ''}</Text>
-                </View>
-                <View style={styles.headerIcon}>
-                    <Icon name="clipboard-list" size={20} color="#8B5CF6" />
-                </View>
-            </View>
+        <View style={styles.flex}>
+            <Screen
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                footer={taskId ? <Button title="Add log" onPress={() => setStartVisible(true)} /> : null}
+            >
+                {taskId ? (
+                    <Group title="Task">
+                        {projectName ? (
+                            <Row
+                                title="Project"
+                                right={<Text style={styles.detailValue} numberOfLines={1}>{projectName}</Text>}
+                            />
+                        ) : null}
+                        <View style={styles.progressBlock}>
+                            <View style={styles.progressHeader}>
+                                <Text style={type.bodyStrong}>Progress</Text>
+                                <Text style={styles.progressValue}>{Math.round(taskProgress)}%</Text>
+                            </View>
+                            <ProgressBar value={taskProgress} tone={taskProgress >= 100 ? 'success' : 'accent'} />
+                            <Segmented
+                                options={PROGRESS_STEPS}
+                                value={taskProgress}
+                                onChange={(v) => {
+                                    if (!updatingProgress) {
+                                        onUpdateProgress(v);
+                                    }
+                                }}
+                                style={[styles.progressControl, updatingProgress && styles.busy]}
+                            />
+                        </View>
+                    </Group>
+                ) : null}
 
-            <View style={styles.addButtonContainer}>
-                <TouchableOpacity onPress={() => setStartVisible(true)} style={styles.startButton}>
-                    <Icon name="play" size={14} color="#FFFFFF" />
-                    <Text style={styles.startButtonText}>Start Log</Text>
-                </TouchableOpacity>
-            </View>
+                {renderLogs()}
+            </Screen>
 
-            {/* Task Progress Section */}
-            {taskId && (
-                <View style={styles.progressSection}>
-                    <View style={styles.progressHeader}>
-                        <Text style={styles.progressLabel}>Task Progress</Text>
-                        <Text style={styles.progressValue}>{taskProgress}%</Text>
-                    </View>
-                    <View style={styles.progressBarBg}>
-                        <View style={[styles.progressBarFill, { width: `${taskProgress}%` }]} />
-                    </View>
-                    <View style={styles.progressButtons}>
-                        {[0, 25, 50, 75, 100].map((val) => (
-                            <TouchableOpacity
-                                key={val}
-                                onPress={() => onUpdateProgress(val)}
-                                disabled={updatingProgress}
-                                style={[
-                                    styles.progressBtn,
-                                    taskProgress === val && styles.progressBtnActive
-                                ]}
-                            >
-                                <Text style={[
-                                    styles.progressBtnText,
-                                    taskProgress === val && styles.progressBtnTextActive
-                                ]}>{val}%</Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-                </View>
-            )}
-
-            {loading ? (
-                <View style={styles.centerContainer}>
-                    <ActivityIndicator size="large" color="#8B5CF6" />
-                    <Text style={styles.loadingText}>Loading logs…</Text>
-                </View>
-            ) : logs.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                    <View style={styles.emptyIcon}>
-                        <Icon name="clipboard-list" size={48} color="#D1D5DB" />
-                    </View>
-                    <Text style={styles.emptyTitle}>No Logs Yet</Text>
-                    <Text style={styles.emptySubtitle}>Start logging work to see entries here</Text>
-                </View>
-            ) : (
-                <FlatList
-                    data={logs}
-                    keyExtractor={(l) => l.log_id || `${l.timesheet}_${l.from_time}`}
-                    renderItem={renderLog}
-                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-                    contentContainerStyle={styles.listContainer}
+            <Sheet
+                visible={startVisible}
+                title="Add work log"
+                subtitle={taskSubject || projectName}
+                onClose={closeStart}
+                dismissable={!starting}
+                footer={(
+                    <>
+                        <Button title="Cancel" variant="secondary" onPress={closeStart} disabled={starting} style={styles.flex} />
+                        <Button title="Save" onPress={onStartSubmit} loading={starting} style={styles.flex} />
+                    </>
+                )}
+            >
+                <TextField
+                    label="Hours"
+                    placeholder="e.g. 2.5"
+                    value={hours}
+                    onChangeText={setHours}
+                    keyboardType="decimal-pad"
                 />
-            )}
-
-            {/* Start Log Modal */}
-            <Modal transparent animationType="slide" visible={startVisible} onRequestClose={() => setStartVisible(false)}>
-                <Pressable onPress={() => setStartVisible(false)} style={styles.modalOverlay}>
-                    <View />
-                </Pressable>
-                <View style={styles.modalContent}>
-                    <View style={styles.modalHeader}>
-                        <Text style={styles.modalTitle}>Start Work Log</Text>
-                        <TouchableOpacity onPress={() => setStartVisible(false)} style={styles.closeButton}>
-                            <Icon name="times" size={18} color="#6B7280" />
-                        </TouchableOpacity>
-                    </View>
-
-                    <View style={styles.modalBody}>
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.inputLabel}>Hours Worked *</Text>
-                            <TextInput
-                                placeholder="Enter hours (e.g., 2.5)"
-                                value={hours}
-                                onChangeText={setHours}
-                                keyboardType="decimal-pad"
-                                style={styles.input}
-                                placeholderTextColor="#9CA3AF"
-                            />
-                        </View>
-
-                        <View style={styles.inputGroup}>
-                            <Text style={styles.inputLabel}>Notes (Optional)</Text>
-                            <TextInput
-                                placeholder="Add notes about what you're working on..."
-                                value={message}
-                                onChangeText={setMessage}
-                                multiline
-                                numberOfLines={4}
-                                textAlignVertical="top"
-                                style={[styles.input, styles.textArea]}
-                                placeholderTextColor="#9CA3AF"
-                            />
-                        </View>
-
-                        <View style={styles.modalActions}>
-                            <TouchableOpacity 
-                                onPress={() => setStartVisible(false)} 
-                                style={styles.cancelButton}
-                                disabled={starting}
-                            >
-                                <Text style={styles.cancelButtonText}>Cancel</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity 
-                                onPress={onStartSubmit} 
-                                style={[styles.createButton, starting && styles.disabledButton]}
-                                disabled={starting}
-                            >
-                                {starting ? (
-                                    <ActivityIndicator size="small" color="#FFFFFF" />
-                                ) : (
-                                    <>
-                                        <Icon name="play" size={14} color="#FFFFFF" />
-                                        <Text style={styles.createButtonText}>Start Logging</Text>
-                                    </>
-                                )}
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </View>
-            </Modal>
-        </SafeAreaView>
+                <TextField
+                    label="Description"
+                    placeholder="What did you work on?"
+                    value={message}
+                    onChangeText={setMessage}
+                    multiline
+                    numberOfLines={4}
+                />
+            </Sheet>
+        </View>
     );
 };
 
 export default ProjectLogsScreen;
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#F9FAFB',
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: 16,
-        paddingTop: 20,
-        backgroundColor: '#FFFFFF',
-        borderBottomWidth: 1,
-        borderBottomColor: '#F3F4F6',
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-        shadowOffset: { width: 0, height: 2 },
-    },
-    backButton: {
-        width: 40,
-        height: 40,
-        borderRadius: 12,
-        backgroundColor: '#F3F4F6',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 12,
-    },
-    headerTitle: {
-        fontSize: 18,
-        fontWeight: '800',
-        color: '#111827',
-    },
-    headerSubtitle: {
-        fontSize: 11,
-        color: '#8B5CF6',
-        marginTop: 1,
-        fontWeight: '600',
-    },
-    headerCount: {
-        fontSize: 11,
-        color: '#6B7280',
-        marginTop: 2,
-    },
-    headerIcon: {
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        backgroundColor: '#8B5CF6' + '15',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginLeft: 12,
-    },
-    addButtonContainer: {
-        padding: 16,
-        paddingBottom: 8,
-        backgroundColor: '#FFFFFF',
-    },
-    startButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#10B981',
-        paddingVertical: 14,
-        paddingHorizontal: 20,
-        borderRadius: 12,
-        elevation: 2,
-        shadowColor: '#10B981',
-        shadowOpacity: 0.3,
-        shadowRadius: 4,
-        shadowOffset: { width: 0, height: 2 },
-    },
-    startButtonText: {
-        color: '#FFFFFF',
-        fontSize: 15,
-        fontWeight: '700',
-        marginLeft: 8,
-    },
-    progressSection: {
-        backgroundColor: '#FFFFFF',
-        padding: 16,
-        paddingTop: 8,
-        borderBottomWidth: 1,
-        borderBottomColor: '#F3F4F6',
-    },
-    progressHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 8,
-    },
-    progressLabel: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: '#374151',
-    },
-    progressValue: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: '#8B5CF6',
-    },
-    progressBarBg: {
-        height: 8,
-        backgroundColor: '#E5E7EB',
-        borderRadius: 4,
-        overflow: 'hidden',
-        marginBottom: 12,
-    },
-    progressBarFill: {
-        height: '100%',
-        backgroundColor: '#8B5CF6',
-        borderRadius: 4,
-    },
-    progressButtons: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        gap: 8,
-    },
-    progressBtn: {
-        flex: 1,
-        paddingVertical: 8,
-        borderRadius: 8,
-        backgroundColor: '#F3F4F6',
-        alignItems: 'center',
-    },
-    progressBtnActive: {
-        backgroundColor: '#8B5CF6',
-    },
-    progressBtnText: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: '#6B7280',
-    },
-    progressBtnTextActive: {
-        color: '#FFFFFF',
-    },
-    listContainer: {
-        padding: 16,
-        paddingTop: 8,
-        paddingBottom: 24,
-    },
-    logCard: {
-        backgroundColor: '#FFFFFF',
-        borderRadius: 14,
-        padding: 16,
-        marginBottom: 12,
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOpacity: 0.06,
-        shadowRadius: 4,
-        shadowOffset: { width: 0, height: 2 },
-    },
-    logHeader: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        marginBottom: 12,
-    },
-    logIcon: {
-        width: 40,
-        height: 40,
-        borderRadius: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 12,
-    },
-    logTitleRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 4,
-    },
-    logTitle: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: '#111827',
-        flex: 1,
-    },
-    statusBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        borderRadius: 8,
-        gap: 6,
-    },
-    statusDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-    },
-    statusText: {
-        fontSize: 11,
-        fontWeight: '700',
-    },
-    logMessage: {
-        fontSize: 13,
-        color: '#6B7280',
-        marginTop: 2,
-    },
-    logDetails: {
-        paddingLeft: 52,
-        gap: 6,
-    },
-    logDetailRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    logDetailText: {
-        fontSize: 12,
-        color: '#6B7280',
-    },
-    stopButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#EF4444',
-        paddingVertical: 10,
-        paddingHorizontal: 16,
-        borderRadius: 10,
-        marginTop: 12,
-        gap: 8,
-    },
-    stopButtonText: {
-        color: '#FFFFFF',
-        fontSize: 13,
-        fontWeight: '700',
-    },
-    centerContainer: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 20,
-    },
-    loadingText: {
-        marginTop: 16,
-        fontSize: 14,
-        color: '#6B7280',
-        fontWeight: '500',
-    },
-    emptyContainer: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 60,
-    },
-    emptyIcon: {
-        width: 96,
-        height: 96,
-        borderRadius: 48,
-        backgroundColor: '#F3F4F6',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginBottom: 20,
-    },
-    emptyTitle: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: '#111827',
-        marginBottom: 8,
-    },
-    emptySubtitle: {
-        fontSize: 14,
-        color: '#6B7280',
-        textAlign: 'center',
-    },
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-    },
-    modalContent: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: '#FFFFFF',
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
-        maxHeight: '70%',
-    },
-    modalHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        padding: 20,
-        paddingBottom: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: '#F3F4F6',
-    },
-    modalTitle: {
-        fontSize: 20,
-        fontWeight: '800',
-        color: '#111827',
-    },
-    closeButton: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        backgroundColor: '#F3F4F6',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    modalBody: {
-        padding: 20,
-    },
-    inputGroup: {
-        marginBottom: 20,
-    },
-    inputLabel: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: '#374151',
-        marginBottom: 8,
-    },
-    input: {
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-        borderRadius: 12,
-        padding: 14,
-        fontSize: 15,
-        color: '#111827',
-        backgroundColor: '#F9FAFB',
-    },
-    textArea: {
-        minHeight: 100,
-        textAlignVertical: 'top',
-    },
-    modalActions: {
-        flexDirection: 'row',
-        gap: 12,
-        marginTop: 8,
-    },
-    cancelButton: {
-        flex: 1,
-        paddingVertical: 14,
-        borderRadius: 12,
-        backgroundColor: '#F3F4F6',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    cancelButtonText: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: '#6B7280',
-    },
-    createButton: {
-        flex: 1,
-        flexDirection: 'row',
-        paddingVertical: 14,
-        borderRadius: 12,
-        backgroundColor: '#10B981',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        elevation: 2,
-        shadowColor: '#10B981',
-        shadowOpacity: 0.3,
-        shadowRadius: 4,
-        shadowOffset: { width: 0, height: 2 },
-    },
-    disabledButton: {
-        opacity: 0.6,
-    },
-    createButtonText: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: '#FFFFFF',
-    },
+    flex: { flex: 1 },
+    detailValue: { ...type.body, color: color.textSecondary, flexShrink: 1, maxWidth: '65%', textAlign: 'right' },
+    progressBlock: { paddingHorizontal: space.lg, paddingVertical: space.md, backgroundColor: color.surface },
+    progressHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: space.sm },
+    progressValue: { fontSize: 15, fontWeight: '600', color: color.text, fontVariant: ['tabular-nums'] },
+    progressControl: { marginTop: space.md },
+    busy: { opacity: 0.5 },
+    stop: { marginLeft: space.sm },
 });

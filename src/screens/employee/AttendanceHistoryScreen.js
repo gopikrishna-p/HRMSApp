@@ -1,41 +1,126 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { 
-    View, 
-    Text, 
-    StyleSheet, 
-    ScrollView, 
-    RefreshControl, 
-    TouchableOpacity, 
-    Alert,
-    FlatList 
-} from 'react-native';
-import { Card, useTheme, Chip } from 'react-native-paper';
-import Icon from 'react-native-vector-icons/FontAwesome5';
+// src/screens/employee/AttendanceHistoryScreen.js
+//
+// The employee's own attendance for a date range (default: 1st of this month to today):
+// attendance records plus generated rows for holidays, approved leave and absent weekdays,
+// from AttendanceService.getEmployeeAttendanceHistory (counted on the server like payroll). A new range is loaded when
+// the employee taps Show in the Period sheet, or on pull-to-refresh.
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuth } from '../../context/AuthContext';
 import AttendanceService from '../../services/attendance.service';
-import { colors } from '../../theme/colors';
-import Button from '../../components/common/Button';
-import Loading from '../../components/common/Loading';
+import { formatTimeOfDay } from '../../utils/dateFormat';
+import showToast from '../../utils/Toast';
+import {
+    Screen,
+    Group,
+    Row,
+    StatusText,
+    Tag,
+    StatStrip,
+    ProgressBar,
+    SelectField,
+    Sheet,
+    Button,
+    EmptyState,
+    Loading,
+    formatShortDate,
+    statusTone,
+    color,
+    space,
+    type,
+} from '../../components/ds';
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const STATUS_LABELS = { 'Work From Home': 'WFH', 'On Leave': 'On leave', 'Half Day': 'Half day' };
+
+const stripHtml = (html) => {
+    if (!html) {
+        return '';
+    }
+    // Remove HTML tags and decode common HTML entities
+    return String(html)
+        .replace(/<[^>]*>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .trim();
+};
+
+// 'YYYY-MM-DD' as a local date (not UTC midnight)
+const parseDay = (value) => {
+    const [y, m, d] = String(value || '').slice(0, 10).split('-').map(Number);
+    return y ? new Date(y, m - 1, d) : null;
+};
+
+// "2026-10-06 09:48:53.442343" -> local Date, without relying on the JS engine's date parser
+const parseDateTime = (value) => {
+    const m = String(value || '').match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)) : null;
+};
+
+// worked hours for one record: check-out minus check-in, like the summary in the service
+const hoursWorked = (item) => {
+    const start = parseDateTime(item.check_in);
+    const end = parseDateTime(item.check_out);
+    if (start && end) {
+        const h = (end - start) / 3600000;
+        return h > 0 && h < 24 ? h : 0;
+    }
+    return 0;
+};
+
+const formatHours = (hours) => {
+    const h = Number(hours) || 0;
+    if (h <= 0) {
+        return null;
+    }
+    let whole = Math.floor(h);
+    let minutes = Math.round((h - whole) * 60);
+    if (minutes === 60) {
+        whole += 1;
+        minutes = 0;
+    }
+    return whole ? `${whole}h${minutes ? ` ${minutes}m` : ''}` : `${minutes}m`;
+};
+
+const shortDay = (d) => `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}`;
+const formatPeriod = (a, b) => (a.getFullYear() === b.getFullYear()
+    ? `${shortDay(a)} – ${shortDay(b)} ${b.getFullYear()}`
+    : `${shortDay(a)} ${a.getFullYear()} – ${shortDay(b)} ${b.getFullYear()}`);
+
+const DayBlock = ({ value, muted }) => {
+    const d = parseDay(value);
+    return (
+        <View style={styles.day}>
+            <Text style={[styles.dayNumber, muted && styles.muted]}>{d ? d.getDate() : '-'}</Text>
+            <Text style={styles.dayName}>{d ? WEEKDAYS[d.getDay()] : ''}</Text>
+        </View>
+    );
+};
 
 const AttendanceHistoryScreen = ({ navigation }) => {
     const { employee } = useAuth();
-    const { custom } = useTheme();
-    
+
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
     const [attendanceData, setAttendanceData] = useState([]);
     const [summaryStats, setSummaryStats] = useState({});
     const [dateRange, setDateRange] = useState({});
-    const [holidays, setHolidays] = useState([]);
-    const [leaves, setLeaves] = useState([]);
-    
+    const [, setHolidays] = useState([]);
+    const [, setLeaves] = useState([]);
+    const [showPeriod, setShowPeriod] = useState(false);
+
     // Date picker states - Default to 1st of current month to today
     const getFirstDayOfCurrentMonth = () => {
         const today = new Date();
         return new Date(today.getFullYear(), today.getMonth(), 1);
     };
-    
+
     const [startDate, setStartDate] = useState(getFirstDayOfCurrentMonth());
     const [endDate, setEndDate] = useState(new Date());
     const [showStartPicker, setShowStartPicker] = useState(false);
@@ -51,83 +136,30 @@ const AttendanceHistoryScreen = ({ navigation }) => {
         return `${year}-${month}-${day}`;
     };
 
-    const formatTime = (datetime) => {
-        if (!datetime) return '--';
-        try {
-            const date = new Date(datetime);
-            return date.toLocaleTimeString('en-US', { 
-                hour: '2-digit', 
-                minute: '2-digit',
-                hour12: true 
-            });
-        } catch {
-            return '--';
-        }
-    };
-
-    const formatDateTime = (datetime) => {
-        if (!datetime) return '--';
-        try {
-            const date = new Date(datetime);
-            return date.toLocaleDateString('en-US', { 
-                month: 'short', 
-                day: 'numeric',
-                year: 'numeric'
-            });
-        } catch {
-            return '--';
-        }
-    };
-
-    const stripHtml = (html) => {
-        if (!html) return '';
-        // Remove HTML tags and decode HTML entities
-        const tmp = html.replace(/<[^>]*>/g, '');
-        // Decode common HTML entities
-        return tmp
-            .replace(/&nbsp;/g, ' ')
-            .replace(/&amp;/g, '&')
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&quot;/g, '"')
-            .replace(/&#39;/g, "'")
-            .trim();
-    };
-
     const loadAttendanceHistory = useCallback(async () => {
-        if (!employeeId) return;
-        
+        if (!employeeId) {
+            return;
+        }
+
         setLoading(true);
         try {
             const startDateStr = formatDate(startDate);
             const endDateStr = formatDate(endDate);
-            
-            console.log('Loading attendance history with inclusive date range:', {
-                employeeId,
-                startDate: startDateStr,
-                endDate: endDateStr,
-                startDateObj: startDate,
-                endDateObj: endDate,
-                inclusive: 'Both start and end dates should be included'
-            });
-            
+
             const result = await AttendanceService.getEmployeeAttendanceHistory(
                 employeeId,
                 startDateStr,
                 endDateStr
             );
-            
-            console.log('Attendance history result:', result);
-            
+
             setAttendanceData(result.attendance_records || []);
             setSummaryStats(result.summary_stats || {});
             setDateRange(result.date_range || {});
             setHolidays(result.holidays || []);
             setLeaves(result.leaves || []);
-            
         } catch (error) {
             console.error('Error loading attendance history:', error);
-            Alert.alert('Error', 'Failed to load attendance history');
+            showToast({ type: 'error', text1: 'Could not load attendance', text2: 'Pull down to try again.' });
         } finally {
             setLoading(false);
         }
@@ -139,55 +171,15 @@ const AttendanceHistoryScreen = ({ navigation }) => {
         setRefreshing(false);
     }, [loadAttendanceHistory]);
 
-    // Load data only on initial mount
+    // Load on open only; a new date range is loaded when the employee taps Show
     useEffect(() => {
         loadAttendanceHistory();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [employeeId]);
-
-    const getStatusColor = (status) => {
-        switch (status?.toLowerCase()) {
-            case 'present':
-                return colors.success;
-            case 'absent':
-                return colors.error;
-            case 'work from home':
-            case 'wfh':
-                return colors.primary;
-            case 'on leave':
-                return colors.warning;
-            case 'holiday':
-                return colors.leave;
-            case 'half day':
-                return colors.secondary;
-            default:
-                return colors.textSecondary;
-        }
-    };
-
-    const getStatusIcon = (status) => {
-        switch (status?.toLowerCase()) {
-            case 'present':
-                return 'check-circle';
-            case 'absent':
-                return 'times-circle';
-            case 'work from home':
-            case 'wfh':
-                return 'home';
-            case 'on leave':
-                return 'calendar-times';
-            case 'holiday':
-                return 'gift';
-            case 'half day':
-                return 'clock';
-            default:
-                return 'question-circle';
-        }
-    };
 
     const onStartDateChange = (event, selectedDate) => {
         setShowStartPicker(false);
         if (event.type === 'set' && selectedDate) {
-            console.log('Start date selected:', formatDate(selectedDate));
             setStartDate(selectedDate);
         }
     };
@@ -195,591 +187,203 @@ const AttendanceHistoryScreen = ({ navigation }) => {
     const onEndDateChange = (event, selectedDate) => {
         setShowEndPicker(false);
         if (event.type === 'set' && selectedDate) {
-            console.log('End date selected:', formatDate(selectedDate));
             setEndDate(selectedDate);
         }
     };
 
-    const renderAttendanceItem = ({ item }) => {
-        const statusColor = getStatusColor(item.status);
-        const statusIcon = getStatusIcon(item.status);
-        
-        // Determine if we should show the work_mode badge
-        // Don't show if status already indicates the work mode (e.g., status = "Work From Home")
-        // Don't show if work_mode is Office (default) or same as status
-        const showWorkModeBadge = item.work_mode && 
-            item.work_mode !== 'Office' && 
+    const closePeriod = () => {
+        setShowPeriod(false);
+        setShowStartPicker(false);
+        setShowEndPicker(false);
+    };
+
+    const showRange = () => {
+        closePeriod();
+        loadAttendanceHistory();
+    };
+
+    // ------------------------------------------------------------------ derived
+    const months = useMemo(() => {
+        const groups = [];
+        attendanceData.forEach((item) => {
+            const key = String(item.attendance_date || '').slice(0, 7);
+            let group = groups[groups.length - 1];
+            if (!group || group.key !== key) {
+                const d = parseDay(item.attendance_date);
+                group = { key, title: d ? `${MONTHS[d.getMonth()]} ${d.getFullYear()}` : 'Other', items: [] };
+                groups.push(group);
+            }
+            group.items.push(item);
+        });
+        return groups;
+    }, [attendanceData]);
+
+    const totalHours = useMemo(
+        () => Math.round(attendanceData.reduce((sum, item) => sum + hoursWorked(item), 0) * 10) / 10,
+        [attendanceData]
+    );
+
+    const loadedStart = parseDay(dateRange.start_date) || startDate;
+    const loadedEnd = parseDay(dateRange.end_date) || endDate;
+    const periodText = formatPeriod(loadedStart, loadedEnd);
+
+    // ------------------------------------------------------------------ rows
+    const renderRow = (item, index) => {
+        const inTime = formatTimeOfDay(item.check_in);
+        const outTime = formatTimeOfDay(item.check_out);
+        const hasTimes = Boolean(inTime || outTime);
+
+        let title;
+        let subtitle = null;
+        if (item.type === 'holiday') {
+            title = stripHtml(item.description) || 'Holiday';
+        } else if (item.type === 'leave') {
+            title = item.leave_type || 'Leave';
+            const note = stripHtml(item.description);
+            subtitle = note && note !== title ? note : null;
+        } else if (hasTimes) {
+            title = `In ${inTime || '–'}  ·  Out ${outTime || '–'}`;
+            // the server's note explains drafts ("Not submitted: counts as absent until submitted")
+            subtitle = [formatHours(hoursWorked(item)), item.is_draft ? stripHtml(item.description) : null].filter(Boolean).join('  ·  ') || null;
+        } else {
+            title = stripHtml(item.description) || 'No check-in';
+        }
+
+        // Work mode tag only when the status does not already say it
+        const showWorkMode = item.work_mode &&
+            item.work_mode !== 'Office' &&
             item.work_mode !== item.status &&
             item.work_mode !== 'Absent' &&
             item.work_mode !== 'On Leave' &&
             item.work_mode !== 'Holiday' &&
             !(item.status === 'Work From Home' && item.work_mode === 'Work From Home');
-        
+
+        const tags = [
+            item.type === 'attendance' && item.late_entry ? <Tag key="late" label="Late" tone="warning" /> : null,
+            showWorkMode ? <Tag key="mode" label={item.work_mode === 'Work From Home' ? 'WFH' : item.work_mode} /> : null,
+        ].filter(Boolean);
+
         return (
-            <Card style={styles.attendanceCard}>
-                <Card.Content>
-                    <View style={styles.cardHeader}>
-                        <View style={styles.dateSection}>
-                            <Text style={styles.dateText}>
-                                {formatDateTime(item.attendance_date)}
-                            </Text>
-                            <View style={styles.statusRow}>
-                                <View style={[styles.statusChip, { backgroundColor: statusColor + '15' }]}>
-                                    <Icon name={statusIcon} size={12} color={statusColor} />
-                                    <Text style={[styles.statusText, { color: statusColor }]}>
-                                        {item.status}
-                                    </Text>
-                                </View>
-                                {showWorkModeBadge && (
-                                    <View style={[styles.workModeChip, { 
-                                        backgroundColor: item.work_mode === 'Work From Home' ? colors.primaryLight : colors.lightGray 
-                                    }]}>
-                                        <Icon 
-                                            name={item.work_mode === 'Work From Home' ? 'home' : 'info-circle'} 
-                                            size={10} 
-                                            color={item.work_mode === 'Work From Home' ? colors.primary : colors.textSecondary} 
-                                        />
-                                        <Text style={[styles.workModeText, { 
-                                            color: item.work_mode === 'Work From Home' ? colors.primary : colors.textSecondary 
-                                        }]}>
-                                            {item.work_mode}
-                                        </Text>
-                                    </View>
-                                )}
-                            </View>
-                        </View>
-                    </View>
-                    
-                    {/* Show description for holidays and leaves */}
-                    {(item.type === 'holiday' || item.type === 'leave') && item.description && (
-                        <View style={styles.descriptionSection}>
-                            <Text style={styles.descriptionText}>{stripHtml(item.description)}</Text>
-                            {item.leave_type && (
-                                <Text style={styles.leaveTypeText}>Leave Type: {item.leave_type}</Text>
-                            )}
-                        </View>
-                    )}
-                    
-                    {/* Show time section only for attendance records */}
-                    {item.type === 'attendance' && (
-                        <View style={styles.timeSection}>
-                            <View style={styles.timeItem}>
-                                <Icon name="sign-in-alt" size={14} color="#10B981" />
-                                <Text style={styles.timeLabel}>Check In</Text>
-                                <Text style={styles.timeValue}>{formatTime(item.check_in)}</Text>
-                            </View>
-                            
-                            <View style={styles.timeItem}>
-                                <Icon name="sign-out-alt" size={14} color="#EF4444" />
-                                <Text style={styles.timeLabel}>Check Out</Text>
-                                <Text style={styles.timeValue}>{formatTime(item.check_out)}</Text>
-                            </View>
-                        </View>
-                    )}
-                    
-                    {/* Show working hours calculation */}
-                    {(item.check_in && item.check_out) && (
-                        <View style={styles.workingHoursSection}>
-                            <Icon name="clock" size={12} color="#6B7280" />
-                            <Text style={styles.workingHoursText}>
-                                {(() => {
-                                    try {
-                                        const checkIn = new Date(item.check_in);
-                                        const checkOut = new Date(item.check_out);
-                                        const diffMs = checkOut.getTime() - checkIn.getTime();
-                                        const hours = Math.floor(diffMs / (1000 * 60 * 60));
-                                        const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-                                        return `Working Hours: ${hours}h ${minutes}m`;
-                                    } catch {
-                                        return 'Working Hours: --';
-                                    }
-                                })()}
-                            </Text>
-                        </View>
-                    )}
-                </Card.Content>
-            </Card>
+            <Row
+                key={item.name || `${item.attendance_date}_${index}`}
+                left={<DayBlock value={item.attendance_date} muted={item.type === 'holiday'} />}
+                title={title}
+                subtitle={subtitle}
+                meta={tags.length ? tags : null}
+                right={<StatusText label={STATUS_LABELS[item.status] || item.status} tone={statusTone(item.status)} />}
+            />
         );
     };
 
-    const renderSummaryStats = () => (
-        <Card style={styles.summaryCard}>
-            <Card.Content style={styles.compactContent}>
-                <View style={styles.summaryHeader}>
-                    <Icon name="chart-bar" size={16} color={custom.palette.primary} />
-                    <Text style={styles.summaryTitle}>Attendance Summary</Text>
-                    <Text style={styles.summaryDateRange}>
-                        {dateRange.start_date || 'N/A'} to {dateRange.end_date || 'N/A'}
-                    </Text>
-                </View>
-                
-                <View style={styles.compactStatsGrid}>
-                    <View style={styles.compactStatItem}>
-                        <Text style={styles.compactStatNumber}>{summaryStats.present_days || 0}</Text>
-                        <Text style={styles.compactStatLabel}>Present</Text>
-                    </View>
-                    <View style={styles.compactStatItem}>
-                        <Text style={styles.compactStatNumber}>{summaryStats.wfh_days || 0}</Text>
-                        <Text style={styles.compactStatLabel}>WFH</Text>
-                    </View>
-                    <View style={styles.compactStatItem}>
-                        <Text style={styles.compactStatNumber}>{summaryStats.leave_days || 0}</Text>
-                        <Text style={styles.compactStatLabel}>Leave</Text>
-                    </View>
-                    <View style={styles.compactStatItem}>
-                        <Text style={styles.compactStatNumber}>{summaryStats.holiday_days || 0}</Text>
-                        <Text style={styles.compactStatLabel}>Holiday</Text>
-                    </View>
-                    <View style={styles.compactStatItem}>
-                        <Text style={styles.compactStatNumber}>{summaryStats.absent_days || 0}</Text>
-                        <Text style={styles.compactStatLabel}>Absent</Text>
-                    </View>
-                    <View style={styles.compactStatItem}>
-                        <Text style={styles.compactStatNumber}>{summaryStats.attendance_percentage || 0}%</Text>
-                        <Text style={styles.compactStatLabel}>Rate</Text>
-                    </View>
-                </View>
-                
-                {/* Working Hours Section */}
-                {summaryStats.total_working_hours > 0 && (
-                    <View style={styles.workingHoursRow}>
-                        <View style={styles.hoursItem}>
-                            <Text style={styles.hoursValue}>{summaryStats.total_working_hours || 0}h</Text>
-                            <Text style={styles.hoursLabel}>Total Hours</Text>
-                        </View>
-                        <View style={styles.hoursItem}>
-                            <Text style={styles.hoursValue}>{summaryStats.avg_working_hours || 0}h</Text>
-                            <Text style={styles.hoursLabel}>Avg/Day</Text>
-                        </View>
-                    </View>
-                )}
-            </Card.Content>
-        </Card>
-    );
-
-    if (loading) {
-        return <Loading />;
-    }
-
-    return (
-        <View style={[styles.container, { backgroundColor: custom.palette.background }]}>
-            {/* Date Range Selector */}
-            <Card style={styles.compactDateCard}>
-                <Card.Content style={styles.compactContent}>
-                    <View style={styles.dateRow}>
-                        <TouchableOpacity 
-                            style={styles.compactDateButton}
-                            onPress={() => setShowStartPicker(true)}
-                        >
-                            <Icon name="calendar" size={12} color={custom.palette.primary} />
-                            <Text style={styles.compactDateButtonText}>From: {formatDate(startDate)}</Text>
-                        </TouchableOpacity>
-                        
-                        <TouchableOpacity 
-                            style={styles.compactDateButton}
-                            onPress={() => setShowEndPicker(true)}
-                        >
-                            <Icon name="calendar" size={12} color={custom.palette.primary} />
-                            <Text style={styles.compactDateButtonText}>To: {formatDate(endDate)}</Text>
-                        </TouchableOpacity>
-                    </View>
-                    
-                    <Button 
-                        onPress={loadAttendanceHistory}
-                        style={styles.compactLoadButton}
-                        disabled={loading}
-                        icon="sync"
-                        mode="contained"
-                        compact
-                    >
-                        Load
-                    </Button>
-                </Card.Content>
-            </Card>
-
-            {/* Summary Stats */}
-            {Object.keys(summaryStats).length > 0 && renderSummaryStats()}
-
-            {/* Attendance List */}
-            <View style={styles.listContainer}>
-                <Text style={styles.listTitle}>
-                    Attendance Records ({attendanceData.length})
-                </Text>
-                
-                <FlatList
-                    data={attendanceData}
-                    renderItem={renderAttendanceItem}
-                    keyExtractor={(item, index) => item.name || `${item.attendance_date}_${index}`}
-                    refreshControl={
-                        <RefreshControl
-                            refreshing={refreshing}
-                            onRefresh={onRefresh}
-                            colors={[custom.palette.primary]}
-                        />
-                    }
-                    showsVerticalScrollIndicator={false}
-                    contentContainerStyle={styles.listContent}
-                    ListEmptyComponent={
-                        <View style={styles.emptyContainer}>
-                            <Icon name="calendar-times" size={48} color="#9CA3AF" />
-                            <Text style={styles.emptyTitle}>No Records Found</Text>
-                            <Text style={styles.emptySubtitle}>
-                                No attendance records found for the selected date range
-                            </Text>
-                        </View>
-                    }
+    const renderSummary = () => {
+        const rate = Number(summaryStats.attendance_percentage) || 0;
+        const absent = summaryStats.absent_days || 0;
+        const attended = Number(summaryStats.attended_days) || 0;
+        const avg = totalHours > 0 && attended > 0 ? Math.round((totalHours / attended) * 10) / 10 : 0;
+        const footer = totalHours > 0
+            ? `${formatHours(totalHours)} worked${avg > 0 ? `, ${formatHours(avg)} a day on average` : ''}`
+            : undefined;
+        return (
+            <Group title="Summary" footer={footer}>
+                <StatStrip
+                    style={styles.flatStrip}
+                    items={[
+                        { label: 'Present', value: summaryStats.present_days || 0 },
+                        { label: 'WFH', value: summaryStats.wfh_days || 0 },
+                        { label: 'Leave', value: summaryStats.leave_days || 0 },
+                        { label: 'Holiday', value: summaryStats.holiday_days || 0 },
+                        { label: 'Absent', value: absent, tone: absent ? 'danger' : undefined },
+                    ]}
                 />
+                <View style={styles.rate}>
+                    <View style={styles.rateHeader}>
+                        <Text style={type.secondary}>Attendance rate</Text>
+                        <Text style={styles.rateValue}>{`${rate}%`}</Text>
+                    </View>
+                    <ProgressBar value={rate} tone={rate >= 80 ? 'success' : rate >= 60 ? 'warning' : 'danger'} />
+                </View>
+            </Group>
+        );
+    };
+
+    // ------------------------------------------------------------------ render
+    return (
+        <View style={styles.flex}>
+            <View style={styles.controls}>
+                <SelectField value={periodText} icon="calendar" onPress={() => setShowPeriod(true)} style={styles.noMargin} />
             </View>
 
-            {/* Date Pickers */}
-            {showStartPicker && (
-                <DateTimePicker
-                    value={startDate}
-                    mode="date"
-                    display="default"
-                    onChange={onStartDateChange}
-                    maximumDate={endDate}
-                />
+            {loading && !refreshing ? (
+                <Loading />
+            ) : (
+                <Screen refreshing={refreshing} onRefresh={onRefresh}>
+                    {Object.keys(summaryStats).length > 0 ? renderSummary() : null}
+                    {attendanceData.length === 0 ? (
+                        <EmptyState icon="calendar" title="No records" message="Nothing recorded for this period." />
+                    ) : (
+                        months.map((month) => (
+                            <Group key={month.key} title={month.title}>
+                                {month.items.map(renderRow)}
+                            </Group>
+                        ))
+                    )}
+                </Screen>
             )}
-            
-            {showEndPicker && (
-                <DateTimePicker
-                    value={endDate}
-                    mode="date"
-                    display="default"
-                    onChange={onEndDateChange}
-                    minimumDate={startDate}
-                    maximumDate={new Date()}
-                />
-            )}
+
+            <Sheet
+                visible={showPeriod}
+                title="Period"
+                onClose={closePeriod}
+                footer={<Button title="Show" onPress={showRange} disabled={loading} style={styles.grow} />}
+            >
+                <SelectField label="From" value={formatShortDate(startDate)} icon="calendar" onPress={() => setShowStartPicker(true)} />
+                <SelectField label="To" value={formatShortDate(endDate)} icon="calendar" onPress={() => setShowEndPicker(true)} />
+
+                {/* Date Pickers */}
+                {showStartPicker && (
+                    <DateTimePicker
+                        value={startDate}
+                        mode="date"
+                        display="default"
+                        onChange={onStartDateChange}
+                        maximumDate={endDate}
+                    />
+                )}
+
+                {showEndPicker && (
+                    <DateTimePicker
+                        value={endDate}
+                        mode="date"
+                        display="default"
+                        onChange={onEndDateChange}
+                        minimumDate={startDate}
+                        maximumDate={new Date()}
+                    />
+                )}
+            </Sheet>
         </View>
     );
 };
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
+    flex: { flex: 1, backgroundColor: color.bg },
+    controls: {
+        backgroundColor: color.surface,
+        paddingHorizontal: space.lg,
+        paddingVertical: space.md,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: color.border,
     },
-    dateCard: {
-        margin: 16,
-        marginBottom: 8,
-        backgroundColor: '#FFF',
-        borderRadius: 12,
-        elevation: 2,
-    },
-    dateRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 12,
-    },
-    dateButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: colors.lightGray,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 8,
-        flex: 0.48,
-    },
-    dateButtonText: {
-        marginLeft: 8,
-        fontSize: 14,
-        color: colors.textPrimary,
-        fontWeight: '500',
-    },
-    quickDateRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 16,
-    },
-    quickDateButton: {
-        backgroundColor: colors.primaryLight,
-        paddingHorizontal: 8,
-        paddingVertical: 6,
-        borderRadius: 6,
-        flex: 0.32,
-        alignItems: 'center',
-    },
-    quickDateText: {
-        fontSize: 12,
-        color: colors.primary,
-        fontWeight: '600',
-    },
-    loadButton: {
-        marginTop: 8,
-    },
-    summaryCard: {
-        margin: 12,
-        marginTop: 6,
-        marginBottom: 6,
-        backgroundColor: colors.white,
-        borderRadius: 8,
-        elevation: 1,
-    },
-    statsGrid: {
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-        marginBottom: 16,
-    },
-    statItem: {
-        alignItems: 'center',
-    },
-    statNumber: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-    },
-    statLabel: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginTop: 4,
-    },
-    hoursSection: {
-        marginTop: 16,
-        padding: 12,
-        backgroundColor: colors.surfaceSecondary,
-        borderRadius: 8,
-    },
-    hoursText: {
-        fontSize: 14,
-        color: colors.textPrimary,
-        fontWeight: '600',
-    },
-    avgHoursText: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginTop: 4,
-    },
-    listContainer: {
-        flex: 1,
-        margin: 12,
-        marginTop: 6,
-    },
-    listTitle: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-        marginBottom: 8,
-    },
-    listContent: {
-        paddingBottom: 20,
-    },
-    attendanceCard: {
-        marginBottom: 12,
-        backgroundColor: colors.white,
-        borderRadius: 12,
-        elevation: 1,
-    },
-    cardHeader: {
-        marginBottom: 12,
-    },
-    dateSection: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start',
-    },
-    dateText: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        flex: 1,
-    },
-    statusRow: {
-        flexDirection: 'column',
-        alignItems: 'flex-end',
-        gap: 4,
-    },
-    statusChip: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 12,
-    },
-    statusText: {
-        fontSize: 12,
-        fontWeight: '600',
-        marginLeft: 4,
-    },
-    workModeChip: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 6,
-        paddingVertical: 2,
-        borderRadius: 8,
-    },
-    workModeText: {
-        fontSize: 10,
-        fontWeight: '500',
-        marginLeft: 4,
-    },
-    descriptionSection: {
-        marginBottom: 12,
-        padding: 8,
-        backgroundColor: colors.surfaceSecondary,
-        borderRadius: 8,
-    },
-    descriptionText: {
-        fontSize: 13,
-        color: colors.textPrimary,
-        marginBottom: 4,
-    },
-    leaveTypeText: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        fontStyle: 'italic',
-    },
-    timeSection: {
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-        marginBottom: 12,
-        paddingVertical: 12,
-        backgroundColor: colors.surfaceSecondary,
-        borderRadius: 8,
-    },
-    timeItem: {
-        alignItems: 'center',
-        flex: 1,
-    },
-    timeLabel: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginTop: 4,
-        marginBottom: 2,
-    },
-    timeValue: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
-    },
-    workingHoursSection: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingTop: 8,
-        borderTopWidth: 1,
-        borderTopColor: colors.border,
-    },
-    workingHoursText: {
-        fontSize: 13,
-        color: colors.textPrimary,
-        marginLeft: 8,
-        flex: 1,
-    },
-    lateChip: {
-        backgroundColor: colors.warningLight,
-        borderColor: colors.warning,
-    },
-    lateChipText: {
-        fontSize: 10,
-        color: colors.warning,
-    },
-    emptyContainer: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 48,
-    },
-    emptyTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginTop: 16,
-        marginBottom: 8,
-    },
-    emptySubtitle: {
-        fontSize: 14,
-        color: colors.textSecondary,
-        textAlign: 'center',
-        lineHeight: 20,
-    },
-    
-    // Compact styles for better space utilization
-    compactDateCard: {
-        margin: 12,
-        marginBottom: 6,
-        backgroundColor: colors.white,
-        borderRadius: 8,
-        elevation: 1,
-    },
-    compactContent: {
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-    },
-    compactDateButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: colors.lightGray,
-        paddingHorizontal: 8,
-        paddingVertical: 6,
-        borderRadius: 6,
-        flex: 0.48,
-    },
-    compactDateButtonText: {
-        marginLeft: 6,
-        fontSize: 12,
-        color: colors.textPrimary,
-        fontWeight: '500',
-    },
-    compactLoadButton: {
-        marginTop: 6,
-        height: 36,
-    },
-    summaryHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 8,
-    },
-    summaryTitle: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginLeft: 6,
-        flex: 1,
-    },
-    summaryDateRange: {
-        fontSize: 10,
-        color: colors.textSecondary,
-    },
-    compactStatsGrid: {
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-    },
-    compactStatItem: {
-        alignItems: 'center',
-        flex: 1,
-    },
-    compactStatNumber: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-    },
-    compactStatLabel: {
-        fontSize: 10,
-        color: colors.textSecondary,
-        marginTop: 2,
-    },
-    workingHoursRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-        marginTop: 8,
-        paddingTop: 8,
-        borderTopWidth: 1,
-        borderTopColor: '#E5E7EB',
-    },
-    hoursItem: {
-        alignItems: 'center',
-        flex: 1,
-    },
-    hoursValue: {
-        fontSize: 14,
-        fontWeight: 'bold',
-        color: '#059669',
-    },
-    hoursLabel: {
-        fontSize: 10,
-        color: '#6B7280',
-        marginTop: 2,
-    },
+    grow: { flex: 1 },
+    noMargin: { marginBottom: 0 },
+    flatStrip: { borderWidth: 0, borderRadius: 0 },
+    rate: { paddingHorizontal: space.lg, paddingVertical: space.md },
+    rateHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: space.sm, marginBottom: 6 },
+    rateValue: { fontSize: 15, fontWeight: '600', color: color.text, fontVariant: ['tabular-nums'] },
+    day: { width: 36, alignItems: 'center', marginRight: space.md },
+    dayNumber: { fontSize: 17, fontWeight: '600', color: color.text, fontVariant: ['tabular-nums'] },
+    dayName: { fontSize: 12, color: color.textTertiary, marginTop: 1 },
+    muted: { color: color.textTertiary },
 });
 
 export default AttendanceHistoryScreen;

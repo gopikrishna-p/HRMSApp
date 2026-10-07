@@ -33,6 +33,19 @@ export const formatLocalDate = (date) => {
 export const todayLocalYMD = () => formatLocalDate(new Date());
 
 /**
+ * Local wall-clock datetime for Frappe Datetime fields: `YYYY-MM-DD HH:MM:SS`.
+ * (toISOString() would send UTC, which the server stores as if it were local time.)
+ */
+export const formatLocalDateTime = (date) => {
+    const d = date instanceof Date ? date : new Date(date);
+    if (!date || Number.isNaN(d.getTime())) {
+        return null;
+    }
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${formatLocalDate(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+};
+
+/**
  * Keep `date` inside [min, max], comparing calendar days only (time is ignored).
  * Used to keep a half-day date inside the selected leave / work range, which the
  * backend requires.

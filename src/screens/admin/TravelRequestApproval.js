@@ -7,6 +7,7 @@ import { View, Text, StyleSheet, Pressable, Switch, ActivityIndicator, Platform 
 import DateTimePicker from '@react-native-community/datetimepicker';
 import apiService from '../../services/api.service';
 import { loadAllEmployees } from '../../utils/employeeData';
+import { formatLocalDateTime } from '../../utils/dateFormat';
 import showToast from '../../utils/Toast';
 import {
     Screen,
@@ -410,8 +411,8 @@ const TravelRequestApproval = ({ navigation, route }) => {
                 travel_from: item.travel_from,
                 travel_to: item.travel_to,
                 mode_of_travel: item.mode_of_travel,
-                departure_date: item.departure_date.toISOString(),
-                arrival_date: item.arrival_date.toISOString(),
+                departure_date: formatLocalDateTime(item.departure_date),
+                arrival_date: formatLocalDateTime(item.arrival_date),
                 lodging_required: item.lodging_required ? 1 : 0,
                 preferred_area_for_lodging: item.preferred_area_for_lodging,
             }));

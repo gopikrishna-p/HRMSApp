@@ -1,26 +1,37 @@
-import React, { useState, useEffect } from 'react';
+// src/screens/auth/LoginScreen.js
+//
+// Sign in with a Frappe username (or email) and password. AppNavigator switches to the
+// employee or admin app once AuthContext reports a session.
+import React, { useState, useEffect, useRef } from 'react';
 import {
     View,
+    Text,
     StyleSheet,
     Image,
     KeyboardAvoidingView,
     Platform,
-    TouchableOpacity,
-    Dimensions,
+    ScrollView,
+    Pressable,
     TextInput,
+    StatusBar,
 } from 'react-native';
-import { Text, ActivityIndicator } from 'react-native-paper';
 import Toast from 'react-native-toast-message';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import NetInfo from '@react-native-community/netinfo';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
 import { useAuth } from '../../context/AuthContext';
 import { validateLoginForm } from '../../utils/validators';
-import { colors } from '../../theme/colors';
-import { Button } from 'react-native-paper';
-
-const { width, height } = Dimensions.get('window');
+import {
+    Button,
+    Field,
+    TextField,
+    IconButton,
+    Notice,
+    color,
+    space,
+    radius,
+    type,
+} from '../../components/ds';
 
 const LoginScreen = ({ navigation }) => {
     const { login } = useAuth();
@@ -32,16 +43,18 @@ const LoginScreen = ({ navigation }) => {
     const [isConnected, setIsConnected] = useState(true);
     const [isPasswordVisible, setIsPasswordVisible] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
+    const passwordRef = useRef(null);
 
     useEffect(() => {
         // Check network connectivity
         const unsubscribe = NetInfo.addEventListener(state => {
-            setIsConnected(state.isConnected);
-            if (!state.isConnected) {
+            // isConnected is null while NetInfo is still checking; only false means offline
+            setIsConnected(state.isConnected !== false);
+            if (state.isConnected === false) {
                 Toast.show({
                     type: 'error',
-                    text1: 'No Internet Connection',
-                    text2: 'Please check your network settings',
+                    text1: 'No internet connection',
+                    text2: 'Check your network settings',
                 });
             }
         });
@@ -54,8 +67,8 @@ const LoginScreen = ({ navigation }) => {
         if (!isConnected) {
             Toast.show({
                 type: 'error',
-                text1: 'No Internet Connection',
-                text2: 'Please connect to the internet to login',
+                text1: 'No internet connection',
+                text2: 'Connect to the internet to sign in',
             });
             return;
         }
@@ -68,7 +81,7 @@ const LoginScreen = ({ navigation }) => {
             setErrorMessage(Object.values(validation.errors)[0]);
             Toast.show({
                 type: 'error',
-                text1: 'Validation Error',
+                text1: 'Check your details',
                 text2: Object.values(validation.errors)[0],
                 position: 'top',
                 visibilityTime: 3000,
@@ -87,8 +100,8 @@ const LoginScreen = ({ navigation }) => {
             if (result.success) {
                 Toast.show({
                     type: 'success',
-                    text1: 'Login Successful',
-                    text2: 'Welcome back!',
+                    text1: 'Signed in',
+                    text2: 'Welcome back',
                     position: 'top',
                     visibilityTime: 2000,
                 });
@@ -98,7 +111,7 @@ const LoginScreen = ({ navigation }) => {
                 setErrorMessage(result.message || 'Invalid credentials. Please try again.');
                 Toast.show({
                     type: 'error',
-                    text1: 'Login Failed',
+                    text1: 'Could not sign in',
                     text2: result.message || 'Invalid credentials. Please try again.',
                     position: 'top',
                     visibilityTime: 4000,
@@ -109,7 +122,7 @@ const LoginScreen = ({ navigation }) => {
             setErrorMessage('An unexpected error occurred. Please try again.');
             Toast.show({
                 type: 'error',
-                text1: 'Error',
+                text1: 'Something went wrong',
                 text2: 'An unexpected error occurred. Please try again.',
                 position: 'top',
                 visibilityTime: 4000,
@@ -122,7 +135,7 @@ const LoginScreen = ({ navigation }) => {
     const handleForgotPassword = () => {
         Toast.show({
             type: 'info',
-            text1: 'Password Reset',
+            text1: 'Forgot password',
             text2: 'Please contact your HR administrator',
             position: 'top',
             visibilityTime: 4000,
@@ -132,41 +145,42 @@ const LoginScreen = ({ navigation }) => {
     const handleContactSupport = () => {
         Toast.show({
             type: 'info',
-            text1: 'Contact Support',
-            text2: 'Email: support@deepgrid.com\nPhone: +91-1234567890',
+            text1: 'Contact support',
+            text2: 'Ask your HR team to reset your password or unlock your account',
             position: 'top',
             visibilityTime: 5000,
         });
     };
 
     return (
-        <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+            <StatusBar barStyle="dark-content" backgroundColor={color.surface} />
             <KeyboardAvoidingView
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                style={styles.container}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                style={styles.flex}
             >
-                <View style={styles.centeredContent}>
-                    {/* Logo Section */}
-                    <View style={styles.imageContainer}>
+                <ScrollView
+                    contentContainerStyle={styles.scroll}
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                >
+                    <View style={styles.form}>
                         <Image
-                            style={styles.image}
+                            style={styles.logo}
                             source={require('../../assets/images/mainLogo.jpg')}
                             resizeMode="contain"
+                            accessibilityLabel="DeepGrid"
                         />
-                    </View>
+                        <Text style={styles.title}>Sign in</Text>
+                        <Text style={styles.subtitle}>Continue to HRMS DeepGrid</Text>
 
-                    {/* Title Section */}
-                    <View style={styles.titleContainer}>
-                        <Text style={styles.title}>HRMS DeepGrid</Text>
-                        <Text style={styles.subtitle}>Employee Management System</Text>
-                    </View>
+                        {!isConnected ? (
+                            <Notice tone="warning" icon="wifi-off">No internet connection</Notice>
+                        ) : null}
 
-                    {/* Form Section */}
-                    <View style={styles.innerContainer}>
-                        <Text style={styles.label}>Username</Text>
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Enter your username"
+                        <TextField
+                            label="Username"
+                            placeholder="Email or username"
                             onChangeText={(text) => {
                                 setUsername(text);
                                 if (errors.username) {
@@ -177,268 +191,168 @@ const LoginScreen = ({ navigation }) => {
                             value={username}
                             autoCapitalize="none"
                             autoCorrect={false}
+                            autoComplete="username"
+                            textContentType="username"
+                            returnKeyType="next"
+                            onSubmitEditing={() => passwordRef.current?.focus()}
+                            blurOnSubmit={false}
                             editable={!loading}
-                            placeholderTextColor="#999"
+                            inputStyle={errors.username ? styles.inputError : undefined}
                         />
 
-                        <Text style={styles.label}>Password</Text>
-                        <View style={styles.passwordContainer}>
-                            <TextInput
-                                style={styles.passwordInput}
-                                placeholder="Enter your password"
-                                onChangeText={(text) => {
-                                    setPassword(text);
-                                    if (errors.password) {
-                                        setErrors({ ...errors, password: null });
-                                    }
-                                    setErrorMessage('');
-                                }}
-                                secureTextEntry={!isPasswordVisible}
-                                value={password}
-                                autoCapitalize="none"
-                                autoCorrect={false}
-                                editable={!loading}
-                                placeholderTextColor="#999"
-                                onSubmitEditing={handleLogin}
-                            />
-                            <TouchableOpacity
-                                onPress={() => setIsPasswordVisible(!isPasswordVisible)}
-                                disabled={loading}
-                            >
-                                <Icon
-                                    name={isPasswordVisible ? "eye-off" : "eye"}
-                                    size={20}
-                                    color="grey"
-                                    style={styles.eyeIcon}
+                        <Field label="Password">
+                            <View style={[styles.passwordBox, errors.password && styles.inputError]}>
+                                <TextInput
+                                    ref={passwordRef}
+                                    style={styles.passwordInput}
+                                    placeholder="Password"
+                                    placeholderTextColor={color.textTertiary}
+                                    onChangeText={(text) => {
+                                        setPassword(text);
+                                        if (errors.password) {
+                                            setErrors({ ...errors, password: null });
+                                        }
+                                        setErrorMessage('');
+                                    }}
+                                    secureTextEntry={!isPasswordVisible}
+                                    value={password}
+                                    autoCapitalize="none"
+                                    autoCorrect={false}
+                                    autoComplete="password"
+                                    textContentType="password"
+                                    returnKeyType="go"
+                                    editable={!loading}
+                                    onSubmitEditing={handleLogin}
                                 />
-                            </TouchableOpacity>
-                        </View>
+                                <IconButton
+                                    name={isPasswordVisible ? 'eye-off' : 'eye'}
+                                    size={18}
+                                    color={color.textTertiary}
+                                    label={isPasswordVisible ? 'Hide password' : 'Show password'}
+                                    onPress={() => setIsPasswordVisible(!isPasswordVisible)}
+                                    disabled={loading}
+                                />
+                            </View>
+                        </Field>
 
                         {errorMessage ? (
-                            <Text style={styles.errorMessage}>{errorMessage}</Text>
+                            <Notice tone="danger" icon="alert-circle">{errorMessage}</Notice>
                         ) : null}
 
                         <Button
-                            mode="contained"
+                            title={loading ? 'Signing in' : 'Sign in'}
                             onPress={handleLogin}
-                            buttonColor="#003f82"
-                            textColor="white"
                             disabled={loading || !isConnected}
                             loading={loading}
-                            style={styles.loginButton}
-                        >
-                            {loading ? "Logging in..." : "Login"}
-                        </Button>
+                            full
+                        />
 
-                        {/* Forgot Password */}
-                        <TouchableOpacity
+                        <Button
+                            title="Forgot password?"
+                            variant="ghost"
                             onPress={handleForgotPassword}
                             disabled={loading}
-                            style={styles.forgotPasswordContainer}
-                        >
-                            <Text style={styles.forgotPasswordText}>
-                                Forgot Password?
-                            </Text>
-                        </TouchableOpacity>
-
-                        {/* Help Section */}
-                        <View style={styles.helpSection}>
-                            <Text style={styles.helpText}>Having trouble logging in?</Text>
-                            <TouchableOpacity
-                                onPress={handleContactSupport}
-                                disabled={loading}
-                                style={styles.contactButton}
-                            >
-                                <Icon name="headset" size={16} color="#003f82" />
-                                <Text style={styles.contactText}>Contact Support</Text>
-                            </TouchableOpacity>
-                        </View>
+                            style={styles.forgot}
+                        />
                     </View>
 
-                    {/* Footer */}
                     <View style={styles.footer}>
-                        <Text style={styles.footerText}>
-                            © 2025 DeepGrid Technologies. All rights reserved.
-                        </Text>
-                        <Text style={styles.versionText}>Version 1.0.0</Text>
-
-                        <View style={styles.footerLinks}>
-                            <TouchableOpacity activeOpacity={0.7}>
-                                <Text style={styles.footerLink}>Privacy Policy</Text>
-                            </TouchableOpacity>
-                            <Text style={styles.footerDot}>•</Text>
-                            <TouchableOpacity activeOpacity={0.7}>
-                                <Text style={styles.footerLink}>Terms of Service</Text>
-                            </TouchableOpacity>
+                        <View style={styles.helpRow}>
+                            <Text style={styles.helpText}>Trouble signing in?</Text>
+                            <Pressable onPress={handleContactSupport} disabled={loading} hitSlop={8}>
+                                <Text style={styles.link}>Contact support</Text>
+                            </Pressable>
                         </View>
+                        <Text style={styles.caption}>© {new Date().getFullYear()} DeepGrid Technologies</Text>
                     </View>
-                </View>
+                </ScrollView>
             </KeyboardAvoidingView>
         </SafeAreaView>
     );
 };
 
 const styles = StyleSheet.create({
+    flex: { flex: 1 },
     safeArea: {
         flex: 1,
-        backgroundColor: 'white',
+        backgroundColor: color.surface,
     },
-    container: {
-        flex: 1,
+    scroll: {
+        flexGrow: 1,
+        paddingHorizontal: space.xl,
+        paddingTop: space.xl,
+        paddingBottom: space.lg,
     },
-    centeredContent: {
+    form: {
         flex: 1,
-        paddingHorizontal: width * 0.05,
-        paddingVertical: height * 0.02,
+        width: '100%',
+        maxWidth: 420,
+        alignSelf: 'center',
         justifyContent: 'center',
-        alignItems: 'center',
+        paddingBottom: space.xl,
     },
-    imageContainer: {
-        alignItems: 'center',
-        marginBottom: height * 0.015,
-    },
-    image: {
-        width: Math.min(width * 0.5, 200),
-        height: Math.min(width * 0.25, 100),
-        backgroundColor: '#000',
-        borderRadius: 12,
-    },
-    titleContainer: {
-        alignItems: 'center',
-        marginBottom: height * 0.02,
+    logo: {
+        width: 180,
+        height: 90,
+        alignSelf: 'center',
+        marginBottom: space.lg,
     },
     title: {
-        fontSize: Math.min(width * 0.06, 24),
-        fontWeight: 'bold',
-        color: '#003f82',
-        marginBottom: height * 0.003,
+        ...type.display,
+        textAlign: 'center',
     },
     subtitle: {
-        fontSize: Math.min(width * 0.035, 14),
-        color: '#666',
+        ...type.secondary,
+        fontSize: 15,
+        textAlign: 'center',
+        marginTop: space.xs,
+        marginBottom: space.xxl,
     },
-    innerContainer: {
-        width: '90%',
-        maxWidth: 450,
+    inputError: {
+        borderColor: color.danger,
     },
-    label: {
-        fontSize: Math.min(width * 0.035, 14),
-        marginBottom: height * 0.004,
-        color: 'black',
-    },
-    input: {
-        height: Math.max(height * 0.05, 40),
-        borderColor: 'black',
-        borderWidth: 1,
-        marginBottom: height * 0.015,
-        paddingHorizontal: width * 0.03,
-        borderRadius: 5,
-        color: 'black',
-        fontSize: Math.min(width * 0.035, 14),
-    },
-    passwordContainer: {
-        height: Math.max(height * 0.05, 40),
+    passwordBox: {
         flexDirection: 'row',
-        borderColor: 'black',
-        borderWidth: 1,
-        borderRadius: 5,
-        marginBottom: height * 0.015,
         alignItems: 'center',
+        minHeight: 44,
+        paddingLeft: space.md,
+        paddingRight: 2,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: color.border,
+        backgroundColor: color.surface,
     },
     passwordInput: {
         flex: 1,
-        height: '100%',
-        paddingHorizontal: width * 0.03,
-        color: 'black',
-        fontSize: Math.min(width * 0.035, 14),
+        fontSize: 15,
+        color: color.text,
+        paddingVertical: 10,
     },
-    eyeIcon: {
-        marginRight: width * 0.03,
-    },
-    errorMessage: {
-        color: 'red',
-        marginBottom: height * 0.015,
-        textAlign: 'center',
-        fontSize: Math.min(width * 0.032, 13),
-    },
-    loginButton: {
-        marginTop: height * 0.008,
-        height: Math.max(height * 0.05, 40),
-    },
-    forgotPasswordContainer: {
-        alignItems: 'center',
-        marginTop: height * 0.015,
-        marginBottom: height * 0.008,
-        paddingVertical: height * 0.008,
-    },
-    forgotPasswordText: {
-        fontSize: Math.min(width * 0.032, 13),
-        color: '#003f82',
-        fontWeight: '600',
-    },
-    helpSection: {
-        alignItems: 'center',
-        marginTop: height * 0.02,
-        paddingTop: height * 0.02,
-        borderTopWidth: 1,
-        borderTopColor: '#e0e0e0',
-    },
-    helpText: {
-        fontSize: Math.min(width * 0.032, 13),
-        color: '#666',
-        marginBottom: height * 0.01,
-        textAlign: 'center',
-    },
-    contactButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: height * 0.01,
-        paddingHorizontal: width * 0.04,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: '#003f82',
-        backgroundColor: 'white',
-        minHeight: 36,
-    },
-    contactText: {
-        fontSize: Math.min(width * 0.032, 13),
-        color: '#003f82',
-        fontWeight: '600',
-        marginLeft: width * 0.015,
+    forgot: {
+        marginTop: space.sm,
+        alignSelf: 'center',
     },
     footer: {
         alignItems: 'center',
-        paddingVertical: height * 0.015,
-        marginTop: height * 0.02,
+        gap: space.sm,
     },
-    footerText: {
-        fontSize: Math.min(width * 0.028, 11),
-        color: '#666',
-        marginBottom: height * 0.003,
-        textAlign: 'center',
-        paddingHorizontal: width * 0.05,
-    },
-    versionText: {
-        fontSize: Math.min(width * 0.026, 10),
-        color: '#999',
-        marginBottom: height * 0.01,
-    },
-    footerLinks: {
+    helpRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginTop: height * 0.008,
-        flexWrap: 'wrap',
-        justifyContent: 'center',
+        gap: 6,
+        marginBottom: space.xs,
     },
-    footerLink: {
-        fontSize: Math.min(width * 0.028, 11),
-        color: '#003f82',
-        textDecorationLine: 'underline',
+    helpText: {
+        ...type.secondary,
     },
-    footerDot: {
-        fontSize: Math.min(width * 0.028, 11),
-        color: '#666',
-        marginHorizontal: width * 0.025,
+    link: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: color.accent,
+    },
+    caption: {
+        ...type.caption,
+        textAlign: 'center',
     },
 });
 

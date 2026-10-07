@@ -135,88 +135,64 @@ class AttendanceService {
         return { present: [], absent: [], leave: [], holiday: [], total_employees: 0, working_employees: 0, date: date || '', error: resp?.message || 'Failed to load attendance' };
     }
 
-    // Get comprehensive attendance history including holidays and leaves
+    // Attendance history for one employee, counted on the server exactly like payroll
+    // (hrms.api.get_employee_attendance_history): holidays from the employee's holiday list,
+    // approved leave, LWP and unsubmitted past days as absent, today never absent.
+    // Rows are mapped to the shape the employee screens use. Throws when the server call fails.
     async getEmployeeAttendanceHistory(employee_id, start_date = null, end_date = null) {
-        try {
-            if (!employee_id || !start_date || !end_date) {
-                console.warn('Missing required parameters for attendance history');
-                return { attendance_records: [], summary_stats: {}, date_range: {}, holidays: [], leaves: [] };
-            }
-            
-            // Ensure dates are properly formatted and inclusive
-            const formattedStartDate = start_date;
-            const formattedEndDate = end_date;
-            
-            // Validate date format
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(formattedStartDate) || !/^\d{4}-\d{2}-\d{2}$/.test(formattedEndDate)) {
-                console.error('Invalid date format. Expected YYYY-MM-DD');
-                return { attendance_records: [], summary_stats: {}, date_range: {}, holidays: [], leaves: [] };
-            }
-            
-            console.log('Fetching comprehensive attendance data:', { 
-                employee_id, 
-                start_date: formattedStartDate, 
-                end_date: formattedEndDate,
-                inclusive: 'Both start and end dates included',
-                dateRange: `From ${formattedStartDate} to ${formattedEndDate} (inclusive)`
-            });
-            
-            // Fetch all data in parallel with proper date range
-            const [attendanceResp, holidaysResp, leavesResp] = await Promise.all([
-                ApiService.getAttendanceRecords({
-                    employee: employee_id,
-                    start_date: formattedStartDate,
-                    end_date: formattedEndDate
-                }),
-                ApiService.get('/api/method/hrms.api.get_holidays', {
-                    start_date: formattedStartDate,
-                    end_date: formattedEndDate
-                }),
-                ApiService.get('/api/method/hrms.api.get_leave_applications', {
-                    employee: employee_id
-                })
-            ]);
-            
-            console.log('Attendance response:', attendanceResp);
-            console.log('Holidays response:', holidaysResp);
-            console.log('Leaves response:', leavesResp);
-            
-            // Extract data from responses
-            const attendanceRecords = this.extractAttendanceData(attendanceResp);
-            const holidays = this.extractHolidaysData(holidaysResp);
-            const leaves = this.extractLeavesData(leavesResp, start_date, end_date);
-            
-            // Create comprehensive calendar data
-            const comprehensiveData = this.createComprehensiveCalendar(
-                attendanceRecords, holidays, leaves, start_date, end_date
-            );
-            
-            // Calculate enhanced summary stats
-            const summary_stats = this.calculateEnhancedSummaryStats(
-                comprehensiveData, start_date, end_date, holidays.length
-            );
-            
-            console.log('Final comprehensive data:', {
-                attendance_count: comprehensiveData.length,
-                holidays_count: holidays.length,
-                leaves_count: leaves.length,
-                summary_stats
-            });
-            
-            return {
-                attendance_records: comprehensiveData,
-                summary_stats: summary_stats,
-                date_range: {
-                    start_date: start_date,
-                    end_date: end_date
-                },
-                holidays: holidays,
-                leaves: leaves
-            };
-        } catch (error) {
-            console.error('Error fetching comprehensive attendance history:', error);
-            return { attendance_records: [], summary_stats: {}, date_range: {}, holidays: [], leaves: [] };
+        const empty = { attendance_records: [], summary_stats: {}, date_range: {}, holidays: [], leaves: [] };
+        if (!employee_id || !/^\d{4}-\d{2}-\d{2}$/.test(start_date || '') || !/^\d{4}-\d{2}-\d{2}$/.test(end_date || '')) {
+            return empty;
         }
+
+        const resp = await ApiService.getEmployeeAttendanceHistory({ employee_id, start_date, end_date });
+        const data = resp?.success ? (resp.data?.message || {}) : null;
+        if (!data || data.status !== 'success') {
+            throw new Error(resp?.message || data?.message || 'Could not load attendance');
+        }
+
+        const WORK_MODE = { WFH: 'Work From Home', 'On Site': 'On Site', Office: 'Office' };
+        const records = (data.attendance_records || []).map((row) => {
+            const isLeave = row.status === 'On Leave';
+            const type = row.status === 'Holiday' && row.is_synthetic ? 'holiday'
+                : isLeave && row.is_synthetic ? 'leave'
+                    : row.is_synthetic ? 'absent'
+                        : 'attendance';
+            const at = (time) => (time ? `${row.attendance_date} ${time}:00` : null);
+            return {
+                name: row.name,
+                attendance_date: row.attendance_date,
+                type,
+                status: row.status === 'Not Marked' ? 'Not Marked' : row.status,
+                check_in: at(row.in_time),
+                check_out: at(row.out_time),
+                in_time: at(row.in_time),
+                out_time: at(row.out_time),
+                working_hours: row.working_hours || 0,
+                work_mode: row.status === 'Work From Home' ? 'Work From Home'
+                    : WORK_MODE[row.custom_work_type] || (type === 'attendance' ? 'Office' : row.status),
+                leave_type: isLeave ? (row.leave_type || row.note) : row.leave_type,
+                description: row.note || '',
+                late_entry: row.late_entry || 0,
+                docstatus: row.is_draft ? 0 : 1,
+                is_draft: row.is_draft || 0,
+            };
+        });
+
+        const st = data.summary_stats || {};
+        const attended = (st.present_days || 0) + (st.wfh_days || 0) + (st.onsite_days || 0);
+        return {
+            attendance_records: records,
+            summary_stats: {
+                ...st,
+                working_days: st.total_working_days || 0,
+                attended_days: attended,
+                attendance_percentage: st.attendance_percentage || 0,
+            },
+            date_range: { start_date, end_date },
+            holidays: records.filter((r) => r.type === 'holiday'),
+            leaves: records.filter((r) => r.type === 'leave'),
+        };
     }
 
     // Extract attendance data from API response

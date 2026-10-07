@@ -80,22 +80,25 @@ const AdminNavigator = () => {
             <Stack.Screen name="OnSiteSettings" component={OnSiteSettingsScreen} options={{ title: 'On-Site Settings' }} />
             <Stack.Screen name="OnSiteApprovals" component={OnSiteApprovalsScreen} options={{ title: 'On-Site Requests' }} />
             <Stack.Screen name="LeaveApprovals" component={LeaveApprovalsScreen} options={{ title: 'Leave Requests' }} />
-            <Stack.Screen name="MyLeaveApplication" component={LeaveApplicationScreen} options={{ title: 'My Leave Application' }} />
+            <Stack.Screen name="MyLeaveApplication" component={LeaveApplicationScreen} options={{ title: 'My Leave' }} />
             <Stack.Screen name="CompApprovals" component={CompApprovalScreen} options={{ title: 'Comp-Off Requests' }} />
-            <Stack.Screen name="AdminSelfService" component={AdminSelfServiceScreen} options={{ title: 'My Self-Service' }} />
-            <Stack.Screen name="MyCompensatoryLeave" component={CompensatoryLeaveScreen} options={{ title: 'My Comp-Off Request' }} />
+            <Stack.Screen name="AdminSelfService" component={AdminSelfServiceScreen} options={{ title: 'Self-Service' }} />
+            <Stack.Screen name="MyCompensatoryLeave" component={CompensatoryLeaveScreen} options={{ title: 'My Comp-Off' }} />
             <Stack.Screen name="ExpenseClaimApproval" component={ExpenseClaimApprovalScreen} options={{ title: 'Expense Claims' }} />
-            <Stack.Screen name="MyExpenseClaim" component={ExpenseClaimScreen} options={{ title: 'My Expense Claim' }} />
+            <Stack.Screen name="MyExpenseClaim" component={ExpenseClaimScreen} options={{ title: 'My Expense Claims' }} />
             <Stack.Screen name="TravelRequestApproval" component={TravelRequestApproval} options={{ title: 'Travel Requests' }} />
-            <Stack.Screen name="MyTravelRequest" component={TravelRequestScreen} options={{ title: 'My Travel Request' }} />
-            <Stack.Screen name="MyWFHRequest" component={WFHRequestScreen} options={{ title: 'My WFH Request' }} />
-            <Stack.Screen name="MyOnSiteRequest" component={OnSiteRequestScreen} options={{ title: 'My On-Site Request' }} />
-            <Stack.Screen name="MyHolidayList" component={HolidayListScreen} options={{ title: 'My Holiday List' }} />
+            <Stack.Screen name="MyTravelRequest" component={TravelRequestScreen} options={{ title: 'My Travel' }} />
+            <Stack.Screen name="MyWFHRequest" component={WFHRequestScreen} options={{ title: 'My WFH' }} />
+            <Stack.Screen name="MyOnSiteRequest" component={OnSiteRequestScreen} options={{ title: 'My On-Site' }} />
+            <Stack.Screen name="MyHolidayList" component={HolidayListScreen} options={{ title: 'Holidays' }} />
             <Stack.Screen name="MyProfile" component={ProfileScreen} options={{ title: 'My Profile' }} />
             <Stack.Screen name="MySalaryStructure" component={SalaryStructureScreen} options={{ title: 'My Salary Structure' }} />
-            <Stack.Screen name="MyTasks" component={MyTasksScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="MyProjects" component={MyProjectsScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="MyLogs" component={MyLogsScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="MyTasks" component={MyTasksScreen} options={{ title: 'Tasks' }} />
+            <Stack.Screen name="MyProjects" component={MyProjectsScreen} options={{ title: 'My Projects' }} />
+            <Stack.Screen name="MyLogs" component={MyLogsScreen} options={{ title: 'Work Logs' }} />
+            {/* the employee project screens navigate by these names */}
+            <Stack.Screen name="MyTasksScreen" component={MyTasksScreen} options={{ title: 'Tasks' }} />
+            <Stack.Screen name="MyLogsScreen" component={MyLogsScreen} options={{ title: 'Work Logs' }} />
             <Stack.Screen name="CreateNotification" component={CreateNotificationScreen} options={{ title: 'New Notification' }} />
 
             <Stack.Screen name="ProjectsOverview" component={ProjectsOverviewScreen} options={{ title: 'Projects' }} />

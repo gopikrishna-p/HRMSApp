@@ -1,28 +1,85 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-    View,
-    Text,
-    StyleSheet,
-    ScrollView,
-    TouchableOpacity,
-    Alert,
-    RefreshControl,
-    TextInput,
-    Platform
-} from 'react-native';
+// src/screens/employee/ExpenseClaimScreen.js
+//
+// The employee's expense claims: counts by status, the claims (filter by status, tap for the
+// line items) and the form to file a new claim with one or more expenses. The approver sets
+// the sanctioned amounts.
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Platform } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { Picker } from '@react-native-picker/picker';
-import { colors } from '../../theme/colors';
-import Button from '../../components/common/Button';
-import Input from '../../components/common/Input';
-import Loading from '../../components/common/Loading';
-import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
+import apiService, { extractFrappeData } from '../../services/api.service';
 import { formatLocalDate } from '../../utils/dateFormat';
+import showToast from '../../utils/Toast';
+import {
+    Screen,
+    Group,
+    Row,
+    Segmented,
+    StatStrip,
+    StatusText,
+    Tag,
+    Sheet,
+    Button,
+    TextField,
+    SelectField,
+    EmptyState,
+    Loading,
+    Icon,
+    color,
+    space,
+    type,
+    formatShortDate,
+} from '../../components/ds';
+
+// ------------------------------------------------------------------ helpers
+// Indian digit grouping: 1234567 -> 12,34,567
+const groupIndian = (digits) => {
+    const last3 = digits.slice(-3);
+    const rest = digits.slice(0, -3);
+    return rest ? `${rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${last3}` : last3;
+};
+// ₹1,23,456.50; whole amounts drop the decimals unless `decimals` is given
+const formatINR = (value, decimals) => {
+    const n = Number(value) || 0;
+    const places = decimals ?? (Number.isInteger(Math.round(n * 100) / 100) ? 0 : 2);
+    const [whole, fraction] = Math.abs(n).toFixed(places).split('.');
+    return `${n < 0 ? '-' : ''}₹${groupIndian(whole)}${fraction ? `.${fraction}` : ''}`;
+};
+
+// 'YYYY-MM-DD' as a local date (no timezone shift)
+const parseYMD = (value) => {
+    const [y, m, d] = String(value || '').slice(0, 10).split('-').map(Number);
+    return y ? new Date(y, m - 1, d) : null;
+};
+const dateLabel = (value) => {
+    const d = parseYMD(value);
+    return d ? formatShortDate(d) : '–';
+};
+
+// ERPNext keeps undecided claims as approval_status "Draft"; employees read that as pending.
+const statusLabel = (status) => (status === 'Draft' ? 'Pending' : status || '–');
+
+// "Travel" or "Travel +2" for a claim with several expense types
+const typesLabel = (claim) => {
+    const types = [...new Set((claim.expenses || []).map((e) => e.expense_type).filter(Boolean))];
+    if (types.length === 0) {
+        return claim.total_expenses ? `${claim.total_expenses} ${claim.total_expenses === 1 ? 'item' : 'items'}` : '';
+    }
+    return types.length === 1 ? types[0] : `${types[0]} +${types.length - 1}`;
+};
+
+const STATUS_FILTERS = [
+    { value: 'all', label: 'All' },
+    { value: 'Draft', label: 'Pending' },
+    { value: 'Approved', label: 'Approved' },
+    { value: 'Rejected', label: 'Rejected' },
+];
+
+const Check = ({ on }) => (on ? <Icon name="check" size={18} color={color.accent} /> : null);
 
 const ExpenseClaimScreen = ({ navigation }) => {
     // State management
-    const [activeTab, setActiveTab] = useState('submit'); // submit, history
-    const [loading, setLoading] = useState(false);
+    const [activeTab, setActiveTab] = useState('history'); // history (my claims), submit (new claim form)
+    const [loading, setLoading] = useState(true); // employee and expense types are fetched on mount
     const [refreshing, setRefreshing] = useState(false);
     const [employeeId, setEmployeeId] = useState('');
 
@@ -43,6 +100,11 @@ const ExpenseClaimScreen = ({ navigation }) => {
     const [statusSummary, setStatusSummary] = useState({});
     const [totalClaimed, setTotalClaimed] = useState(0);
 
+    // Presentation only: claim open in the detail sheet, expense-type picker
+    const [selected, setSelected] = useState(null);
+    const [typePicker, setTypePicker] = useState(null); // { index, open }
+    const lastSelected = useRef(null); // keeps the detail sheet filled while it slides out
+
     useEffect(() => {
         loadInitialData();
     }, []);
@@ -51,6 +113,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
         if (activeTab === 'history' && employeeId) {
             loadClaims();
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when the list is shown, the filter changes or the employee is known
     }, [activeTab, filterStatus, employeeId]);
 
     const loadInitialData = async () => {
@@ -69,15 +132,17 @@ const ExpenseClaimScreen = ({ navigation }) => {
             setExpenseTypes(Array.isArray(types) ? types : []);
         } catch (error) {
             console.error('Error loading initial data:', error);
-            Alert.alert('Error', 'Failed to load expense types');
+            showToast({ type: 'error', text1: 'Could not load expense types', text2: error.message });
         } finally {
             setLoading(false);
         }
     };
 
     const loadClaims = async () => {
-        if (!employeeId) return;
-        
+        if (!employeeId) {
+            return;
+        }
+
         setLoading(true);
         try {
             const filters = {
@@ -93,13 +158,13 @@ const ExpenseClaimScreen = ({ navigation }) => {
             setTotalClaimed(data.total_claimed_amount || 0);
         } catch (error) {
             console.error('Error loading claims:', error);
-            Alert.alert('Error', 'Failed to load expense claims');
+            showToast({ type: 'error', text1: 'Could not load expense claims', text2: error.message });
         } finally {
             setLoading(false);
         }
     };
 
-    const onRefresh = useCallback(async () => {
+    const onRefresh = async () => {
         setRefreshing(true);
         if (activeTab === 'history') {
             await loadClaims();
@@ -107,7 +172,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
             await loadInitialData();
         }
         setRefreshing(false);
-    }, [activeTab, employeeId]);
+    };
 
     const addExpenseItem = () => {
         setExpenses([...expenses, {
@@ -128,10 +193,10 @@ const ExpenseClaimScreen = ({ navigation }) => {
     const updateExpenseItem = (index, field, value) => {
         const newExpenses = [...expenses];
         newExpenses[index][field] = value;
-        
-        // Note: sanctioned_amount is NOT set here - it will be set by backend
-        // The admin/approver will modify it during approval process
-        
+
+        // sanctioned_amount is not set here: the backend defaults it to the amount and the
+        // approver changes it during approval.
+
         setExpenses(newExpenses);
     };
 
@@ -144,32 +209,32 @@ const ExpenseClaimScreen = ({ navigation }) => {
 
     const validateForm = () => {
         if (!employeeId) {
-            Alert.alert('Error', 'Employee information not loaded');
+            showToast({ type: 'error', text1: 'Your employee record is not loaded', text2: 'Pull down to try again' });
             return false;
         }
 
         // Check if at least one expense exists
         if (expenses.length === 0) {
-            Alert.alert('Error', 'Add at least one expense item');
+            showToast({ type: 'error', text1: 'Add at least one expense' });
             return false;
         }
 
         // Validate each expense
         for (let i = 0; i < expenses.length; i++) {
             const exp = expenses[i];
-            
+
             if (!exp.expense_type) {
-                Alert.alert('Error', `Expense type is required for item ${i + 1}`);
+                showToast({ type: 'error', text1: `Expense ${i + 1}: select a type` });
                 return false;
             }
-            
+
             if (!exp.amount || parseFloat(exp.amount) <= 0) {
-                Alert.alert('Error', `Valid amount is required for item ${i + 1}`);
+                showToast({ type: 'error', text1: `Expense ${i + 1}: enter an amount above zero` });
                 return false;
             }
-            
+
             if (!exp.description || !exp.description.trim()) {
-                Alert.alert('Error', `Description is required for item ${i + 1}`);
+                showToast({ type: 'error', text1: `Expense ${i + 1}: add a description` });
                 return false;
             }
         }
@@ -177,27 +242,32 @@ const ExpenseClaimScreen = ({ navigation }) => {
         return true;
     };
 
+    const resetForm = () => {
+        setExpenses([{
+            expense_type: '',
+            amount: '',
+            description: '',
+            expense_date: new Date()
+        }]);
+        setRemark('');
+        setActiveTab('history');
+    };
+
     const handleSubmit = async () => {
-        if (!validateForm()) return;
+        if (!validateForm()) {
+            return;
+        }
 
         setLoading(true);
         try {
-            // Prepare expense items
-            // Note: sanctioned_amount should NOT be sent by employee
-            // It will be set by backend and modified by admin/approver during approval
+            // Prepare expense items. sanctioned_amount is not sent by the employee: the
+            // backend defaults it to the amount and the approver changes it during approval.
             const expenseItems = expenses.map(exp => ({
                 expense_type: exp.expense_type,
                 amount: parseFloat(exp.amount),
                 description: exp.description.trim(),
                 expense_date: formatLocalDate(exp.expense_date)
-                // sanctioned_amount is handled by backend - defaults to amount, then admin can modify
             }));
-
-            console.log('Submitting expense claim:', {
-                employeeId,
-                expenseItems,
-                remark: remark.trim()
-            });
 
             const response = await apiService.submitExpenseClaim(
                 employeeId,
@@ -205,49 +275,28 @@ const ExpenseClaimScreen = ({ navigation }) => {
                 { remark: remark.trim() }
             );
 
-            console.log('Expense claim response:', response);
-
             // Check if API returned success
             if (!response.success) {
-                Alert.alert('Error', response.message || 'Failed to submit expense claim');
+                showToast({ type: 'error', text1: 'Claim not submitted', text2: response.message || 'Failed to submit expense claim' });
                 return;
             }
 
             // Check if we have valid data
             if (response.data?.message) {
                 const data = response.data.message;
-                Alert.alert(
-                    'Success',
-                    `Expense claim submitted successfully!\nClaim ID: ${data.claim_id || 'N/A'}\nTotal Amount: ₹${data.total_claimed_amount || calculateTotal().toFixed(2)}`,
-                    [{ text: 'OK', onPress: () => {
-                        // Reset form
-                        setExpenses([{
-                            expense_type: '',
-                            amount: '',
-                            description: '',
-                            expense_date: new Date()
-                        }]);
-                        setRemark('');
-                        setActiveTab('history');
-                    }}]
-                );
+                showToast({
+                    type: 'success',
+                    text1: 'Claim submitted',
+                    text2: [data.claim_id, formatINR(data.total_claimed_amount || calculateTotal())].filter(Boolean).join('  ·  '),
+                });
             } else {
-                Alert.alert('Success', 'Expense claim submitted successfully', [
-                    { text: 'OK', onPress: () => {
-                        setExpenses([{
-                            expense_type: '',
-                            amount: '',
-                            description: '',
-                            expense_date: new Date()
-                        }]);
-                        setRemark('');
-                        setActiveTab('history');
-                    }}
-                ]);
+                showToast({ type: 'success', text1: 'Claim submitted' });
             }
+            // Reset form; back to the list, which reloads the claims
+            resetForm();
         } catch (error) {
             console.error('Submit expense claim error:', error);
-            Alert.alert('Error', error.message || 'Failed to submit expense claim');
+            showToast({ type: 'error', text1: 'Claim not submitted', text2: error.message || 'Failed to submit expense claim' });
         } finally {
             setLoading(false);
         }
@@ -257,75 +306,76 @@ const ExpenseClaimScreen = ({ navigation }) => {
         return expenses.reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0);
     };
 
+    // ------------------------------------------------------------------ presentation helpers
+    const openTypePicker = (index) => setTypePicker({ index, open: true });
+    const closeTypePicker = () => setTypePicker((p) => (p ? { ...p, open: false } : p));
+    const pickType = (name) => {
+        if (typePicker) {
+            updateExpenseItem(typePicker.index, 'expense_type', name);
+        }
+        closeTypePicker();
+    };
+
+    if (selected) {
+        lastSelected.current = selected;
+    }
+    const detail = selected || lastSelected.current;
+    const busy = loading && !refreshing;
+
+    // ------------------------------------------------------------------ new claim form
     const renderSubmitTab = () => (
-        <ScrollView
-            style={styles.tabContent}
-            refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-            }
+        <Screen
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            footer={(
+                <View style={styles.footerButtons}>
+                    <Button title="Cancel" variant="secondary" onPress={() => setActiveTab('history')} disabled={loading} style={styles.flex} />
+                    <Button
+                        title="Submit claim"
+                        onPress={handleSubmit}
+                        loading={loading && !refreshing}
+                        disabled={loading || expenses.length === 0}
+                        style={styles.flex}
+                    />
+                </View>
+            )}
         >
-            <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Expense Items</Text>
-                
-                {expenses.map((expense, index) => (
-                    <View key={index} style={styles.expenseCard}>
-                        <View style={styles.expenseHeader}>
-                            <Text style={styles.expenseNumber}>Item {index + 1}</Text>
-                            {expenses.length > 1 && (
-                                <TouchableOpacity
-                                    onPress={() => removeExpenseItem(index)}
-                                    style={styles.removeButton}
-                                >
-                                    <Text style={styles.removeButtonText}>Remove</Text>
-                                </TouchableOpacity>
-                            )}
-                        </View>
-
-                        <Text style={styles.label}>Expense Type *</Text>
-                        <View style={styles.pickerContainer}>
-                            <Picker
-                                selectedValue={expense.expense_type}
-                                onValueChange={(value) => updateExpenseItem(index, 'expense_type', value)}
-                                style={styles.picker}
-                            >
-                                <Picker.Item label="Select type..." value="" />
-                                {expenseTypes.map((type) => (
-                                    <Picker.Item
-                                        key={type.name}
-                                        label={type.name}
-                                        value={type.name}
-                                    />
-                                ))}
-                            </Picker>
-                        </View>
-
-                        <Text style={styles.label}>Amount (₹) *</Text>
-                        <Input
+            {expenses.map((expense, index) => (
+                <Group
+                    key={index}
+                    title={`Expense ${index + 1}`}
+                    action={expenses.length > 1 ? 'Remove' : undefined}
+                    onAction={() => removeExpenseItem(index)}
+                >
+                    <View style={styles.formBody}>
+                        <SelectField
+                            label="Type"
+                            value={expense.expense_type}
+                            placeholder="Select type"
+                            onPress={() => openTypePicker(index)}
+                        />
+                        <TextField
+                            label="Amount (₹)"
                             value={expense.amount}
                             onChangeText={(text) => updateExpenseItem(index, 'amount', text)}
-                            placeholder="Enter amount"
+                            placeholder="0.00"
                             keyboardType="decimal-pad"
                         />
-
-                        <Text style={styles.label}>Description *</Text>
-                        <Input
+                        <TextField
+                            label="Description"
                             value={expense.description}
                             onChangeText={(text) => updateExpenseItem(index, 'description', text)}
-                            placeholder="Describe the expense"
+                            placeholder="What was this for?"
                             multiline
                             numberOfLines={3}
+                            inputStyle={styles.shortMultiline}
                         />
-
-                        <Text style={styles.label}>Expense Date *</Text>
-                        <TouchableOpacity
+                        <SelectField
+                            label="Date"
+                            value={formatShortDate(expense.expense_date)}
+                            icon="calendar"
                             onPress={() => setShowDatePicker({ show: true, index })}
-                            style={styles.dateButton}
-                        >
-                            <Text style={styles.dateText}>
-                                {expense.expense_date.toLocaleDateString()}
-                            </Text>
-                        </TouchableOpacity>
-
+                        />
                         {showDatePicker.show && showDatePicker.index === index && (
                             <DateTimePicker
                                 value={expense.expense_date}
@@ -336,545 +386,175 @@ const ExpenseClaimScreen = ({ navigation }) => {
                             />
                         )}
                     </View>
-                ))}
+                </Group>
+            ))}
 
-                <TouchableOpacity
-                    onPress={addExpenseItem}
-                    style={styles.addButton}
-                >
-                    <Text style={styles.addButtonText}>+ Add Another Expense</Text>
-                </TouchableOpacity>
+            <Button title="Add another expense" variant="secondary" onPress={addExpenseItem} style={styles.addButton} />
 
-                <View style={styles.totalContainer}>
-                    <Text style={styles.totalLabel}>Total Amount:</Text>
-                    <Text style={styles.totalAmount}>₹{calculateTotal().toFixed(2)}</Text>
+            <Group>
+                <Row title="Total" right={<Text style={styles.totalValue}>{formatINR(calculateTotal(), 2)}</Text>} />
+            </Group>
+
+            <Group title="Remarks">
+                <View style={styles.formBody}>
+                    <TextField
+                        value={remark}
+                        onChangeText={setRemark}
+                        placeholder="Optional"
+                        multiline
+                        numberOfLines={3}
+                        inputStyle={styles.shortMultiline}
+                    />
                 </View>
-            </View>
-
-            <View style={styles.section}>
-                <Text style={styles.label}>Overall Remarks (Optional)</Text>
-                <Input
-                    value={remark}
-                    onChangeText={setRemark}
-                    placeholder="Any additional remarks..."
-                    multiline
-                    numberOfLines={3}
-                />
-            </View>
-
-            <Button
-                title="Submit Expense Claim"
-                onPress={handleSubmit}
-                disabled={loading || expenses.length === 0}
-            />
-
-            <View style={styles.bottomPadding} />
-        </ScrollView>
+            </Group>
+        </Screen>
     );
 
+    // ------------------------------------------------------------------ my claims
     const renderClaimItem = (claim) => {
-        const statusColor = 
-            claim.approval_status === 'Approved' ? colors.success :
-            claim.approval_status === 'Rejected' ? colors.error :
-            colors.warning;
-
+        const sanctionedDiffers = claim.approval_status === 'Approved'
+            && Number(claim.total_sanctioned_amount) !== Number(claim.total_claimed_amount);
         return (
-            <View key={claim.name} style={styles.claimCard}>
-                <View style={styles.claimHeader}>
-                    <Text style={styles.claimId}>{claim.name}</Text>
-                    <View style={[styles.statusBadge, { backgroundColor: statusColor }]}>
-                        <Text style={styles.statusText}>{claim.approval_status}</Text>
-                    </View>
-                </View>
-
-                <View style={styles.claimDetails}>
-                    <View style={styles.claimRow}>
-                        <Text style={styles.claimLabel}>Date:</Text>
-                        <Text style={styles.claimValue}>
-                            {new Date(claim.posting_date).toLocaleDateString()}
-                        </Text>
-                    </View>
-                    <View style={styles.claimRow}>
-                        <Text style={styles.claimLabel}>Claimed:</Text>
-                        <Text style={styles.claimValue}>₹{claim.total_claimed_amount?.toFixed(2)}</Text>
-                    </View>
-                    <View style={styles.claimRow}>
-                        <Text style={styles.claimLabel}>Sanctioned:</Text>
-                        <Text style={styles.claimValue}>₹{claim.total_sanctioned_amount?.toFixed(2)}</Text>
-                    </View>
-                    <View style={styles.claimRow}>
-                        <Text style={styles.claimLabel}>Expenses:</Text>
-                        <Text style={styles.claimValue}>{claim.total_expenses} items</Text>
-                    </View>
-                    {claim.remark && (
-                        <View style={styles.claimRow}>
-                            <Text style={styles.claimLabel}>Remarks:</Text>
-                            <Text style={[styles.claimValue, { flex: 1 }]}>{claim.remark}</Text>
-                        </View>
-                    )}
-                </View>
-
-                {claim.expenses && claim.expenses.length > 0 && (
-                    <View style={styles.expensesList}>
-                        <Text style={styles.expensesHeader}>Expense Details:</Text>
-                        {claim.expenses.map((exp, idx) => (
-                            <View key={idx} style={styles.expenseItem}>
-                                <Text style={styles.expenseType}>{exp.expense_type}</Text>
-                                <Text style={styles.expenseDesc}>{exp.description}</Text>
-                                <View style={styles.expenseAmountRow}>
-                                    <Text style={styles.expenseAmount}>₹{exp.amount?.toFixed(2)}</Text>
-                                    <Text style={styles.expenseDate}>
-                                        {new Date(exp.expense_date).toLocaleDateString()}
-                                    </Text>
-                                </View>
-                            </View>
-                        ))}
-                    </View>
-                )}
-            </View>
+            <Row
+                key={claim.name}
+                title={formatINR(claim.total_claimed_amount)}
+                subtitle={[dateLabel(claim.posting_date), typesLabel(claim)].filter(Boolean).join('  ·  ')}
+                meta={sanctionedDiffers ? <Tag label={`${formatINR(claim.total_sanctioned_amount)} sanctioned`} /> : null}
+                right={<StatusText label={statusLabel(claim.approval_status)} />}
+                onPress={() => setSelected(claim)}
+            />
         );
     };
 
-    const renderHistoryTab = () => (
-        <View style={styles.tabContent}>
-            {/* Summary Cards */}
-            <View style={styles.summaryContainer}>
-                <View style={styles.summaryCard}>
-                    <Text style={styles.summaryValue}>{statusSummary.Draft || 0}</Text>
-                    <Text style={styles.summaryLabel}>Pending</Text>
-                </View>
-                <View style={styles.summaryCard}>
-                    <Text style={[styles.summaryValue, { color: colors.success }]}>
-                        {statusSummary.Approved || 0}
-                    </Text>
-                    <Text style={styles.summaryLabel}>Approved</Text>
-                </View>
-                <View style={styles.summaryCard}>
-                    <Text style={[styles.summaryValue, { color: colors.error }]}>
-                        {statusSummary.Rejected || 0}
-                    </Text>
-                    <Text style={styles.summaryLabel}>Rejected</Text>
-                </View>
-            </View>
-
-            <View style={styles.totalClaimedContainer}>
-                <Text style={styles.totalClaimedLabel}>Total Claimed:</Text>
-                <Text style={styles.totalClaimedAmount}>₹{totalClaimed.toFixed(2)}</Text>
-            </View>
-
-            {/* Filter Pills */}
-            <View style={styles.filterContainer}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                    <TouchableOpacity
-                        onPress={() => setFilterStatus('')}
-                        style={[styles.filterPill, !filterStatus && styles.filterPillActive]}
-                    >
-                        <Text style={[styles.filterText, !filterStatus && styles.filterTextActive]}>
-                            All
-                        </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={() => setFilterStatus('Draft')}
-                        style={[styles.filterPill, filterStatus === 'Draft' && styles.filterPillActive]}
-                    >
-                        <Text style={[styles.filterText, filterStatus === 'Draft' && styles.filterTextActive]}>
-                            Pending
-                        </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={() => setFilterStatus('Approved')}
-                        style={[styles.filterPill, filterStatus === 'Approved' && styles.filterPillActive]}
-                    >
-                        <Text style={[styles.filterText, filterStatus === 'Approved' && styles.filterTextActive]}>
-                            Approved
-                        </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        onPress={() => setFilterStatus('Rejected')}
-                        style={[styles.filterPill, filterStatus === 'Rejected' && styles.filterPillActive]}
-                    >
-                        <Text style={[styles.filterText, filterStatus === 'Rejected' && styles.filterTextActive]}>
-                            Rejected
-                        </Text>
-                    </TouchableOpacity>
-                </ScrollView>
-            </View>
-
-            {/* Claims List */}
-            <ScrollView
-                style={styles.claimsList}
-                refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-                }
+    const renderHistoryTab = () => {
+        const filterLabel = STATUS_FILTERS.find((f) => f.value === filterStatus)?.label || '';
+        return (
+            <Screen
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                footer={<Button title="New claim" onPress={() => setActiveTab('submit')} />}
             >
-                {loading ? (
+                <StatStrip
+                    style={styles.stats}
+                    items={[
+                        { label: 'Pending', value: statusSummary.Draft || 0 },
+                        { label: 'Approved', value: statusSummary.Approved || 0 },
+                        { label: 'Rejected', value: statusSummary.Rejected || 0 },
+                    ]}
+                />
+                <Group>
+                    <Row title="Total claimed" value={formatINR(totalClaimed)} />
+                </Group>
+
+                <Text style={styles.sectionTitle}>Claims</Text>
+                <Segmented
+                    value={filterStatus || 'all'}
+                    onChange={(value) => setFilterStatus(value === 'all' ? '' : value)}
+                    options={STATUS_FILTERS}
+                    style={styles.filter}
+                />
+
+                {busy ? (
                     <Loading />
                 ) : claims.length === 0 ? (
-                    <View style={styles.emptyContainer}>
-                        <Text style={styles.emptyText}>No expense claims found</Text>
-                        <Text style={styles.emptySubtext}>
-                            {filterStatus ? `No ${filterStatus.toLowerCase()} claims` : 'Submit your first expense claim'}
-                        </Text>
-                    </View>
+                    <EmptyState
+                        icon="file-text"
+                        title={filterStatus ? `No ${filterLabel.toLowerCase()} claims` : 'No expense claims'}
+                        message={filterStatus ? undefined : 'Claims you submit appear here.'}
+                    />
                 ) : (
-                    claims.map(renderClaimItem)
+                    <Group>{claims.map(renderClaimItem)}</Group>
                 )}
-                <View style={styles.bottomPadding} />
-            </ScrollView>
-        </View>
-    );
+            </Screen>
+        );
+    };
 
-    if (loading && !refreshing && claims.length === 0) {
-        return <Loading />;
-    }
+    // ------------------------------------------------------------------ claim detail
+    const renderDetail = (claim) => {
+        const isPending = claim.approval_status === 'Draft';
+        const items = claim.expenses || [];
+        return (
+            <>
+                <Group>
+                    <Row title="Status" right={<StatusText label={statusLabel(claim.approval_status)} />} />
+                    <Row title="Date" value={dateLabel(claim.posting_date)} />
+                    <Row title="Claimed" value={formatINR(claim.total_claimed_amount)} />
+                    {!isPending ? <Row title="Sanctioned" value={formatINR(claim.total_sanctioned_amount)} /> : null}
+                    {claim.expense_approver ? <Row title="Approver" value={claim.expense_approver} /> : null}
+                </Group>
+
+                {items.length > 0 ? (
+                    <Group title="Expenses">
+                        {items.map((exp, idx) => (
+                            <Row
+                                key={idx}
+                                title={exp.expense_type}
+                                subtitle={[dateLabel(exp.expense_date), exp.description].filter(Boolean).join('  ·  ')}
+                                meta={!isPending && exp.sanctioned_amount !== undefined && exp.sanctioned_amount !== exp.amount
+                                    ? <Tag label={`${formatINR(exp.sanctioned_amount)} sanctioned`} />
+                                    : null}
+                                value={formatINR(exp.amount)}
+                            />
+                        ))}
+                    </Group>
+                ) : null}
+
+                {claim.remark ? (
+                    <Group title="Remarks">
+                        <Text style={styles.note}>{claim.remark}</Text>
+                    </Group>
+                ) : null}
+            </>
+        );
+    };
 
     return (
-        <View style={styles.container}>
-            {/* Tab Navigation */}
-            <View style={styles.tabBar}>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'submit' && styles.activeTab]}
-                    onPress={() => setActiveTab('submit')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'submit' && styles.activeTabText]}>
-                        Submit Claim
-                    </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'history' && styles.activeTab]}
-                    onPress={() => setActiveTab('history')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'history' && styles.activeTabText]}>
-                        My Claims
-                    </Text>
-                </TouchableOpacity>
-            </View>
-
-            {/* Tab Content */}
+        <View style={styles.flex}>
             {activeTab === 'submit' ? renderSubmitTab() : renderHistoryTab()}
+
+            <Sheet
+                visible={Boolean(selected)}
+                title={detail ? formatINR(detail.total_claimed_amount) : undefined}
+                subtitle={detail?.name}
+                onClose={() => setSelected(null)}
+                footer={<Button title="Close" variant="secondary" onPress={() => setSelected(null)} style={styles.flex} />}
+            >
+                {detail ? renderDetail(detail) : null}
+            </Sheet>
+
+            <Sheet visible={Boolean(typePicker?.open)} title="Expense type" onClose={closeTypePicker}>
+                {expenseTypes.length === 0 ? (
+                    <EmptyState icon="list" title="No expense types" />
+                ) : (
+                    <Group>
+                        {expenseTypes.map((t) => (
+                            <Row
+                                key={t.name}
+                                title={t.name}
+                                right={<Check on={Boolean(typePicker) && expenses[typePicker.index]?.expense_type === t.name} />}
+                                chevron={false}
+                                onPress={() => pickType(t.name)}
+                            />
+                        ))}
+                    </Group>
+                )}
+            </Sheet>
         </View>
     );
 };
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.background,
-    },
-    tabBar: {
-        flexDirection: 'row',
-        backgroundColor: colors.white,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    tab: {
-        flex: 1,
-        paddingVertical: 16,
-        alignItems: 'center',
-        borderBottomWidth: 2,
-        borderBottomColor: 'transparent',
-    },
-    activeTab: {
-        borderBottomColor: colors.primary,
-    },
-    tabText: {
-        fontSize: 16,
-        color: colors.textSecondary,
-        fontWeight: '500',
-    },
-    activeTabText: {
-        color: colors.primary,
-        fontWeight: '600',
-    },
-    tabContent: {
-        flex: 1,
-    },
-    section: {
-        padding: 16,
-        backgroundColor: colors.white,
-        marginBottom: 12,
-    },
-    sectionTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 16,
-    },
-    expenseCard: {
-        backgroundColor: colors.cardBackground,
-        borderRadius: 8,
-        padding: 16,
-        marginBottom: 12,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    expenseHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    expenseNumber: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textPrimary,
-    },
-    removeButton: {
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        backgroundColor: colors.error,
-        borderRadius: 4,
-    },
-    removeButtonText: {
-        color: colors.white,
-        fontSize: 14,
-        fontWeight: '500',
-    },
-    label: {
-        fontSize: 14,
-        fontWeight: '500',
-        color: colors.textPrimary,
-        marginBottom: 8,
-        marginTop: 12,
-    },
-    pickerContainer: {
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: 8,
-        backgroundColor: colors.white,
-        marginBottom: 8,
-    },
-    picker: {
-        height: 50,
-    },
-    dateButton: {
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: 8,
-        padding: 12,
-        backgroundColor: colors.white,
-    },
-    dateText: {
-        fontSize: 16,
-        color: colors.textPrimary,
-    },
-    addButton: {
-        alignItems: 'center',
-        paddingVertical: 12,
-        backgroundColor: colors.cardBackground,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: colors.primary,
-        borderStyle: 'dashed',
-        marginTop: 8,
-    },
-    addButtonText: {
-        color: colors.primary,
-        fontSize: 16,
-        fontWeight: '500',
-    },
-    totalContainer: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginTop: 16,
-        paddingTop: 16,
-        borderTopWidth: 1,
-        borderTopColor: colors.border,
-    },
-    totalLabel: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: colors.textPrimary,
-    },
-    totalAmount: {
-        fontSize: 24,
-        fontWeight: '700',
-        color: colors.primary,
-    },
-    summaryContainer: {
-        flexDirection: 'row',
-        padding: 16,
-        backgroundColor: colors.white,
-        marginBottom: 12,
-    },
-    summaryCard: {
-        flex: 1,
-        alignItems: 'center',
-        paddingVertical: 12,
-    },
-    summaryValue: {
-        fontSize: 24,
-        fontWeight: '700',
-        color: colors.warning,
-        marginBottom: 4,
-    },
-    summaryLabel: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        fontWeight: '500',
-    },
-    totalClaimedContainer: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        padding: 16,
-        backgroundColor: colors.white,
-        marginBottom: 12,
-    },
-    totalClaimedLabel: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textPrimary,
-    },
-    totalClaimedAmount: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: colors.success,
-    },
-    filterContainer: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        backgroundColor: colors.white,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    filterPill: {
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderRadius: 20,
-        backgroundColor: colors.cardBackground,
-        marginRight: 8,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    filterPillActive: {
-        backgroundColor: colors.primary,
-        borderColor: colors.primary,
-    },
-    filterText: {
-        fontSize: 14,
-        color: colors.textSecondary,
-        fontWeight: '500',
-    },
-    filterTextActive: {
-        color: colors.white,
-        fontWeight: '600',
-    },
-    claimsList: {
-        flex: 1,
-        backgroundColor: colors.background,
-    },
-    claimCard: {
-        backgroundColor: colors.white,
-        marginHorizontal: 16,
-        marginTop: 12,
-        borderRadius: 8,
-        padding: 16,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    claimHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    claimId: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        flex: 1,
-    },
-    statusBadge: {
-        paddingHorizontal: 12,
-        paddingVertical: 4,
-        borderRadius: 12,
-    },
-    statusText: {
-        color: colors.white,
-        fontSize: 12,
-        fontWeight: '600',
-    },
-    claimDetails: {
-        marginTop: 8,
-    },
-    claimRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 8,
-    },
-    claimLabel: {
-        fontSize: 14,
-        color: colors.textSecondary,
-        fontWeight: '500',
-    },
-    claimValue: {
-        fontSize: 14,
-        color: colors.textPrimary,
-        fontWeight: '600',
-    },
-    expensesList: {
-        marginTop: 12,
-        paddingTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: colors.border,
-    },
-    expensesHeader: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 8,
-    },
-    expenseItem: {
-        backgroundColor: colors.cardBackground,
-        padding: 12,
-        borderRadius: 6,
-        marginBottom: 8,
-    },
-    expenseType: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.primary,
-        marginBottom: 4,
-    },
-    expenseDesc: {
-        fontSize: 13,
-        color: colors.textSecondary,
-        marginBottom: 6,
-    },
-    expenseAmountRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    expenseAmount: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
-    },
-    expenseDate: {
-        fontSize: 12,
-        color: colors.textSecondary,
-    },
-    emptyContainer: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 60,
-    },
-    emptyText: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textSecondary,
-        marginBottom: 8,
-    },
-    emptySubtext: {
-        fontSize: 14,
-        color: colors.textSecondary,
-    },
-    bottomPadding: {
-        height: 80,
-    },
+    flex: { flex: 1 },
+    stats: { marginBottom: space.md },
+    sectionTitle: { ...type.label, marginBottom: space.sm, paddingHorizontal: space.xs },
+    filter: { marginBottom: space.md },
+    note: { ...type.body, lineHeight: 21, paddingHorizontal: space.lg, paddingVertical: space.md },
+
+    formBody: { paddingHorizontal: space.lg, paddingTop: space.lg },
+    shortMultiline: { minHeight: 72 },
+    addButton: { marginTop: -space.sm, marginBottom: space.xl },
+    footerButtons: { flexDirection: 'row', gap: space.sm },
+    totalValue: { ...type.bodyStrong, fontWeight: '600', fontVariant: ['tabular-nums'] },
 });
 
 export default ExpenseClaimScreen;

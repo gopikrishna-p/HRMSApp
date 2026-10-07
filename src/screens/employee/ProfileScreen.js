@@ -1,28 +1,57 @@
+// src/screens/employee/ProfileScreen.js
+//
+// The signed-in employee's profile: contact, personal, employment, address and bank details.
+// Editing is gated by HR: the employee requests edit access, and once it is granted edits a
+// fixed set of fields on a full-screen form. The admin app opens this screen too (My Profile).
 import React, { useState, useEffect } from 'react';
 import {
     View,
-    ScrollView,
+    Text,
     StyleSheet,
-    TouchableOpacity,
-    RefreshControl,
-    ActivityIndicator,
-    Animated,
-    ImageBackground,
     Modal,
-    TextInput,
-    Alert,
+    SafeAreaView,
+    KeyboardAvoidingView,
+    Platform,
+    Image,
 } from 'react-native';
-import Icon from 'react-native-vector-icons/FontAwesome5';
-import MaterialIcon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { Text, useTheme, Avatar, Divider } from 'react-native-paper';
+import Toast from 'react-native-toast-message';
+import { toastConfig } from '../../config/toastConfig';
 import { useAuth } from '../../context/AuthContext';
-import AppHeader from '../../components/ui/AppHeader';
 import ApiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import showToast from '../../utils/Toast';
+import {
+    Screen,
+    Group,
+    Row,
+    Avatar,
+    StatusText,
+    Sheet,
+    Button,
+    IconButton,
+    TextField,
+    Loading,
+    color,
+    space,
+    type,
+    formatShortDate,
+} from '../../components/ds';
+
+const STATUS_TONE = { Active: 'success', Inactive: 'neutral', Suspended: 'warning', Left: 'danger' };
+
+// 'Engineering - DG' -> 'Engineering' (display only)
+const shortDept = (dept) => String(dept || '').replace(/ - [A-Z0-9]+$/, '');
+
+// 'YYYY-MM-DD' -> '12 Oct 2026' (local date, no timezone shift); other values pass through
+const displayDate = (value) => {
+    const [y, m, d] = String(value || '').slice(0, 10).split('-').map(Number);
+    return y && m && d ? formatShortDate(new Date(y, m - 1, d)) : value || null;
+};
+
+// last four characters only, e.g. '••••4321'
+const masked = (value) => (value ? '••••' + String(value).slice(-4) : null);
 
 const ProfileScreen = ({ navigation }) => {
-    const { employee, user, logout } = useAuth();
-    const { custom } = useTheme();
+    const { employee, logout } = useAuth();
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [profileData, setProfileData] = useState({
@@ -63,6 +92,7 @@ const ProfileScreen = ({ navigation }) => {
 
     useEffect(() => {
         fetchProfileData();
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
     }, []);
 
     const fetchProfileData = async () => {
@@ -74,25 +104,22 @@ const ProfileScreen = ({ navigation }) => {
                 return;
             }
 
-            console.log('Fetching profile for employee:', employee.name);
             const response = await ApiService.get(`/api/method/hrms.api.get_employee_profile?employee=${employee.name}`);
-            console.log('📊 API Response:', response);
-            
+
             if (!isApiSuccess(response)) {
                 const errorMsg = getApiErrorMessage(response, 'Failed to load profile data');
-                console.error('❌ Failed response:', errorMsg);
+                console.error('Profile fetch failed:', errorMsg);
                 showToast({
                     type: 'error',
-                    text1: 'Error',
+                    text1: 'Could not load your profile',
                     text2: errorMsg,
                 });
                 return;
             }
-            
+
             // Extract the actual profile data using helper
             const profileInfo = extractFrappeData(response, {});
-            console.log('Extracted profile info:', profileInfo);
-            
+
             // Check if response contains the new format with can_edit
             if (profileInfo.status === 'success' && profileInfo.data) {
                 const data = profileInfo.data;
@@ -109,14 +136,12 @@ const ProfileScreen = ({ navigation }) => {
             } else {
                 console.warn('Empty or invalid profile data');
             }
-            console.log('✅ Profile data set');
         } catch (error) {
-            console.error('❌ Profile fetch error:', error);
-            console.error('Error details:', error.message);
+            console.error('Profile fetch error:', error);
             showToast({
                 type: 'error',
-                text1: 'Error',
-                text2: error.message || 'Failed to fetch profile information',
+                text1: 'Could not load your profile',
+                text2: error.message || 'Check your connection and try again.',
             });
         } finally {
             setLoading(false);
@@ -137,7 +162,7 @@ const ProfileScreen = ({ navigation }) => {
 
     const handleRequestEditAccess = async () => {
         if (!requestReason.trim()) {
-            Alert.alert('Required', 'Please provide a reason for requesting edit access');
+            showToast({ type: 'warning', text1: 'Add a reason', text2: 'Tell HR what you need to change.' });
             return;
         }
 
@@ -151,18 +176,22 @@ const ProfileScreen = ({ navigation }) => {
             if (response.data?.message?.status === 'success') {
                 showToast({
                     type: 'success',
-                    text1: 'Request Submitted',
-                    text2: 'Admin will review your request',
+                    text1: 'Request sent',
+                    text2: 'HR will review it.',
                 });
                 setRequestModalVisible(false);
                 setRequestReason('');
                 setPendingRequest(true);
             } else {
-                Alert.alert('Error', response.data?.message?.message || 'Failed to submit request');
+                showToast({
+                    type: 'error',
+                    text1: 'Request not sent',
+                    text2: response.data?.message?.message || 'Please try again.',
+                });
             }
         } catch (error) {
             console.error('Error requesting edit access:', error);
-            Alert.alert('Error', 'Failed to submit request');
+            showToast({ type: 'error', text1: 'Request not sent', text2: 'Check your connection and try again.' });
         } finally {
             setSubmitting(false);
         }
@@ -179,17 +208,20 @@ const ProfileScreen = ({ navigation }) => {
             if (response.data?.message?.status === 'success') {
                 showToast({
                     type: 'success',
-                    text1: 'Success',
-                    text2: 'Profile updated successfully',
+                    text1: 'Profile updated',
                 });
                 setEditModalVisible(false);
                 fetchProfileData();
             } else {
-                Alert.alert('Error', response.data?.message?.message || 'Failed to update profile');
+                showToast({
+                    type: 'error',
+                    text1: 'Profile not saved',
+                    text2: response.data?.message?.message || 'Please try again.',
+                });
             }
         } catch (error) {
             console.error('Error updating profile:', error);
-            Alert.alert('Error', 'Failed to update profile');
+            showToast({ type: 'error', text1: 'Profile not saved', text2: 'Check your connection and try again.' });
         } finally {
             setSavingEdit(false);
         }
@@ -205,68 +237,59 @@ const ProfileScreen = ({ navigation }) => {
         await logout();
     };
 
-    if (loading) {
+    const openEdit = () => {
+        setEditForm({ ...profileData });
+        setEditModalVisible(true);
+    };
+
+    // Full-screen spinner for the first load only; refreshes keep the profile on screen.
+    if (loading && !profileData.name) {
         return (
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: custom.palette.background }}>
-                <ActivityIndicator size="large" color={custom.palette.primary} />
-                <Text style={{ marginTop: 12, color: custom.palette.textSecondary }}>Loading profile...</Text>
+            <View style={styles.container}>
+                <Loading />
             </View>
         );
     }
 
-    const getInitials = (name) => {
-        return (name || 'U').split(' ').map(n => n[0]).join('').toUpperCase();
-    };
+    const displayName = profileData.employee_name || 'Employee';
+    const role = [profileData.designation, shortDept(profileData.department)].filter(Boolean).join('  ·  ');
 
-    const renderRequestModal = () => (
-        <Modal
+    let editRow;
+    let editNote;
+    if (canEdit) {
+        editRow = <Row title="Edit profile" onPress={openEdit} />;
+    } else if (pendingRequest) {
+        editRow = <Row title="Edit access" right={<StatusText label="Requested" tone="warning" />} />;
+        editNote = 'HR is reviewing your request to edit your details.';
+    } else {
+        editRow = <Row title="Request edit access" onPress={() => setRequestModalVisible(true)} />;
+        editNote = 'Your details are locked. Ask HR for access to change them.';
+    }
+
+    const renderRequestSheet = () => (
+        <Sheet
             visible={requestModalVisible}
-            animationType="slide"
-            transparent
-            onRequestClose={() => setRequestModalVisible(false)}
+            title="Request edit access"
+            subtitle="HR reviews the request before you can edit your details."
+            onClose={() => !submitting && setRequestModalVisible(false)}
+            dismissable={!submitting}
+            footer={(
+                <>
+                    <Button title="Cancel" variant="secondary" onPress={() => setRequestModalVisible(false)} disabled={submitting} style={styles.flex} />
+                    <Button title="Send request" onPress={handleRequestEditAccess} loading={submitting} style={styles.flex} />
+                </>
+            )}
         >
-            <View style={styles.modalOverlay}>
-                <View style={styles.modalContent}>
-                    <View style={styles.modalHeader}>
-                        <Text style={styles.modalTitle}>Request Edit Access</Text>
-                        <TouchableOpacity onPress={() => setRequestModalVisible(false)}>
-                            <MaterialIcon name="close" size={24} color="#333" />
-                        </TouchableOpacity>
-                    </View>
-                    
-                    <Text style={styles.modalDescription}>
-                        Please provide a reason for requesting edit access to your profile. Admin will review your request.
-                    </Text>
-                    
-                    <Text style={styles.inputLabel}>Reason</Text>
-                    <TextInput
-                        style={styles.reasonInput}
-                        value={requestReason}
-                        onChangeText={setRequestReason}
-                        placeholder="E.g., Need to update my phone number and address"
-                        placeholderTextColor="#9CA3AF"
-                        multiline
-                        numberOfLines={4}
-                        textAlignVertical="top"
-                    />
-                    
-                    <TouchableOpacity
-                        style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
-                        onPress={handleRequestEditAccess}
-                        disabled={submitting}
-                    >
-                        {submitting ? (
-                            <ActivityIndicator size="small" color="#fff" />
-                        ) : (
-                            <>
-                                <MaterialIcon name="send" size={18} color="#fff" />
-                                <Text style={styles.submitButtonText}>Submit Request</Text>
-                            </>
-                        )}
-                    </TouchableOpacity>
-                </View>
-            </View>
-        </Modal>
+            <TextField
+                label="Reason"
+                value={requestReason}
+                onChangeText={setRequestReason}
+                placeholder="For example, a new phone number or address"
+                multiline
+                numberOfLines={4}
+                autoFocus
+            />
+        </Sheet>
     );
 
     const renderEditModal = () => (
@@ -275,658 +298,231 @@ const ProfileScreen = ({ navigation }) => {
             animationType="slide"
             onRequestClose={() => setEditModalVisible(false)}
         >
-            <View style={styles.editModalContainer}>
-                <View style={styles.editModalHeader}>
-                    <TouchableOpacity onPress={() => setEditModalVisible(false)}>
-                        <MaterialIcon name="close" size={24} color="#333" />
-                    </TouchableOpacity>
-                    <Text style={styles.editModalTitle}>Edit Profile</Text>
-                    <TouchableOpacity onPress={handleSaveProfile} disabled={savingEdit}>
-                        {savingEdit ? (
-                            <ActivityIndicator size="small" color={custom.palette.primary} />
-                        ) : (
-                            <MaterialIcon name="check" size={24} color={custom.palette.primary} />
-                        )}
-                    </TouchableOpacity>
-                </View>
+            <SafeAreaView style={styles.page}>
+                <PageHeader title="Edit profile" onClose={() => setEditModalVisible(false)} />
+                <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+                    <Screen footer={<Button title="Save changes" onPress={handleSaveProfile} loading={savingEdit} full />}>
+                        <FormGroup title="Basic information">
+                            <EditField label="First name" field="first_name" value={editForm.first_name} onChange={setEditForm} />
+                            <EditField label="Middle name" field="middle_name" value={editForm.middle_name} onChange={setEditForm} />
+                            <EditField label="Last name" field="last_name" value={editForm.last_name} onChange={setEditForm} />
+                            <EditField label="Marital status" field="marital_status" value={editForm.marital_status} onChange={setEditForm} />
+                            <EditField label="Blood group" field="blood_group" value={editForm.blood_group} onChange={setEditForm} />
+                        </FormGroup>
 
-                <ScrollView style={styles.editForm} showsVerticalScrollIndicator={false}>
-                    <Text style={styles.editSectionTitle}>Basic Information</Text>
-                    <EditField label="First Name" field="first_name" value={editForm.first_name} onChange={setEditForm} />
-                    <EditField label="Middle Name" field="middle_name" value={editForm.middle_name} onChange={setEditForm} />
-                    <EditField label="Last Name" field="last_name" value={editForm.last_name} onChange={setEditForm} />
-                    <EditField label="Marital Status" field="marital_status" value={editForm.marital_status} onChange={setEditForm} />
-                    <EditField label="Blood Group" field="blood_group" value={editForm.blood_group} onChange={setEditForm} />
+                        <FormGroup title="Contact">
+                            <EditField label="Phone" field="cell_number" value={editForm.cell_number} onChange={setEditForm} keyboardType="phone-pad" />
+                            <EditField label="Personal email" field="personal_email" value={editForm.personal_email} onChange={setEditForm} keyboardType="email-address" />
+                        </FormGroup>
 
-                    <Text style={styles.editSectionTitle}>Contact Information</Text>
-                    <EditField label="Phone Number" field="cell_number" value={editForm.cell_number} onChange={setEditForm} keyboardType="phone-pad" />
-                    <EditField label="Personal Email" field="personal_email" value={editForm.personal_email} onChange={setEditForm} keyboardType="email-address" />
+                        <FormGroup title="Address">
+                            <EditField label="Current address" field="current_address" value={editForm.current_address} onChange={setEditForm} multiline />
+                            <EditField label="Permanent address" field="permanent_address" value={editForm.permanent_address} onChange={setEditForm} multiline />
+                        </FormGroup>
 
-                    <Text style={styles.editSectionTitle}>Address</Text>
-                    <EditField label="Current Address" field="current_address" value={editForm.current_address} onChange={setEditForm} multiline />
-                    <EditField label="Permanent Address" field="permanent_address" value={editForm.permanent_address} onChange={setEditForm} multiline />
+                        <FormGroup title="Emergency contact">
+                            <EditField label="Contact person" field="person_to_be_contacted" value={editForm.person_to_be_contacted} onChange={setEditForm} />
+                            <EditField label="Phone" field="emergency_phone_number" value={editForm.emergency_phone_number} onChange={setEditForm} keyboardType="phone-pad" />
+                            <EditField label="Relation" field="relation" value={editForm.relation} onChange={setEditForm} />
+                        </FormGroup>
 
-                    <Text style={styles.editSectionTitle}>Emergency Contact</Text>
-                    <EditField label="Contact Person" field="person_to_be_contacted" value={editForm.person_to_be_contacted} onChange={setEditForm} />
-                    <EditField label="Emergency Phone" field="emergency_phone_number" value={editForm.emergency_phone_number} onChange={setEditForm} keyboardType="phone-pad" />
-                    <EditField label="Relation" field="relation" value={editForm.relation} onChange={setEditForm} />
+                        <FormGroup title="Bank details">
+                            <EditField label="Bank name" field="bank_name" value={editForm.bank_name} onChange={setEditForm} />
+                            <EditField label="Account number" field="bank_ac_no" value={editForm.bank_ac_no} onChange={setEditForm} />
+                            <EditField label="IBAN" field="iban" value={editForm.iban} onChange={setEditForm} />
+                        </FormGroup>
 
-                    <Text style={styles.editSectionTitle}>Bank Details</Text>
-                    <EditField label="Bank Name" field="bank_name" value={editForm.bank_name} onChange={setEditForm} />
-                    <EditField label="Account Number" field="bank_ac_no" value={editForm.bank_ac_no} onChange={setEditForm} />
-                    <EditField label="IBAN" field="iban" value={editForm.iban} onChange={setEditForm} />
-
-                    <Text style={styles.editSectionTitle}>Passport Details</Text>
-                    <EditField label="Passport Number" field="passport_number" value={editForm.passport_number} onChange={setEditForm} />
-                    <EditField label="Valid Until" field="valid_upto" value={editForm.valid_upto} onChange={setEditForm} />
-                    <EditField label="Issue Date" field="date_of_issue" value={editForm.date_of_issue} onChange={setEditForm} />
-                    <EditField label="Place of Issue" field="place_of_issue" value={editForm.place_of_issue} onChange={setEditForm} />
-
-                    <View style={{ height: 40 }} />
-                </ScrollView>
-            </View>
+                        <FormGroup title="Passport">
+                            <EditField label="Passport number" field="passport_number" value={editForm.passport_number} onChange={setEditForm} />
+                            <EditField label="Valid until" field="valid_upto" value={editForm.valid_upto} onChange={setEditForm} placeholder="YYYY-MM-DD" />
+                            <EditField label="Issue date" field="date_of_issue" value={editForm.date_of_issue} onChange={setEditForm} placeholder="YYYY-MM-DD" />
+                            <EditField label="Place of issue" field="place_of_issue" value={editForm.place_of_issue} onChange={setEditForm} />
+                        </FormGroup>
+                    </Screen>
+                </KeyboardAvoidingView>
+            </SafeAreaView>
+            {/* toasts from the root host would sit under this full-screen page */}
+            <Toast config={toastConfig} />
         </Modal>
     );
 
     return (
-        <View style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
-            
-
-            <ScrollView
-                contentContainerStyle={{ paddingBottom: 20 }}
-                showsVerticalScrollIndicator={false}
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-            >
-                {/* Hero Header with Gradient Background */}
-                <View style={{
-                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                    paddingVertical: 40,
-                    paddingHorizontal: 16,
-                    alignItems: 'center',
-                    backgroundColor: custom.palette.primary,
-                    borderBottomLeftRadius: 24,
-                    borderBottomRightRadius: 24,
-                    elevation: 3,
-                    shadowColor: '#000',
-                    shadowOpacity: 0.12,
-                    shadowRadius: 4,
-                    shadowOffset: { width: 0, height: 2 }
-                }}>
-                    <Avatar.Text
-                        size={100}
-                        label={getInitials(profileData.employee_name)}
-                        style={{
-                            backgroundColor: 'rgba(255,255,255,0.3)',
-                            marginBottom: 16,
-                            borderWidth: 3,
-                            borderColor: '#fff'
-                        }}
-                        labelStyle={{ fontSize: 40, fontWeight: '700' }}
-                    />
-                    <Text style={{ fontSize: 22, fontWeight: '700', color: '#fff', marginBottom: 4 }}>
-                        {profileData.employee_name || 'Employee'}
-                    </Text>
-                    <Text style={{ fontSize: 14, color: 'rgba(255,255,255,0.9)', marginBottom: 12 }}>
-                        {profileData.designation || 'N/A'}
-                    </Text>
-                    <View style={{
-                        backgroundColor: 'rgba(255,255,255,0.25)',
-                        paddingHorizontal: 12,
-                        paddingVertical: 6,
-                        borderRadius: 20,
-                    }}>
-                        <Text style={{ fontSize: 11, color: '#fff', fontWeight: '600' }}>
-                            ID: {profileData.name}
-                        </Text>
+        <View style={styles.container}>
+            <Screen refreshing={refreshing} onRefresh={onRefresh}>
+                <Group footer={editNote}>
+                    <View style={styles.header}>
+                        <PhotoAvatar key={profileData.image || 'initials'} name={displayName} image={profileData.image} size={56} />
+                        <View style={styles.flex}>
+                            <Text style={styles.name} numberOfLines={2}>{displayName}</Text>
+                            {role ? <Text style={styles.role}>{role}</Text> : null}
+                            {profileData.name ? <Text style={styles.id} selectable>{profileData.name}</Text> : null}
+                        </View>
                     </View>
+                    {editRow}
+                </Group>
 
-                    {/* Edit Permission Status & Actions */}
-                    <View style={styles.editActionContainer}>
-                        {canEdit ? (
-                            <TouchableOpacity
-                                style={styles.editButton}
-                                onPress={() => {
-                                    setEditForm({ ...profileData });
-                                    setEditModalVisible(true);
-                                }}
-                            >
-                                <MaterialIcon name="pencil" size={16} color="#fff" />
-                                <Text style={styles.editButtonText}>Edit Profile</Text>
-                            </TouchableOpacity>
-                        ) : pendingRequest ? (
-                            <View style={styles.pendingBadge}>
-                                <MaterialIcon name="clock-outline" size={16} color="#F59E0B" />
-                                <Text style={styles.pendingBadgeText}>Edit Request Pending</Text>
-                            </View>
-                        ) : (
-                            <TouchableOpacity
-                                style={styles.requestButton}
-                                onPress={() => setRequestModalVisible(true)}
-                            >
-                                <MaterialIcon name="lock-open-outline" size={16} color="#fff" />
-                                <Text style={styles.requestButtonText}>Request Edit Access</Text>
-                            </TouchableOpacity>
-                        )}
-                    </View>
-                </View>
+                <Group title="Contact">
+                    <InfoRow label="Company email" value={profileData.company_email} />
+                    <InfoRow label="Personal email" value={profileData.personal_email} />
+                    <InfoRow label="Mobile" value={profileData.cell_number} />
+                </Group>
 
-                {/* Quick Stats */}
-                <View style={{
-                    flexDirection: 'row',
-                    justifyContent: 'space-around',
-                    paddingHorizontal: 12,
-                    marginTop: -25,
-                    marginBottom: 24,
-                    zIndex: 10,
-                }}>
-                    <StatCard
-                        icon="sitemap"
-                        label="Department"
-                        value={profileData.department || 'N/A'}
-                        color="#3B82F6"
-                    />
-                    <StatCard
-                        icon="briefcase"
+                <Group title="Personal">
+                    <InfoRow label="Date of birth" value={displayDate(profileData.date_of_birth)} />
+                    <InfoRow label="Gender" value={profileData.gender} />
+                    <InfoRow label="Marital status" value={profileData.marital_status} />
+                    <InfoRow label="Blood group" value={profileData.blood_group} />
+                </Group>
+
+                <Group title="Employment">
+                    <InfoRow label="Company" value={profileData.company} />
+                    <InfoRow label="Department" value={shortDept(profileData.department)} />
+                    <InfoRow label="Designation" value={profileData.designation} />
+                    <InfoRow label="Date of joining" value={displayDate(profileData.date_of_joining)} />
+                    {/* employment type, grade and shift are not in the profile response; shown only when present */}
+                    {profileData.employment_type ? <InfoRow label="Employment type" value={profileData.employment_type} /> : null}
+                    {profileData.grade ? <InfoRow label="Grade" value={profileData.grade} /> : null}
+                    <InfoRow label="Reports to" value={profileData.reports_to} />
+                    {profileData.default_shift ? <InfoRow label="Shift" value={profileData.default_shift} /> : null}
+                    <InfoRow
                         label="Status"
-                        value={profileData.status || 'N/A'}
-                        color="#10B981"
+                        value={profileData.status ? <StatusText label={profileData.status} tone={STATUS_TONE[profileData.status] || 'neutral'} /> : null}
                     />
-                    <StatCard
-                        icon="calendar"
-                        label="Shift"
-                        value={profileData.default_shift || 'N/A'}
-                        color="#F59E0B"
-                    />
-                </View>
+                </Group>
 
-                {/* Contact Information */}
-                <InfoCard title="📞 Contact Information" icon="envelope">
-                    <InfoItem
-                        icon="envelope"
-                        label="Company Email"
-                        value={profileData.company_email || 'N/A'}
-                        color="#3B82F6"
-                    />
-                    <InfoItem
-                        icon="envelope-open"
-                        label="Personal Email"
-                        value={profileData.personal_email || 'N/A'}
-                        color="#8B5CF6"
-                    />
-                    <InfoItem
-                        icon="mobile-alt"
-                        label="Mobile Number"
-                        value={profileData.cell_number || 'N/A'}
-                        color="#EC4899"
-                    />
-                </InfoCard>
+                <Group title="Address">
+                    <InfoRow label="Current address" value={profileData.current_address} stacked />
+                    <InfoRow label="Permanent address" value={profileData.permanent_address} stacked />
+                </Group>
 
-                {/* Personal Information */}
-                <InfoCard title="👤 Personal Information" icon="user">
-                    <InfoItem
-                        icon="birthday-cake"
-                        label="Date of Birth"
-                        value={profileData.date_of_birth || 'N/A'}
-                        color="#F59E0B"
-                    />
-                    <InfoItem
-                        icon="user"
-                        label="Gender"
-                        value={profileData.gender || 'N/A'}
-                        color="#06B6D4"
-                    />
-                    <InfoItem
-                        icon="heart"
-                        label="Marital Status"
-                        value={profileData.marital_status || 'N/A'}
-                        color="#EF4444"
-                    />
-                    <InfoItem
-                        icon="tint"
-                        label="Blood Group"
-                        value={profileData.blood_group || 'N/A'}
-                        color="#DC2626"
-                    />
-                </InfoCard>
+                <Group title="Bank details">
+                    <InfoRow label="Bank name" value={profileData.bank_name} />
+                    <InfoRow label="Account number" value={masked(profileData.bank_ac_no)} />
+                    {profileData.pan_number ? <InfoRow label="PAN" value={masked(profileData.pan_number)} /> : null}
+                </Group>
 
-                {/* Employment Information */}
-                <InfoCard title="💼 Employment Information" icon="briefcase">
-                    <InfoItem
-                        icon="building"
-                        label="Company"
-                        value={profileData.company || 'N/A'}
-                        color="#10B981"
-                    />
-                    <InfoItem
-                        icon="id-card"
-                        label="Designation"
-                        value={profileData.designation || 'N/A'}
-                        color="#06B6D4"
-                    />
-                    <InfoItem
-                        icon="calendar-alt"
-                        label="Date of Joining"
-                        value={profileData.date_of_joining || 'N/A'}
-                        color="#8B5CF6"
-                    />
-                    <InfoItem
-                        icon="certificate"
-                        label="Employment Type"
-                        value={profileData.employment_type || 'N/A'}
-                        color="#F59E0B"
-                    />
-                    <InfoItem
-                        icon="star"
-                        label="Grade"
-                        value={profileData.grade || 'N/A'}
-                        color="#FBBF24"
-                    />
-                    <InfoItem
-                        icon="user-tie"
-                        label="Reports To"
-                        value={profileData.reports_to || 'N/A'}
-                        color="#3B82F6"
-                    />
-                </InfoCard>
+                <Button title="Log out" variant="danger" onPress={handleLogout} full />
+            </Screen>
 
-                {/* Address Information */}
-                <InfoCard title="📍 Address Information" icon="map-marker-alt">
-                    <InfoItemMultiLine
-                        icon="home"
-                        label="Current Address"
-                        value={profileData.current_address || 'N/A'}
-                        color="#06B6D4"
-                    />
-                    <InfoItemMultiLine
-                        icon="map"
-                        label="Permanent Address"
-                        value={profileData.permanent_address || 'N/A'}
-                        color="#8B5CF6"
-                    />
-                </InfoCard>
-
-                {/* Financial Information */}
-                <InfoCard title="💳 Financial Information" icon="credit-card">
-                    <InfoItem
-                        icon="money-check-alt"
-                        label="Bank Name"
-                        value={profileData.bank_name || 'N/A'}
-                        color="#059669"
-                    />
-                    <InfoItem
-                        icon="shield-alt"
-                        label="Bank Account"
-                        value={profileData.bank_ac_no ? '••••' + profileData.bank_ac_no.slice(-4) : 'N/A'}
-                        color="#DC2626"
-                    />
-                    <InfoItem
-                        icon="id-badge"
-                        label="PAN Number"
-                        value={profileData.pan_number ? '••••' + profileData.pan_number.slice(-4) : 'N/A'}
-                        color="#7C3AED"
-                    />
-                </InfoCard>
-
-                {/* Logout Button */}
-                <TouchableOpacity
-                    style={{
-                        backgroundColor: '#EF4444',
-                        marginHorizontal: 16,
-                        marginTop: 24,
-                        paddingVertical: 14,
-                        borderRadius: 12,
-                        alignItems: 'center',
-                        elevation: 2,
-                        shadowColor: '#EF4444',
-                        shadowOpacity: 0.3,
-                        shadowRadius: 8,
-                        shadowOffset: { width: 0, height: 4 }
-                    }}
-                    onPress={handleLogout}
-                    activeOpacity={0.7}
-                >
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <Icon name="sign-out-alt" size={16} color="white" />
-                        <Text style={{ color: 'white', fontWeight: '700', marginLeft: 10, fontSize: 15 }}>
-                            Logout
-                        </Text>
-                    </View>
-                </TouchableOpacity>
-            </ScrollView>
-
-            {/* Modals */}
-            {renderRequestModal()}
+            {renderRequestSheet()}
             {renderEditModal()}
         </View>
     );
 };
 
-// Stat Card Component for Quick Overview
-const StatCard = ({ icon, label, value, color }) => {
-    return (
-        <View style={{
-            flex: 1,
-            backgroundColor: '#fff',
-            marginHorizontal: 8,
-            paddingVertical: 12,
-            paddingHorizontal: 10,
-            borderRadius: 14,
-            alignItems: 'center',
-            elevation: 2,
-            shadowColor: '#000',
-            shadowOpacity: 0.08,
-            shadowRadius: 3,
-            shadowOffset: { width: 0, height: 1 }
-        }}>
-            <View style={{
-                width: 40,
-                height: 40,
-                borderRadius: 10,
-                backgroundColor: `${color}15`,
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginBottom: 8,
-            }}>
-                <Icon name={icon} size={18} color={color} />
-            </View>
-            <Text style={{ fontSize: 10, color: '#6B7280', fontWeight: '500', marginBottom: 4 }}>
-                {label}
-            </Text>
-            <Text style={{ fontSize: 12, color: '#111827', fontWeight: '700', textAlign: 'center' }}>
-                {value}
-            </Text>
-        </View>
-    );
+// ------------------------------------------------------------------ local building blocks
+
+// Employee photo when there is one, initials otherwise (also when the photo fails to load).
+const PhotoAvatar = ({ name, image, size = 36 }) => {
+    const [failed, setFailed] = useState(false);
+    if (!image || failed) {
+        return <Avatar name={name} size={size} />;
+    }
+    const dimensions = { width: size, height: size, borderRadius: size / 2 };
+    // the server returns site-relative paths such as /files/photo.jpg
+    const uri = image.startsWith('/') ? `${ApiService.getBaseURL()}${image}` : image;
+    return <Image source={{ uri }} onError={() => setFailed(true)} style={[styles.photo, dimensions]} />;
 };
 
-// Info Card Container
-const InfoCard = ({ title, icon, children }) => {
-    return (
-        <View style={{
-            backgroundColor: '#fff',
-            marginHorizontal: 16,
-            marginBottom: 16,
-            borderRadius: 14,
-            paddingTop: 14,
-            overflow: 'hidden',
-            elevation: 1,
-            shadowColor: '#000',
-            shadowOpacity: 0.06,
-            shadowRadius: 3,
-            shadowOffset: { width: 0, height: 1 }
-        }}>
-            <View style={{
-                paddingHorizontal: 16,
-                paddingBottom: 12,
-                borderBottomWidth: 1,
-                borderBottomColor: '#F3F4F6',
-            }}>
-                <Text style={{ fontSize: 15, fontWeight: '700', color: '#111827' }}>
-                    {title}
-                </Text>
-            </View>
-            {children}
+// Header bar for the full-screen edit form (matches the stack header).
+const PageHeader = ({ title, onClose }) => (
+    <View style={styles.pageHeader}>
+        <View style={styles.pageHeaderSide}>
+            <IconButton name="x" onPress={onClose} color={color.text} size={22} label="Close" />
         </View>
-    );
-};
-
-// Info Item for single line values
-const InfoItem = ({ icon, label, value, color }) => {
-    return (
-        <View style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingVertical: 12,
-            paddingHorizontal: 16,
-            borderBottomWidth: 1,
-            borderBottomColor: '#F9FAFB',
-        }}>
-            <View style={{
-                width: 40,
-                height: 40,
-                borderRadius: 10,
-                backgroundColor: `${color}15`,
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginRight: 12,
-            }}>
-                <Icon name={icon} size={16} color={color} />
-            </View>
-            <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 11, color: '#9CA3AF', fontWeight: '500', marginBottom: 2 }}>
-                    {label}
-                </Text>
-                <Text style={{ fontSize: 13, color: '#111827', fontWeight: '600' }}>
-                    {value}
-                </Text>
-            </View>
-        </View>
-    );
-};
-
-// Info Item for multi-line values
-const InfoItemMultiLine = ({ icon, label, value, color }) => {
-    return (
-        <View style={{
-            flexDirection: 'row',
-            alignItems: 'flex-start',
-            paddingVertical: 12,
-            paddingHorizontal: 16,
-            borderBottomWidth: 1,
-            borderBottomColor: '#F9FAFB',
-        }}>
-            <View style={{
-                width: 40,
-                height: 40,
-                borderRadius: 10,
-                backgroundColor: `${color}15`,
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginRight: 12,
-                marginTop: 2,
-            }}>
-                <Icon name={icon} size={16} color={color} />
-            </View>
-            <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 11, color: '#9CA3AF', fontWeight: '500', marginBottom: 4 }}>
-                    {label}
-                </Text>
-                <Text style={{ fontSize: 13, color: '#111827', fontWeight: '500', lineHeight: 20 }}>
-                    {value}
-                </Text>
-            </View>
-        </View>
-    );
-};
-
-// Edit Field Component
-const EditField = ({ label, field, value, onChange, keyboardType = 'default', multiline = false }) => (
-    <View style={styles.editFieldContainer}>
-        <Text style={styles.editFieldLabel}>{label}</Text>
-        <TextInput
-            style={[styles.editFieldInput, multiline && styles.editFieldMultiline]}
-            value={value || ''}
-            onChangeText={(text) => onChange(prev => ({ ...prev, [field]: text }))}
-            placeholder={`Enter ${label.toLowerCase()}`}
-            placeholderTextColor="#9CA3AF"
-            keyboardType={keyboardType}
-            multiline={multiline}
-            numberOfLines={multiline ? 3 : 1}
-        />
+        <Text style={styles.pageTitle} numberOfLines={1}>{title}</Text>
+        <View style={styles.pageHeaderSide} />
     </View>
 );
 
+// Label / value row. `stacked` puts long values (addresses) under the label.
+const InfoRow = ({ label, value, stacked }) => {
+    const empty = value === null || value === undefined || value === '';
+    let content;
+    if (empty) {
+        content = <Text style={[styles.infoValue, stacked && styles.infoValueStacked, styles.infoEmpty]}>—</Text>;
+    } else if (typeof value === 'string' || typeof value === 'number') {
+        content = <Text style={[styles.infoValue, stacked && styles.infoValueStacked]} selectable>{value}</Text>;
+    } else {
+        content = <View style={styles.infoNode}>{value}</View>;
+    }
+    return (
+        <View style={[styles.info, stacked && styles.infoStacked]}>
+            <Text style={[styles.infoLabel, stacked && styles.infoLabelStacked]}>{label}</Text>
+            {content}
+        </View>
+    );
+};
+
+// A titled white group holding form fields.
+const FormGroup = ({ title, children }) => (
+    <Group title={title}>
+        <View style={styles.panel}>{children}</View>
+    </Group>
+);
+
+// Edit Field Component
+const EditField = ({ label, field, value, onChange, keyboardType = 'default', multiline = false, placeholder }) => (
+    <TextField
+        label={label}
+        value={value || ''}
+        onChangeText={(text) => onChange(prev => ({ ...prev, [field]: text }))}
+        placeholder={placeholder}
+        keyboardType={keyboardType}
+        autoCapitalize={keyboardType === 'email-address' ? 'none' : undefined}
+        multiline={multiline}
+        numberOfLines={multiline ? 3 : 1}
+    />
+);
+
 const styles = StyleSheet.create({
-    // Edit Action Buttons
-    editActionContainer: {
-        marginTop: 16,
-    },
-    editButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#10B981',
-        paddingVertical: 10,
-        paddingHorizontal: 20,
-        borderRadius: 20,
-    },
-    editButtonText: {
-        color: '#fff',
-        fontWeight: '600',
-        marginLeft: 8,
-        fontSize: 14,
-    },
-    requestButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: 'rgba(255,255,255,0.25)',
-        paddingVertical: 10,
-        paddingHorizontal: 20,
-        borderRadius: 20,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.5)',
-    },
-    requestButtonText: {
-        color: '#fff',
-        fontWeight: '600',
-        marginLeft: 8,
-        fontSize: 14,
-    },
-    pendingBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#FEF3C7',
-        paddingVertical: 10,
-        paddingHorizontal: 20,
-        borderRadius: 20,
-    },
-    pendingBadgeText: {
-        color: '#D97706',
-        fontWeight: '600',
-        marginLeft: 8,
-        fontSize: 14,
-    },
+    flex: { flex: 1 },
+    container: { flex: 1, backgroundColor: color.bg },
 
-    // Modal Styles
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 20,
-    },
-    modalContent: {
-        backgroundColor: '#fff',
-        borderRadius: 16,
-        padding: 20,
-        width: '100%',
-        maxWidth: 400,
-    },
-    modalHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 16,
-    },
-    modalTitle: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: '#111827',
-    },
-    modalDescription: {
-        fontSize: 14,
-        color: '#6B7280',
-        marginBottom: 20,
-        lineHeight: 20,
-    },
-    inputLabel: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: '#374151',
-        marginBottom: 8,
-    },
-    reasonInput: {
-        backgroundColor: '#F9FAFB',
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-        borderRadius: 10,
-        padding: 12,
-        fontSize: 14,
-        color: '#111827',
-        minHeight: 100,
-        textAlignVertical: 'top',
-    },
-    submitButton: {
+    // Header group
+    header: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#3B82F6',
-        paddingVertical: 14,
-        borderRadius: 10,
-        marginTop: 20,
+        paddingHorizontal: space.lg,
+        paddingVertical: space.lg,
+        backgroundColor: color.surface,
     },
-    submitButtonDisabled: {
-        opacity: 0.7,
-    },
-    submitButtonText: {
-        color: '#fff',
-        fontWeight: '600',
-        marginLeft: 8,
-        fontSize: 15,
-    },
+    photo: { marginRight: space.md, backgroundColor: color.neutralSoft },
+    name: { ...type.title },
+    role: { ...type.secondary, marginTop: 2 },
+    id: { ...type.caption, marginTop: 2, fontVariant: ['tabular-nums'] },
 
-    // Edit Modal Styles
-    editModalContainer: {
-        flex: 1,
-        backgroundColor: '#F8FAFC',
-    },
-    editModalHeader: {
+    // Label / value rows
+    info: {
         flexDirection: 'row',
-        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        minHeight: 48,
+        paddingHorizontal: space.lg,
+        paddingVertical: 13,
+        backgroundColor: color.surface,
+    },
+    infoStacked: { flexDirection: 'column', alignItems: 'stretch' },
+    infoLabel: { ...type.body, flexShrink: 0, maxWidth: '45%', marginRight: space.lg },
+    infoLabelStacked: { ...type.secondary, maxWidth: '100%', marginRight: 0, marginBottom: 2 },
+    infoValue: { flex: 1, fontSize: 15, lineHeight: 20, color: color.textSecondary, textAlign: 'right' },
+    infoValueStacked: { flex: 0, color: color.text, textAlign: 'left' },
+    infoEmpty: { color: color.textTertiary },
+    infoNode: { flex: 1, alignItems: 'flex-end', justifyContent: 'center', minHeight: 20 },
+
+    // Full-screen edit form
+    page: { flex: 1, backgroundColor: color.surface },
+    pageHeader: {
+        flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 14,
-        borderBottomWidth: 1,
-        borderBottomColor: '#E5E7EB',
-        backgroundColor: '#fff',
+        minHeight: 56,
+        paddingHorizontal: space.xs,
+        backgroundColor: color.surface,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: color.border,
     },
-    editModalTitle: {
-        fontSize: 17,
-        fontWeight: '600',
-        color: '#111827',
-    },
-    editForm: {
-        flex: 1,
-        padding: 16,
-    },
-    editSectionTitle: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: '#111827',
-        marginBottom: 12,
-        marginTop: 16,
-    },
-    editFieldContainer: {
-        marginBottom: 14,
-    },
-    editFieldLabel: {
-        fontSize: 13,
-        color: '#6B7280',
-        marginBottom: 6,
-    },
-    editFieldInput: {
-        backgroundColor: '#fff',
-        borderRadius: 10,
-        paddingHorizontal: 12,
-        paddingVertical: 12,
-        fontSize: 14,
-        color: '#111827',
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-    },
-    editFieldMultiline: {
-        minHeight: 80,
-        textAlignVertical: 'top',
-    },
+    pageHeaderSide: { width: 56, alignItems: 'flex-start', justifyContent: 'center' },
+    pageTitle: { ...type.title, flex: 1, textAlign: 'center' },
+    panel: { paddingHorizontal: space.lg, paddingTop: space.lg },
 });
 
 export default ProfileScreen;

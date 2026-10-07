@@ -53,9 +53,8 @@ const AdminSelfServiceScreen = ({ navigation }) => {
             </Group>
 
             <Group title="Work" footer="To apply for another employee, use Apply on behalf in the matching approval screen.">
-                <Row icon="check-square" title="Tasks" onPress={go('MyTasks')} />
-                <Row icon="folder" title="Projects" onPress={go('MyProjects')} />
-                <Row icon="watch" title="Work logs" onPress={go('MyLogs')} />
+                {/* tasks and work logs belong to a project, so they open from the project */}
+                <Row icon="folder" title="My projects" subtitle="Tasks and work logs" onPress={go('MyProjects')} />
             </Group>
         </Screen>
     );

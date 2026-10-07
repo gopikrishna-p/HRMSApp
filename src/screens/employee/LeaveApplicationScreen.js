@@ -1,30 +1,94 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-    View,
-    Text,
-    StyleSheet,
-    ScrollView,
-    TouchableOpacity,
-    Alert,
-    RefreshControl,
-    Platform,
-    Modal,
-} from 'react-native';
+// src/screens/employee/LeaveApplicationScreen.js
+//
+// The employee's leave: balance per leave type, their applications (filter by status, cancel an
+// open one) and the form to apply. The server counts working days, holidays and half days and
+// refuses an application when the balance is not enough.
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Alert, Platform, Switch } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { Picker } from '@react-native-picker/picker';
-import { colors } from '../../theme/colors';
-import Input from '../../components/common/Input';
-import Button from '../../components/common/Button';
-import Loading from '../../components/common/Loading';
 import apiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
 import { formatLocalDate, clampToDateRange } from '../../utils/dateFormat';
+import showToast from '../../utils/Toast';
+import {
+    Screen,
+    Group,
+    Row,
+    Segmented,
+    Sheet,
+    Button,
+    TextField,
+    SelectField,
+    StatusText,
+    EmptyState,
+    Loading,
+    Icon,
+    color,
+    space,
+    type,
+    formatShortDate,
+} from '../../components/ds';
+
+// ------------------------------------------------------------------ helpers
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// 'YYYY-MM-DD' as a local date (no timezone shift)
+const parseYMD = (value) => {
+    const [y, m, d] = String(value || '').slice(0, 10).split('-').map(Number);
+    return y ? new Date(y, m - 1, d) : null;
+};
+
+// "5 Oct", with the year when it is not this year
+const shortDay = (d, withYear) => `${d.getDate()} ${MONTHS[d.getMonth()]}${withYear ? ` ${d.getFullYear()}` : ''}`;
+
+// "Mon, 5 Oct" for one day, "5 Oct – 7 Oct" for a range
+const rangeLabel = (from, to) => {
+    const a = parseYMD(from);
+    const b = parseYMD(to) || a;
+    if (!a) {
+        return '–';
+    }
+    const thisYear = new Date().getFullYear();
+    const withYear = a.getFullYear() !== thisYear || b.getFullYear() !== thisYear;
+    if (a.getTime() === b.getTime()) {
+        return `${WEEKDAYS[a.getDay()]}, ${shortDay(a, withYear)}`;
+    }
+    return `${shortDay(a, withYear)} – ${shortDay(b, withYear)}`;
+};
+
+const dayLabel = (value) => {
+    const d = parseYMD(value);
+    return d ? `${WEEKDAYS[d.getDay()]}, ${formatShortDate(d)}` : '–';
+};
+
+// 1.5 -> "1.5", 2 -> "2"
+const num = (value) => String(Math.round((Number(value) || 0) * 100) / 100);
+const daysText = (value) => {
+    const n = Math.round((Number(value) || 0) * 100) / 100;
+    return `${n} ${n === 1 ? 'day' : 'days'}`;
+};
+
+// ERPNext keeps undecided applications as "Open"; employees read that as pending.
+const statusLabel = (status) => (status === 'Open' ? 'Pending' : status || '–');
+
+const STATUS_FILTERS = [
+    { value: 'all', label: 'All' },
+    { value: 'Open', label: 'Pending' },
+    { value: 'Approved', label: 'Approved' },
+    { value: 'Rejected', label: 'Rejected' },
+    { value: 'Cancelled', label: 'Cancelled' },
+];
+
+const SWITCH_TRACK = { false: '#D0D5DD', true: color.accent };
+
+const Check = ({ on }) => (on ? <Icon name="check" size={18} color={color.accent} /> : null);
 
 const LeaveApplicationScreen = ({ navigation }) => {
     // State for form
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true); // data is fetched on mount
     const [refreshing, setRefreshing] = useState(false);
     const [employeeId, setEmployeeId] = useState('');
-    
+
     // Leave application form
     const [selectedLeaveType, setSelectedLeaveType] = useState('');
     const [fromDate, setFromDate] = useState(new Date());
@@ -33,26 +97,32 @@ const LeaveApplicationScreen = ({ navigation }) => {
     const [halfDayDate, setHalfDayDate] = useState(new Date());
     const [reason, setReason] = useState('');
     const [selectedApprover, setSelectedApprover] = useState('');
-    
+
     // Date picker controls
     const [showFromDatePicker, setShowFromDatePicker] = useState(false);
     const [showToDatePicker, setShowToDatePicker] = useState(false);
     const [showHalfDayPicker, setShowHalfDayPicker] = useState(false);
-    
+
     // Leave data
     const [leaveTypes, setLeaveTypes] = useState([]);
     const [balances, setBalances] = useState({});
     const [approvers, setApprovers] = useState([]);
     const [myLeaves, setMyLeaves] = useState([]);
-    
-    // Tab state
-    const [activeTab, setActiveTab] = useState('apply'); // 'apply' or 'history'
-    
+
+    // 'history' = the list; 'apply' = the application form sheet is open
+    const [activeTab, setActiveTab] = useState('history');
+
     // Filter state for history
     const [historyStatusFilter, setHistoryStatusFilter] = useState('all');
 
+    // Presentation only: inline option list open in the form, application open in the detail sheet
+    const [picker, setPicker] = useState(null); // 'type' | 'approver'
+    const [selected, setSelected] = useState(null);
+    const lastSelected = useRef(null); // keeps the detail sheet filled while it slides out
+
     useEffect(() => {
         loadInitialData();
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- employee, leave types, balances and approvers are loaded once on mount
     }, []);
 
     // Keep the half-day date inside the chosen range; the server rejects it otherwise.
@@ -72,7 +142,7 @@ const LeaveApplicationScreen = ({ navigation }) => {
             if (empData && empData.name) {
                 const empId = empData.name;
                 setEmployeeId(empId);
-                
+
                 // Load leave types, balances, and approvers in parallel
                 await Promise.all([
                     loadLeaveTypes(empId),
@@ -82,11 +152,11 @@ const LeaveApplicationScreen = ({ navigation }) => {
                 ]);
             } else {
                 console.error('Failed to get employee info:', empResponse);
-                Alert.alert('Error', 'Failed to load employee information');
+                showToast({ type: 'error', text1: 'Could not load your employee record', text2: 'Pull down to try again' });
             }
         } catch (error) {
             console.error('Error loading initial data:', error);
-            Alert.alert('Error', 'Failed to load leave application data');
+            showToast({ type: 'error', text1: 'Could not load leave data', text2: error.message });
         } finally {
             setLoading(false);
         }
@@ -122,8 +192,8 @@ const LeaveApplicationScreen = ({ navigation }) => {
         try {
             const response = await apiService.getLeaveApprovalDetails(empId);
             const approverData = extractFrappeData(response, {});
-            const approversList = Array.isArray(approverData.department_approvers) 
-                ? approverData.department_approvers 
+            const approversList = Array.isArray(approverData.department_approvers)
+                ? approverData.department_approvers
                 : [];
             setApprovers(approversList);
             if (approverData.leave_approver) {
@@ -148,7 +218,7 @@ const LeaveApplicationScreen = ({ navigation }) => {
         }
     };
 
-    const onRefresh = useCallback(async () => {
+    const onRefresh = async () => {
         setRefreshing(true);
         try {
             if (employeeId) {
@@ -162,25 +232,22 @@ const LeaveApplicationScreen = ({ navigation }) => {
         } finally {
             setRefreshing(false);
         }
-    }, [employeeId]);
-
-    // formatLocalDate now lives in src/utils/dateFormat.js (imported above) —
-    // was duplicated identically in 4 screens before consolidation.
+    };
 
     const handleSubmitLeave = async () => {
         // Validation
         if (!selectedLeaveType) {
-            Alert.alert('Validation Error', 'Please select a leave type');
+            showToast({ type: 'error', text1: 'Select a leave type' });
             return;
         }
 
         if (formatLocalDate(fromDate) > formatLocalDate(toDate)) {
-            Alert.alert('Validation Error', 'From date cannot be after To date');
+            showToast({ type: 'error', text1: 'From date is after To date' });
             return;
         }
 
         if (!reason.trim()) {
-            Alert.alert('Validation Error', 'Please provide a reason for leave');
+            showToast({ type: 'error', text1: 'Add a reason for your leave' });
             return;
         }
 
@@ -203,36 +270,31 @@ const LeaveApplicationScreen = ({ navigation }) => {
 
             if (isApiSuccess(response)) {
                 const result = extractFrappeData(response, {});
-                const days = result.total_leave_days ?? 'N/A';
-                const balance = result.leave_balance ?? 'N/A';
-                const successMsg = `Leave submitted successfully!\n${days} day(s) requested.\nRemaining balance: ${balance}`;
-                Alert.alert(
-                    'Success',
-                    successMsg,
-                    [
-                        {
-                            text: 'OK',
-                            onPress: () => {
-                                // Reset form
-                                setReason('');
-                                setIsHalfDay(false);
-                                setFromDate(new Date());
-                                setToDate(new Date());
-                                // Refresh data
-                                loadLeaveBalances(employeeId);
-                                loadMyLeaves(employeeId);
-                                // Switch to history tab
-                                setActiveTab('history');
-                            }
-                        }
-                    ]
-                );
+                // The refreshed Balance group shows what is left; the server's leave_balance
+                // in this response is not reliable (see report), so it is not shown here.
+                const days = result.total_leave_days;
+                showToast({
+                    type: 'success',
+                    text1: 'Leave applied',
+                    text2: days !== undefined && days !== null ? `${daysText(days)} requested` : undefined,
+                });
+                // Reset form
+                setReason('');
+                setIsHalfDay(false);
+                setFromDate(new Date());
+                setToDate(new Date());
+                // Refresh data
+                loadLeaveBalances(employeeId);
+                loadMyLeaves(employeeId);
+                // Back to the list (closes the form sheet)
+                setActiveTab('history');
+                setPicker(null);
             } else {
-                Alert.alert('Error', getApiErrorMessage(response, 'Failed to submit leave application'));
+                showToast({ type: 'error', text1: 'Not submitted', text2: getApiErrorMessage(response, 'Failed to submit leave application') });
             }
         } catch (error) {
             console.error('Error submitting leave:', error);
-            Alert.alert('Error', error.message || 'Failed to submit leave application');
+            showToast({ type: 'error', text1: 'Not submitted', text2: error.message || 'Failed to submit leave application' });
         } finally {
             setLoading(false);
         }
@@ -240,12 +302,12 @@ const LeaveApplicationScreen = ({ navigation }) => {
 
     const handleCancelLeave = async (applicationId) => {
         Alert.alert(
-            'Cancel Leave',
-            'Are you sure you want to cancel this leave application?',
+            'Cancel leave',
+            'Cancel this leave application?',
             [
-                { text: 'No', style: 'cancel' },
+                { text: 'Keep', style: 'cancel' },
                 {
-                    text: 'Yes',
+                    text: 'Cancel leave',
                     style: 'destructive',
                     onPress: async () => {
                         setLoading(true);
@@ -256,15 +318,16 @@ const LeaveApplicationScreen = ({ navigation }) => {
                             );
 
                             if (response.success) {
-                                Alert.alert('Success', 'Leave application cancelled');
+                                showToast({ type: 'success', text1: 'Leave cancelled' });
+                                setSelected(null);
                                 loadLeaveBalances(employeeId);
                                 loadMyLeaves(employeeId);
                             } else {
-                                Alert.alert('Error', response.message || 'Failed to cancel leave');
+                                showToast({ type: 'error', text1: 'Not cancelled', text2: response.message || 'Failed to cancel leave' });
                             }
                         } catch (error) {
                             console.error('Error cancelling leave:', error);
-                            Alert.alert('Error', 'Failed to cancel leave');
+                            showToast({ type: 'error', text1: 'Not cancelled', text2: 'Failed to cancel leave' });
                         } finally {
                             setLoading(false);
                         }
@@ -274,130 +337,208 @@ const LeaveApplicationScreen = ({ navigation }) => {
         );
     };
 
-    const renderBalanceCard = () => {
-        if (!selectedLeaveType || !balances[selectedLeaveType]) {
-            return null;
-        }
-
-        const balance = balances[selectedLeaveType];
-        return (
-            <View style={styles.balanceCard}>
-                <Text style={styles.balanceTitle}>{selectedLeaveType} Balance</Text>
-                <View style={styles.balanceRow}>
-                    <View style={styles.balanceItem}>
-                        <Text style={styles.balanceValue}>{balance.allocated_leaves || 0}</Text>
-                        <Text style={styles.balanceLabel}>Allocated</Text>
-                    </View>
-                    <View style={styles.balanceItem}>
-                        <Text style={[styles.balanceValue, styles.balanceRemaining]}>
-                            {balance.balance_leaves || 0}
-                        </Text>
-                        <Text style={styles.balanceLabel}>Remaining</Text>
-                    </View>
-                    <View style={styles.balanceItem}>
-                        <Text style={styles.balanceValue}>
-                            {(balance.allocated_leaves || 0) - (balance.balance_leaves || 0)}
-                        </Text>
-                        <Text style={styles.balanceLabel}>Used</Text>
-                    </View>
-                </View>
-            </View>
-        );
+    // ------------------------------------------------------------------ presentation helpers
+    const openForm = () => {
+        setPicker(null);
+        setActiveTab('apply');
     };
 
-    const renderLeaveApplicationForm = () => (
-        <ScrollView
-            style={styles.formContainer}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        >
-            {/* Leave Type Picker */}
-            <View style={styles.inputGroup}>
-                <Text style={styles.label}>Leave Type *</Text>
-                <View style={styles.pickerContainer}>
-                    <Picker
-                        selectedValue={selectedLeaveType}
-                        onValueChange={(value) => setSelectedLeaveType(value)}
-                        style={styles.picker}
-                    >
-                        <Picker.Item label="Select Leave Type" value="" />
-                        {leaveTypes.map((type) => (
-                            <Picker.Item key={type} label={type} value={type} />
-                        ))}
-                    </Picker>
-                </View>
-            </View>
+    const closeForm = () => {
+        if (!loading) {
+            setActiveTab('history');
+            setPicker(null);
+        }
+    };
 
-            {renderBalanceCard()}
+    const closeDetail = () => {
+        if (!loading) {
+            setSelected(null);
+        }
+    };
 
-            {/* From Date */}
-            <View style={styles.inputGroup}>
-                <Text style={styles.label}>From Date *</Text>
-                <TouchableOpacity
-                    style={styles.dateButton}
+    const togglePicker = (which) => setPicker((open) => (open === which ? null : which));
+
+    if (selected) {
+        lastSelected.current = selected;
+    }
+    const detail = selected || lastSelected.current;
+
+    const balanceTypes = Object.keys(balances).filter((t) => balances[t]);
+    const selectedBalance = selectedLeaveType ? balances[selectedLeaveType] : null;
+    const balanceHint = selectedBalance
+        ? `${num(selectedBalance.balance_leaves)} of ${daysText(selectedBalance.allocated_leaves)} left`
+        : undefined;
+    const approverLabel = approvers.find((a) => a.name === selectedApprover)?.full_name || selectedApprover || 'Default approver';
+
+    const filteredLeaves = myLeaves.filter(leave => {
+        if (historyStatusFilter === 'all') {
+            return true;
+        }
+        return leave.status === historyStatusFilter;
+    });
+    const filterLabel = STATUS_FILTERS.find((f) => f.value === historyStatusFilter)?.label || '';
+
+    // ------------------------------------------------------------------ list
+    const renderList = () => (
+        <>
+            {balanceTypes.length > 0 ? (
+                <Group title="Balance">
+                    {balanceTypes.map((leaveType) => {
+                        const b = balances[leaveType];
+                        const allocated = Number(b.allocated_leaves) || 0;
+                        const remaining = Number(b.balance_leaves) || 0;
+                        return (
+                            <Row
+                                key={leaveType}
+                                title={leaveType}
+                                subtitle={`${num(allocated - remaining)} used of ${daysText(allocated)}`}
+                                value={`${daysText(remaining)} left`}
+                            />
+                        );
+                    })}
+                </Group>
+            ) : null}
+
+            <Text style={styles.sectionTitle}>Applications</Text>
+            <Segmented
+                value={historyStatusFilter}
+                onChange={setHistoryStatusFilter}
+                options={STATUS_FILTERS}
+                style={styles.filter}
+            />
+
+            {filteredLeaves.length === 0 ? (
+                <EmptyState
+                    icon="calendar"
+                    title={historyStatusFilter === 'all' ? 'No leave applications' : `No ${filterLabel.toLowerCase()} applications`}
+                    message={historyStatusFilter === 'all' ? 'Applications you submit appear here.' : undefined}
+                />
+            ) : (
+                <Group>
+                    {filteredLeaves.map((leave) => {
+                        const facts = [
+                            leave.leave_type,
+                            leave.total_leave_days !== undefined && leave.total_leave_days !== null ? daysText(leave.total_leave_days) : null,
+                            leave.half_day ? 'Half day' : null,
+                        ].filter(Boolean).join('  ·  ');
+                        return (
+                            <Row
+                                key={leave.name}
+                                title={rangeLabel(leave.from_date, leave.to_date)}
+                                subtitle={leave.description ? `${facts}\n${leave.description}` : facts}
+                                right={<StatusText label={statusLabel(leave.status)} />}
+                                onPress={() => setSelected(leave)}
+                            />
+                        );
+                    })}
+                </Group>
+            )}
+        </>
+    );
+
+    // ------------------------------------------------------------------ form
+    const renderForm = () => (
+        <>
+            <SelectField
+                label="Leave type"
+                value={selectedLeaveType}
+                placeholder="Select leave type"
+                hint={picker === 'type' ? undefined : balanceHint}
+                icon={picker === 'type' ? 'chevron-up' : 'chevron-down'}
+                onPress={() => togglePicker('type')}
+                style={picker === 'type' ? styles.selectOpen : undefined}
+            />
+            {picker === 'type' ? (
+                <Group style={styles.inlineList}>
+                    {leaveTypes.length === 0 ? (
+                        <Row title="No leave types available" />
+                    ) : (
+                        leaveTypes.map((leaveType) => (
+                            <Row
+                                key={leaveType}
+                                title={leaveType}
+                                subtitle={balances[leaveType] ? `${daysText(balances[leaveType].balance_leaves)} left` : undefined}
+                                right={<Check on={leaveType === selectedLeaveType} />}
+                                chevron={false}
+                                onPress={() => {
+                                    setSelectedLeaveType(leaveType);
+                                    setPicker(null);
+                                }}
+                            />
+                        ))
+                    )}
+                </Group>
+            ) : null}
+
+            <View style={styles.dateRow}>
+                <SelectField
+                    label="From"
+                    value={formatShortDate(fromDate)}
+                    icon="calendar"
                     onPress={() => setShowFromDatePicker(true)}
-                >
-                    <Text style={styles.dateText}>{fromDate.toDateString()}</Text>
-                </TouchableOpacity>
-                {showFromDatePicker && (
-                    <DateTimePicker
-                        value={fromDate}
-                        mode="date"
-                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                        onChange={(event, date) => {
-                            setShowFromDatePicker(Platform.OS === 'ios');
-                            if (date) {
-                                setFromDate(date);
-                                if (date > toDate) setToDate(date);
-                            }
-                        }}
-                    />
-                )}
-            </View>
-
-            {/* To Date */}
-            <View style={styles.inputGroup}>
-                <Text style={styles.label}>To Date *</Text>
-                <TouchableOpacity
-                    style={styles.dateButton}
+                    style={styles.dateField}
+                />
+                <SelectField
+                    label="To"
+                    value={formatShortDate(toDate)}
+                    icon="calendar"
                     onPress={() => setShowToDatePicker(true)}
-                >
-                    <Text style={styles.dateText}>{toDate.toDateString()}</Text>
-                </TouchableOpacity>
-                {showToDatePicker && (
-                    <DateTimePicker
-                        value={toDate}
-                        mode="date"
-                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                        minimumDate={fromDate}
-                        onChange={(event, date) => {
-                            setShowToDatePicker(Platform.OS === 'ios');
-                            if (date) setToDate(date);
-                        }}
-                    />
-                )}
+                    style={styles.dateField}
+                />
             </View>
+            {showFromDatePicker && (
+                <DateTimePicker
+                    value={fromDate}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={(event, date) => {
+                        setShowFromDatePicker(Platform.OS === 'ios');
+                        if (date) {
+                            setFromDate(date);
+                            if (date > toDate) {
+                                setToDate(date);
+                            }
+                        }
+                    }}
+                />
+            )}
+            {showToDatePicker && (
+                <DateTimePicker
+                    value={toDate}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    minimumDate={fromDate}
+                    onChange={(event, date) => {
+                        setShowToDatePicker(Platform.OS === 'ios');
+                        if (date) {
+                            setToDate(date);
+                        }
+                    }}
+                />
+            )}
 
-            {/* Half Day Toggle */}
-            <TouchableOpacity
-                style={styles.checkboxContainer}
-                onPress={() => setIsHalfDay(!isHalfDay)}
-            >
-                <View style={[styles.checkbox, isHalfDay && styles.checkboxChecked]}>
-                    {isHalfDay && <Text style={styles.checkmark}>✓</Text>}
-                </View>
-                <Text style={styles.checkboxLabel}>Half Day Leave</Text>
-            </TouchableOpacity>
+            <Group style={styles.toggleGroup}>
+                <Row
+                    title="Half day"
+                    right={(
+                        <Switch
+                            value={isHalfDay}
+                            onValueChange={() => setIsHalfDay(!isHalfDay)}
+                            trackColor={SWITCH_TRACK}
+                            thumbColor={color.surface}
+                        />
+                    )}
+                />
+            </Group>
 
-            {/* Half Day Date (conditional) */}
             {isHalfDay && (
-                <View style={styles.inputGroup}>
-                    <Text style={styles.label}>Half Day Date</Text>
-                    <TouchableOpacity
-                        style={styles.dateButton}
+                <>
+                    <SelectField
+                        label="Half-day date"
+                        value={formatShortDate(halfDayDate)}
+                        icon="calendar"
                         onPress={() => setShowHalfDayPicker(true)}
-                    >
-                        <Text style={styles.dateText}>{halfDayDate.toDateString()}</Text>
-                    </TouchableOpacity>
+                    />
                     {showHalfDayPicker && (
                         <DateTimePicker
                             value={halfDayDate}
@@ -407,432 +548,140 @@ const LeaveApplicationScreen = ({ navigation }) => {
                             maximumDate={toDate}
                             onChange={(event, date) => {
                                 setShowHalfDayPicker(Platform.OS === 'ios');
-                                if (date) setHalfDayDate(date);
+                                if (date) {
+                                    setHalfDayDate(date);
+                                }
                             }}
                         />
                     )}
-                </View>
+                </>
             )}
 
-            {/* Reason */}
-            <View style={styles.inputGroup}>
-                <Text style={styles.label}>Reason *</Text>
-                <Input
-                    placeholder="Enter reason for leave"
-                    value={reason}
-                    onChangeText={setReason}
-                    multiline
-                    numberOfLines={4}
-                    style={styles.textArea}
-                />
-            </View>
+            <TextField
+                label="Reason"
+                value={reason}
+                onChangeText={setReason}
+                placeholder="Reason for leave"
+                multiline
+                numberOfLines={3}
+                inputStyle={styles.shortMultiline}
+            />
 
             {/* Approver (optional) */}
             {approvers.length > 0 && (
-                <View style={styles.inputGroup}>
-                    <Text style={styles.label}>Leave Approver</Text>
-                    <View style={styles.pickerContainer}>
-                        <Picker
-                            selectedValue={selectedApprover}
-                            onValueChange={(value) => setSelectedApprover(value)}
-                            style={styles.picker}
-                        >
-                            <Picker.Item label="Default Approver" value="" />
-                            {approvers.map((approver) => (
-                                <Picker.Item
-                                    key={approver.name}
-                                    label={approver.full_name}
-                                    value={approver.name}
+                <>
+                    <SelectField
+                        label="Approver"
+                        value={approverLabel}
+                        icon={picker === 'approver' ? 'chevron-up' : 'chevron-down'}
+                        onPress={() => togglePicker('approver')}
+                        style={picker === 'approver' ? styles.selectOpen : undefined}
+                    />
+                    {picker === 'approver' ? (
+                        <Group style={styles.inlineList}>
+                            {[{ name: '', full_name: 'Default approver' }, ...approvers].map((approver) => (
+                                <Row
+                                    key={approver.name || 'default'}
+                                    title={approver.full_name || approver.name}
+                                    right={<Check on={approver.name === selectedApprover} />}
+                                    chevron={false}
+                                    onPress={() => {
+                                        setSelectedApprover(approver.name);
+                                        setPicker(null);
+                                    }}
                                 />
                             ))}
-                        </Picker>
-                    </View>
-                </View>
+                        </Group>
+                    ) : null}
+                </>
             )}
-
-            {/* Submit Button */}
-            <View style={styles.submitButtonContainer}>
-                <Button
-                    title="Submit Leave Application"
-                    onPress={handleSubmitLeave}
-                    disabled={loading}
-                />
-            </View>
-        </ScrollView>
+        </>
     );
 
-    const renderLeaveHistory = () => {
-        const filteredLeaves = myLeaves.filter(leave => {
-            if (historyStatusFilter === 'all') return true;
-            return leave.status === historyStatusFilter;
-        });
+    // ------------------------------------------------------------------ detail
+    const renderDetail = (leave) => (
+        <>
+            <Group>
+                <Row title="Status" right={<StatusText label={statusLabel(leave.status)} />} />
+                <Row title="From" value={dayLabel(leave.from_date)} />
+                <Row title="To" value={dayLabel(leave.to_date)} />
+                {leave.total_leave_days !== undefined && leave.total_leave_days !== null ? (
+                    <Row title="Days" value={daysText(leave.total_leave_days)} />
+                ) : null}
+                {leave.half_day ? (
+                    <Row title="Half day" value={leave.half_day_date ? dayLabel(leave.half_day_date) : 'Yes'} />
+                ) : null}
+                {leave.posting_date ? <Row title="Applied on" value={dayLabel(leave.posting_date)} /> : null}
+                {leave.leave_approver_name ? <Row title="Approver" value={leave.leave_approver_name} /> : null}
+            </Group>
+            {leave.description ? (
+                <Group title="Reason">
+                    <Text style={styles.note}>{leave.description}</Text>
+                </Group>
+            ) : null}
+        </>
+    );
 
-        return (
-            <View style={styles.historyContainer}>
-                {/* Status Filter */}
-                <View style={styles.filterRow}>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                        {['all', 'Open', 'Approved', 'Rejected', 'Cancelled'].map(status => (
-                            <TouchableOpacity
-                                key={status}
-                                style={[
-                                    styles.filterChip,
-                                    historyStatusFilter === status && styles.filterChipActive
-                                ]}
-                                onPress={() => setHistoryStatusFilter(status)}
-                            >
-                                <Text
-                                    style={[
-                                        styles.filterChipText,
-                                        historyStatusFilter === status && styles.filterChipTextActive
-                                    ]}
-                                >
-                                    {status === 'all' ? 'All' : status}
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
-                    </ScrollView>
-                </View>
-
-                <ScrollView
-                    style={styles.historyList}
-                    refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-                >
-                    {filteredLeaves.length === 0 ? (
-                        <View style={styles.emptyState}>
-                            <Text style={styles.emptyText}>No leave applications found</Text>
-                        </View>
-                    ) : (
-                        filteredLeaves.map((leave) => (
-                            <View key={leave.name} style={styles.leaveCard}>
-                                <View style={styles.leaveCardHeader}>
-                                    <Text style={styles.leaveType}>{leave.leave_type}</Text>
-                                    <View
-                                        style={[
-                                            styles.statusBadge,
-                                            styles[`status${leave.status.replace(/\s/g, '')}`]
-                                        ]}
-                                    >
-                                        <Text style={styles.statusText}>{leave.status}</Text>
-                                    </View>
-                                </View>
-
-                                <View style={styles.leaveDetails}>
-                                    <Text style={styles.leaveDate}>
-                                        {new Date(leave.from_date).toLocaleDateString()} -{' '}
-                                        {new Date(leave.to_date).toLocaleDateString()}
-                                    </Text>
-                                    <Text style={styles.leaveDays}>
-                                        {leave.total_leave_days} day(s)
-                                        {leave.half_day ? ' (Half Day)' : ''}
-                                    </Text>
-                                    {leave.description && (
-                                        <Text style={styles.leaveReason} numberOfLines={2}>
-                                            {leave.description}
-                                        </Text>
-                                    )}
-                                    {leave.leave_approver_name && (
-                                        <Text style={styles.leaveApprover}>
-                                            Approver: {leave.leave_approver_name}
-                                        </Text>
-                                    )}
-                                </View>
-
-                                {leave.status === 'Open' && (
-                                    <TouchableOpacity
-                                        style={styles.cancelButton}
-                                        onPress={() => handleCancelLeave(leave.name)}
-                                    >
-                                        <Text style={styles.cancelButtonText}>Cancel</Text>
-                                    </TouchableOpacity>
-                                )}
-                            </View>
-                        ))
-                    )}
-                </ScrollView>
-            </View>
-        );
-    };
-
-    if (loading && !refreshing) {
-        return <Loading message="Loading leave application..." />;
-    }
+    const busy = loading && !refreshing;
 
     return (
-        <View style={styles.container}>
-            {/* Tab Navigation */}
-            <View style={styles.tabContainer}>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'apply' && styles.tabActive]}
-                    onPress={() => setActiveTab('apply')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'apply' && styles.tabTextActive]}>
-                        Apply Leave
-                    </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.tab, activeTab === 'history' && styles.tabActive]}
-                    onPress={() => setActiveTab('history')}
-                >
-                    <Text style={[styles.tabText, activeTab === 'history' && styles.tabTextActive]}>
-                        My Leaves ({myLeaves.length})
-                    </Text>
-                </TouchableOpacity>
-            </View>
+        <View style={styles.flex}>
+            <Screen
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                footer={<Button title="Apply for leave" onPress={openForm} disabled={busy} />}
+            >
+                {busy ? <Loading /> : renderList()}
+            </Screen>
 
-            {/* Tab Content */}
-            {activeTab === 'apply' ? renderLeaveApplicationForm() : renderLeaveHistory()}
+            <Sheet
+                visible={activeTab === 'apply'}
+                title="Apply for leave"
+                onClose={closeForm}
+                dismissable={!loading}
+                footer={(
+                    <>
+                        <Button title="Cancel" variant="secondary" onPress={closeForm} disabled={loading} style={styles.flex} />
+                        <Button title="Submit" onPress={handleSubmitLeave} loading={loading} style={styles.flex} />
+                    </>
+                )}
+            >
+                {renderForm()}
+            </Sheet>
+
+            <Sheet
+                visible={Boolean(selected)}
+                title={detail?.leave_type}
+                subtitle={detail?.name}
+                onClose={closeDetail}
+                dismissable={!loading}
+                footer={detail?.status === 'Open' ? (
+                    <>
+                        <Button title="Close" variant="secondary" onPress={closeDetail} disabled={loading} style={styles.flex} />
+                        <Button title="Cancel leave" variant="danger" onPress={() => handleCancelLeave(detail.name)} loading={loading} style={styles.flex} />
+                    </>
+                ) : (
+                    <Button title="Close" variant="secondary" onPress={closeDetail} style={styles.flex} />
+                )}
+            >
+                {detail ? renderDetail(detail) : null}
+            </Sheet>
         </View>
     );
 };
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.background,
-    },
-    tabContainer: {
-        flexDirection: 'row',
-        backgroundColor: colors.white,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    tab: {
-        flex: 1,
-        paddingVertical: 16,
-        alignItems: 'center',
-        borderBottomWidth: 2,
-        borderBottomColor: 'transparent',
-    },
-    tabActive: {
-        borderBottomColor: colors.primary,
-    },
-    tabText: {
-        fontSize: 15,
-        fontWeight: '500',
-        color: colors.textSecondary,
-    },
-    tabTextActive: {
-        color: colors.primary,
-        fontWeight: '600',
-    },
-    formContainer: {
-        flex: 1,
-        padding: 16,
-    },
-    inputGroup: {
-        marginBottom: 20,
-    },
-    label: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 8,
-    },
-    pickerContainer: {
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: 8,
-        backgroundColor: colors.white,
-    },
-    picker: {
-        height: 50,
-    },
-    dateButton: {
-        padding: 16,
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: 8,
-        backgroundColor: colors.white,
-    },
-    dateText: {
-        fontSize: 15,
-        color: colors.textPrimary,
-    },
-    checkboxContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 20,
-    },
-    checkbox: {
-        width: 24,
-        height: 24,
-        borderWidth: 2,
-        borderColor: colors.border,
-        borderRadius: 4,
-        marginRight: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    checkboxChecked: {
-        backgroundColor: colors.primary,
-        borderColor: colors.primary,
-    },
-    checkmark: {
-        color: colors.white,
-        fontSize: 16,
-        fontWeight: 'bold',
-    },
-    checkboxLabel: {
-        fontSize: 15,
-        color: colors.textPrimary,
-    },
-    textArea: {
-        height: 100,
-        textAlignVertical: 'top',
-    },
-    balanceCard: {
-        backgroundColor: colors.lightBlue,
-        padding: 16,
-        borderRadius: 12,
-        marginBottom: 20,
-    },
-    balanceTitle: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 12,
-    },
-    balanceRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-    },
-    balanceItem: {
-        alignItems: 'center',
-    },
-    balanceValue: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: colors.textPrimary,
-    },
-    balanceRemaining: {
-        color: colors.success,
-    },
-    balanceLabel: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginTop: 4,
-    },
-    submitButtonContainer: {
-        marginTop: 10,
-        marginBottom: 30,
-    },
-    historyContainer: {
-        flex: 1,
-    },
-    filterRow: {
-        paddingVertical: 12,
-        paddingHorizontal: 16,
-        backgroundColor: colors.white,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    filterChip: {
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderRadius: 20,
-        backgroundColor: colors.lightGray,
-        marginRight: 8,
-    },
-    filterChipActive: {
-        backgroundColor: colors.primary,
-    },
-    filterChipText: {
-        fontSize: 14,
-        color: colors.textSecondary,
-        fontWeight: '500',
-    },
-    filterChipTextActive: {
-        color: colors.white,
-    },
-    historyList: {
-        flex: 1,
-        padding: 16,
-    },
-    emptyState: {
-        padding: 40,
-        alignItems: 'center',
-    },
-    emptyText: {
-        fontSize: 16,
-        color: colors.textSecondary,
-    },
-    leaveCard: {
-        backgroundColor: colors.white,
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 12,
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    leaveCardHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    leaveType: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        flex: 1,
-    },
-    statusBadge: {
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 12,
-    },
-    statusOpen: {
-        backgroundColor: colors.warningLight,
-    },
-    statusApproved: {
-        backgroundColor: colors.successLight,
-    },
-    statusRejected: {
-        backgroundColor: colors.errorLight,
-    },
-    statusCancelled: {
-        backgroundColor: colors.lightGray,
-    },
-    statusText: {
-        fontSize: 12,
-        fontWeight: '600',
-    },
-    leaveDetails: {
-        marginBottom: 12,
-    },
-    leaveDate: {
-        fontSize: 14,
-        color: colors.textPrimary,
-        marginBottom: 4,
-    },
-    leaveDays: {
-        fontSize: 14,
-        color: colors.textSecondary,
-        marginBottom: 4,
-    },
-    leaveReason: {
-        fontSize: 13,
-        color: colors.textSecondary,
-        fontStyle: 'italic',
-        marginTop: 6,
-    },
-    leaveApprover: {
-        fontSize: 12,
-        color: colors.textSecondary,
-        marginTop: 4,
-    },
-    cancelButton: {
-        padding: 10,
-        borderRadius: 8,
-        backgroundColor: colors.error,
-        alignItems: 'center',
-    },
-    cancelButtonText: {
-        color: colors.white,
-        fontSize: 14,
-        fontWeight: '600',
-    },
+    flex: { flex: 1 },
+    sectionTitle: { ...type.label, marginBottom: space.sm, paddingHorizontal: space.xs },
+    filter: { marginBottom: space.md },
+    note: { ...type.body, lineHeight: 21, paddingHorizontal: space.lg, paddingVertical: space.md },
+
+    selectOpen: { marginBottom: space.sm },
+    inlineList: { marginBottom: space.lg },
+    dateRow: { flexDirection: 'row', gap: space.md, marginBottom: space.lg },
+    dateField: { flex: 1, marginBottom: 0 },
+    toggleGroup: { marginBottom: space.lg },
+    shortMultiline: { minHeight: 72 },
 });
 
 export default LeaveApplicationScreen;

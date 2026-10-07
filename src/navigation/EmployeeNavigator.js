@@ -1,7 +1,5 @@
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { TouchableOpacity, View, Image, StyleSheet, Text } from 'react-native';
-import Icon from 'react-native-vector-icons/FontAwesome5';
 
 // Import Employee Screens
 import CheckInOutScreen from '../screens/employee/CheckInOutScreen';
@@ -35,43 +33,45 @@ const EmployeeNavigator = () => {
             initialRouteName="EmployeeDashboard"
             screenOptions={{
                 headerStyle: { backgroundColor: '#FFFFFF' },
-                headerTintColor: '#111827',
+                headerTintColor: '#101828',
                 headerTitleAlign: 'center',
-                headerShadowVisible: true,
+                headerTitleStyle: { fontSize: 17, fontWeight: '600', color: '#101828' },
+                headerShadowVisible: false,
+                headerBackTitleVisible: false,
+                contentStyle: { backgroundColor: '#F4F5F7' },
             }}
         >
-            {/* Dashboard renders its own <AppHeader/> */}
+            {/* Dashboard draws its own top bar */}
             <Stack.Screen
                 name="EmployeeDashboard"
                 component={EmployeeDashboard}
                 options={{ headerShown: false }}
             />
 
-            
-            <Stack.Screen name="CheckInOut" component={CheckInOutScreen} options={{ title: 'Check In/Out' }} />
-            <Stack.Screen name="AttendanceHistory" component={AttendanceHistoryScreen} options={{ title: 'Attendance History' }} />
-            <Stack.Screen name="WFHRequest" component={WFHRequestScreen} options={{ title: 'WFH Request' }} />
-            <Stack.Screen name="OnSiteRequest" component={OnSiteRequestScreen} options={{ title: 'On Site Request' }} />
+            <Stack.Screen name="CheckInOut" component={CheckInOutScreen} options={{ title: 'Check In / Out' }} />
+            <Stack.Screen name="AttendanceHistory" component={AttendanceHistoryScreen} options={{ title: 'Attendance' }} />
+            <Stack.Screen name="WFHRequest" component={WFHRequestScreen} options={{ title: 'Work From Home' }} />
+            <Stack.Screen name="OnSiteRequest" component={OnSiteRequestScreen} options={{ title: 'On-Site' }} />
 
-            <Stack.Screen name="HolidayList" component={HolidayListScreen} options={{ title: 'Holiday List' }} />
-            <Stack.Screen name="LeaveApplication" component={LeaveApplicationScreen} options={{ title: 'Apply Leave' }} />
-            <Stack.Screen name="CompensatoryLeave" component={CompensatoryLeaveScreen} options={{ title: 'Comp-Off Request' }} />
+            <Stack.Screen name="HolidayList" component={HolidayListScreen} options={{ title: 'Holidays' }} />
+            <Stack.Screen name="LeaveApplication" component={LeaveApplicationScreen} options={{ title: 'Leave' }} />
+            <Stack.Screen name="CompensatoryLeave" component={CompensatoryLeaveScreen} options={{ title: 'Comp-Off' }} />
 
-            <Stack.Screen name="ExpenseClaim" component={ExpenseClaimScreen} options={{ title: 'Expense Claim' }} />
-            <Stack.Screen name="TravelRequest" component={TravelRequestScreen} options={{ title: 'Travel Request' }} />
+            <Stack.Screen name="ExpenseClaim" component={ExpenseClaimScreen} options={{ title: 'Expense Claims' }} />
+            <Stack.Screen name="TravelRequest" component={TravelRequestScreen} options={{ title: 'Travel' }} />
 
-            <Stack.Screen name="MyProjectsScreen" component={MyProjectsScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="MyTasksScreen" component={MyTasksScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="MyLogsScreen" component={MyLogsScreen} options={{ headerShown: false }} />
-            <Stack.Screen name="DailyTasksScreen" component={DailyTasksScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="MyProjectsScreen" component={MyProjectsScreen} options={{ title: 'My Projects' }} />
+            <Stack.Screen name="MyTasksScreen" component={MyTasksScreen} options={{ title: 'Tasks' }} />
+            <Stack.Screen name="MyLogsScreen" component={MyLogsScreen} options={{ title: 'Work Logs' }} />
+            <Stack.Screen name="DailyTasksScreen" component={DailyTasksScreen} options={{ title: 'Daily Tasks' }} />
 
             <Stack.Screen name="SalaryStructure" component={SalaryStructureScreen} options={{ title: 'Salary Structure' }} />
             <Stack.Screen name="Payslip" component={PayslipScreen} options={{ title: 'Payslips' }} />
-            <Stack.Screen name="MySalaryTracker" component={MySalaryTrackerScreen} options={{ title: 'My Salary Tracker' }} />
+            <Stack.Screen name="MySalaryTracker" component={MySalaryTrackerScreen} options={{ title: 'Salary Payments' }} />
             <Stack.Screen name="SalaryTrackerDetail" component={SalaryTrackerDetailScreen} options={{ title: 'Salary Detail' }} />
 
             <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: 'Notifications' }} />
-            <Stack.Screen name="Profile" component={ProfileScreen} options={{ title: 'My Profile' }} />
+            <Stack.Screen name="Profile" component={ProfileScreen} options={{ title: 'Profile' }} />
         </Stack.Navigator>
     );
 };

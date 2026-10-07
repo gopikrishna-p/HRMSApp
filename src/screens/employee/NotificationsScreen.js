@@ -1,42 +1,82 @@
-import React, { useState, useEffect, useCallback } from 'react';
+// src/screens/employee/NotificationsScreen.js
+//
+// The employee's notification inbox, newest first and grouped by day (Today, Yesterday) and
+// then by month. Unread items carry an accent dot and a bolder title; opening one marks it
+// read. "Mark all read" sits in the header; archive and delete are in the detail sheet.
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Pressable, Alert } from 'react-native';
+import ApiService, { extractFrappeData } from '../../services/api.service';
+import { formatTimeOfDay } from '../../utils/dateFormat';
+import showToast from '../../utils/Toast';
 import {
-    View,
-    Text,
-    StyleSheet,
-    FlatList,
-    TouchableOpacity,
-    Modal,
-    ScrollView,
-    SafeAreaView,
-    StatusBar,
-    RefreshControl,
-    ActivityIndicator,
-    Alert,
-    Animated,
-    PanGestureHandler,
-    State,
-    Dimensions,
-} from 'react-native';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import ApiService, { extractFrappeData, isApiSuccess, getApiErrorMessage } from '../../services/api.service';
-import { colors } from '../../theme/colors';
+    Screen,
+    Group,
+    Row,
+    Segmented,
+    Tag,
+    Sheet,
+    Button,
+    EmptyState,
+    Loading,
+    color,
+    space,
+    type,
+    formatLongDate,
+} from '../../components/ds';
 
-const { width } = Dimensions.get('window');
+// ------------------------------------------------------------------ helpers
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-// Color palette for notifications
-const NOTIFICATION_COLORS = {
-    Info: { bg: '#E3F2FD', border: '#2196F3', icon: '#1976D2' },
-    Success: { bg: '#E8F5E8', border: '#4CAF50', icon: '#388E3C' },
-    Warning: { bg: '#FFF3C4', border: '#FF9800', icon: '#F57C00' },
-    Alert: { bg: '#FFEBEE', border: '#F44336', icon: '#D32F2F' },
-    Urgent: { bg: '#FCE4EC', border: '#E91E63', icon: '#C2185B' },
+// "YYYY-MM-DD HH:MM:SS.ffffff" from the server, read as local wall-clock time
+// (Hermes cannot parse the space-separated form with new Date()).
+const parseDateTime = (value) => {
+    const m = String(value || '').match(/(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
+    return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4] || 0), Number(m[5] || 0)) : null;
 };
 
-const PRIORITY_COLORS = {
-    Low: colors.textMuted,
-    Medium: colors.warning,
-    High: colors.error,
+const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+
+// Today / Yesterday / "October 2026", in the server's newest-first order
+const groupByDate = (items) => {
+    const now = new Date();
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const groups = [];
+    const byKey = {};
+    items.forEach((item) => {
+        const d = parseDateTime(item.creation);
+        let key = 'earlier';
+        let title = 'Earlier';
+        if (d && sameDay(d, now)) {
+            key = 'today';
+            title = 'Today';
+        } else if (d && sameDay(d, yesterday)) {
+            key = 'yesterday';
+            title = 'Yesterday';
+        } else if (d) {
+            key = `${d.getFullYear()}-${d.getMonth()}`;
+            title = `${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+        }
+        if (!byKey[key]) {
+            byKey[key] = { key, title, recent: key === 'today' || key === 'yesterday', items: [] };
+            groups.push(byKey[key]);
+        }
+        byKey[key].items.push(item);
+    });
+    return groups;
 };
+
+// "09:48 AM" for today and yesterday, "5 Oct, 09:48 AM" for older items
+const whenLabel = (item, recent) => {
+    const d = parseDateTime(item.creation);
+    const time = formatTimeOfDay(item.creation);
+    if (!d) {
+        return item.time_ago || '';
+    }
+    return recent ? time : `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}, ${time}`;
+};
+
+// get_notification_stats returns total_count / unread_count / urgent_count
+const countOf = (stats, key) => Number(stats?.[key] ?? stats?.[`${key}_count`]) || 0;
 
 const NotificationsScreen = ({ navigation }) => {
     const [notifications, setNotifications] = useState([]);
@@ -44,21 +84,22 @@ const NotificationsScreen = ({ navigation }) => {
     const [refreshing, setRefreshing] = useState(false);
     const [stats, setStats] = useState({ total: 0, unread: 0, urgent: 0 });
     const [detailModalVisible, setDetailModalVisible] = useState(false);
-    const [settingsModalVisible, setSettingsModalVisible] = useState(false);
     const [selectedNotification, setSelectedNotification] = useState(null);
-    const [selectedTab, setSelectedTab] = useState('All'); // All, Unread, Archived
-    const [settings, setSettings] = useState({});
-    
+    const [selectedTab, setSelectedTab] = useState('All'); // All, Unread, Urgent
+    // Settings are fetched as before; this screen has no settings controls yet.
+    const [, setSettings] = useState({});
+
     const tabs = [
-        { key: 'All', label: 'All', icon: 'bell-outline' },
-        { key: 'Unread', label: 'Unread', icon: 'bell-ring' },
-        { key: 'Urgent', label: 'Urgent', icon: 'alert-circle' }
+        { key: 'All', label: 'All' },
+        { key: 'Unread', label: 'Unread' },
+        { key: 'Urgent', label: 'Urgent' }
     ];
 
     useEffect(() => {
         fetchNotifications();
         fetchStats();
         fetchSettings();
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch whenever the tab changes
     }, [selectedTab]);
 
     const fetchNotifications = async () => {
@@ -71,11 +112,10 @@ const NotificationsScreen = ({ navigation }) => {
             };
 
             const response = await ApiService.getMyNotifications(params);
-            console.log('Employee Notifications response:', JSON.stringify(response, null, 2));
-            
+
             // Use helper to extract data
             const extractedData = extractFrappeData(response, {});
-            
+
             // Handle different response structures
             let notificationsList = [];
             if (extractedData.status === 'success' && extractedData.notifications) {
@@ -85,12 +125,12 @@ const NotificationsScreen = ({ navigation }) => {
             } else if (extractedData.notifications) {
                 notificationsList = extractedData.notifications;
             }
-            
+
             // Filter for urgent if needed
             if (selectedTab === 'Urgent') {
                 notificationsList = notificationsList.filter(n => n.priority === 'High');
             }
-            
+
             setNotifications(notificationsList);
         } catch (error) {
             console.error('Error fetching notifications:', error);
@@ -124,16 +164,16 @@ const NotificationsScreen = ({ navigation }) => {
         }
     };
 
-    const onRefresh = useCallback(() => {
+    const onRefresh = () => {
         setRefreshing(true);
         fetchNotifications();
         fetchStats();
-    }, [selectedTab]);
+    };
 
     const handleNotificationPress = (notification) => {
         setSelectedNotification(notification);
         setDetailModalVisible(true);
-        
+
         // Mark as read if not already read
         if (!notification.is_read) {
             markAsRead(notification.name);
@@ -144,7 +184,7 @@ const NotificationsScreen = ({ navigation }) => {
         try {
             await ApiService.markNotificationRead(notificationId);
             // Update local state
-            setNotifications(prev => 
+            setNotifications(prev =>
                 prev.map(n => n.name === notificationId ? { ...n, is_read: 1 } : n)
             );
             fetchStats(); // Refresh stats
@@ -159,11 +199,11 @@ const NotificationsScreen = ({ navigation }) => {
             if (response.success) {
                 setNotifications(prev => prev.map(n => ({ ...n, is_read: 1 })));
                 fetchStats();
-                Alert.alert('Success', 'All notifications marked as read');
+                showToast({ type: 'success', text1: 'All notifications marked as read' });
             }
         } catch (error) {
             console.error('Error marking all as read:', error);
-            Alert.alert('Error', 'Failed to mark all as read');
+            showToast({ type: 'error', text1: 'Could not mark all as read', text2: error.message });
         }
     };
 
@@ -185,705 +225,187 @@ const NotificationsScreen = ({ navigation }) => {
             if (response.success) {
                 setNotifications(prev => prev.filter(n => n.name !== notificationId));
                 fetchStats();
-                Alert.alert('Success', 'Notification deleted');
+                showToast({ type: 'success', text1: 'Notification deleted' });
             }
         } catch (error) {
             console.error('Error deleting notification:', error);
-            Alert.alert('Error', 'Failed to delete notification');
+            showToast({ type: 'error', text1: 'Not deleted', text2: error.message });
         }
     };
 
-    const getNotificationIcon = (type) => {
-        const iconMap = {
-            Info: 'information-outline',
-            Success: 'check-circle-outline',
-            Warning: 'alert-outline',
-            Alert: 'alert-circle-outline',
-            Urgent: 'alert-octagon-outline',
-        };
-        return iconMap[type] || 'bell-outline';
+    // ------------------------------------------------------------------ header
+    const unreadCount = countOf(stats, 'unread');
+    const urgentCount = countOf(stats, 'urgent');
+
+    // the header button calls the latest markAllAsRead without re-registering on every render
+    const markAllRef = useRef(markAllAsRead);
+    markAllRef.current = markAllAsRead;
+
+    useLayoutEffect(() => {
+        navigation.setOptions({
+            // eslint-disable-next-line react/no-unstable-nested-components -- React Navigation header render prop
+            headerRight: () => (unreadCount > 0 ? (
+                <Pressable onPress={() => markAllRef.current()} hitSlop={10} style={styles.headerAction}>
+                    <Text style={styles.headerActionText}>Mark all read</Text>
+                </Pressable>
+            ) : null),
+        });
+    }, [navigation, unreadCount]);
+
+    // ------------------------------------------------------------------ detail actions
+    const closeDetail = () => setDetailModalVisible(false);
+
+    const onArchive = () => {
+        archiveNotification(selectedNotification.name);
+        setDetailModalVisible(false);
     };
 
-    const TabButton = ({ tab, isActive }) => (
-        <TouchableOpacity
-            style={[styles.tabButton, isActive && styles.tabButtonActive]}
-            onPress={() => setSelectedTab(tab.key)}
-        >
-            <Icon 
-                name={tab.icon} 
-                size={18} 
-                color={isActive ? colors.white : colors.textSecondary} 
-            />
-            <Text style={[styles.tabText, isActive && styles.tabTextActive]}>
-                {tab.label}
-            </Text>
-            {(tab.key === 'Unread' && stats.unread > 0) && (
-                <View style={styles.tabBadge}>
-                    <Text style={styles.tabBadgeText}>{stats.unread}</Text>
-                </View>
-            )}
-            {(tab.key === 'Urgent' && stats.urgent > 0) && (
-                <View style={[styles.tabBadge, { backgroundColor: colors.error }]}>
-                    <Text style={styles.tabBadgeText}>{stats.urgent}</Text>
-                </View>
-            )}
-        </TouchableOpacity>
-    );
-
-    const NotificationItem = ({ item, onArchive, onDelete }) => {
-        const typeColors = NOTIFICATION_COLORS[item.notification_type] || NOTIFICATION_COLORS.Info;
-        
-        return (
-            <View style={styles.notificationWrapper}>
-                <TouchableOpacity
-                    style={[
-                        styles.notificationCard,
-                        { borderLeftColor: typeColors.border },
-                        !item.is_read && styles.unreadCard
-                    ]}
-                    onPress={() => handleNotificationPress(item)}
-                    activeOpacity={0.7}
-                >
-                    <View style={styles.notificationHeader}>
-                        <View style={[styles.typeIcon, { backgroundColor: typeColors.bg }]}>
-                            <Icon 
-                                name={getNotificationIcon(item.notification_type)} 
-                                size={18} 
-                                color={typeColors.icon} 
-                            />
-                        </View>
-                        <View style={styles.notificationMeta}>
-                            <View style={styles.metaRow}>
-                                <Text style={styles.notificationType}>{item.notification_type}</Text>
-                                <Text style={styles.notificationCategory}>{item.category}</Text>
-                            </View>
-                            <Text style={styles.notificationTime}>{item.time_ago}</Text>
-                        </View>
-                        {!item.is_read && (
-                            <View style={styles.unreadDot} />
-                        )}
-                    </View>
-                    
-                    <Text style={styles.notificationTitle} numberOfLines={2}>{item.title}</Text>
-                    <Text style={styles.notificationMessage} numberOfLines={3}>{item.message}</Text>
-                    
-                    <View style={styles.notificationFooter}>
-                        <View style={styles.priorityBadge}>
-                            <View style={[
-                                styles.priorityDot, 
-                                { backgroundColor: PRIORITY_COLORS[item.priority] }
-                            ]} />
-                            <Text style={[styles.priorityText, { color: PRIORITY_COLORS[item.priority] }]}>
-                                {item.priority}
-                            </Text>
-                        </View>
-                        {item.action_required === 1 && (
-                            <View style={styles.actionBadge}>
-                                <Icon name="hand-pointing-right" size={12} color={colors.warning} />
-                                <Text style={styles.actionText}>Action Required</Text>
-                            </View>
-                        )}
-                    </View>
-                </TouchableOpacity>
-                
-                {/* Swipe Actions */}
-                <View style={styles.swipeActions}>
-                    <TouchableOpacity
-                        style={[styles.swipeAction, { backgroundColor: colors.primary }]}
-                        onPress={() => onArchive(item.name)}
-                    >
-                        <Icon name="archive" size={20} color={colors.white} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[styles.swipeAction, { backgroundColor: colors.error }]}
-                        onPress={() => onDelete(item.name)}
-                    >
-                        <Icon name="delete" size={20} color={colors.white} />
-                    </TouchableOpacity>
-                </View>
-            </View>
+    const onDelete = () => {
+        Alert.alert(
+            'Delete notification',
+            'Delete this notification permanently?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: () => {
+                        deleteNotification(selectedNotification.name);
+                        setDetailModalVisible(false);
+                    }
+                }
+            ]
         );
     };
 
-    const renderDetailModal = () => (
-        <Modal
-            visible={detailModalVisible}
-            animationType="slide"
-            onRequestClose={() => setDetailModalVisible(false)}
-        >
-            <SafeAreaView style={styles.modalContainer}>
-                <View style={styles.modalHeader}>
-                    <TouchableOpacity 
-                        onPress={() => setDetailModalVisible(false)}
-                        style={styles.modalBackButton}
-                    >
-                        <Icon name="arrow-left" size={24} color={colors.textPrimary} />
-                    </TouchableOpacity>
-                    <Text style={styles.modalTitle}>Notification</Text>
-                    <View style={styles.modalBackButton} />
-                </View>
-
-                {selectedNotification && (
-                    <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={false}>
-                        <View style={[
-                            styles.detailHeader, 
-                            { backgroundColor: NOTIFICATION_COLORS[selectedNotification.notification_type]?.bg }
-                        ]}>
-                            <View style={styles.detailTypeRow}>
-                                <Icon 
-                                    name={getNotificationIcon(selectedNotification.notification_type)} 
-                                    size={24} 
-                                    color={NOTIFICATION_COLORS[selectedNotification.notification_type]?.icon} 
-                                />
-                                <Text style={styles.detailType}>{selectedNotification.notification_type}</Text>
-                                <View style={styles.detailBadges}>
-                                    <View style={[styles.categoryBadge, { backgroundColor: colors.primary + '20' }]}>
-                                        <Text style={[styles.categoryBadgeText, { color: colors.primary }]}>
-                                            {selectedNotification.category}
-                                        </Text>
-                                    </View>
-                                </View>
-                            </View>
-                        </View>
-
-                        <View style={styles.detailContent}>
-                            <Text style={styles.detailTitle}>{selectedNotification.title}</Text>
-                            <Text style={styles.detailMessage}>{selectedNotification.message}</Text>
-
-                            <View style={styles.detailMetaSection}>
-                                <View style={styles.detailMetaRow}>
-                                    <Icon name="calendar" size={16} color={colors.textMuted} />
-                                    <Text style={styles.detailMetaText}>
-                                        {selectedNotification.time_ago}
-                                    </Text>
-                                </View>
-                                <View style={styles.detailMetaRow}>
-                                    <Icon name="flag" size={16} color={PRIORITY_COLORS[selectedNotification.priority]} />
-                                    <Text style={[styles.detailMetaText, { color: PRIORITY_COLORS[selectedNotification.priority] }]}>
-                                        {selectedNotification.priority} Priority
-                                    </Text>
-                                </View>
-                                {selectedNotification.action_required === 1 && (
-                                    <View style={styles.detailMetaRow}>
-                                        <Icon name="hand-pointing-right" size={16} color={colors.warning} />
-                                        <Text style={[styles.detailMetaText, { color: colors.warning }]}>
-                                            Action Required
-                                        </Text>
-                                    </View>
-                                )}
-                            </View>
-
-                            <View style={styles.actionButtons}>
-                                <TouchableOpacity
-                                    style={styles.archiveButton}
-                                    onPress={() => {
-                                        archiveNotification(selectedNotification.name);
-                                        setDetailModalVisible(false);
-                                    }}
-                                >
-                                    <Icon name="archive" size={18} color={colors.white} />
-                                    <Text style={styles.archiveButtonText}>Archive</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={styles.deleteButton}
-                                    onPress={() => {
-                                        Alert.alert(
-                                            'Delete Notification',
-                                            'Are you sure you want to delete this notification?',
-                                            [
-                                                { text: 'Cancel', style: 'cancel' },
-                                                { 
-                                                    text: 'Delete', 
-                                                    style: 'destructive',
-                                                    onPress: () => {
-                                                        deleteNotification(selectedNotification.name);
-                                                        setDetailModalVisible(false);
-                                                    }
-                                                }
-                                            ]
-                                        );
-                                    }}
-                                >
-                                    <Icon name="delete" size={18} color={colors.white} />
-                                    <Text style={styles.deleteButtonText}>Delete</Text>
-                                </TouchableOpacity>
-                            </View>
-                        </View>
-                    </ScrollView>
+    // ------------------------------------------------------------------ list
+    const renderRow = (item, recent) => {
+        const unread = !item.is_read;
+        const when = whenLabel(item, recent);
+        const urgent = item.priority === 'High';
+        const actionRequired = item.action_required === 1;
+        return (
+            <Row
+                key={item.name}
+                left={(
+                    <View style={styles.dotSlot}>
+                        {unread ? <View style={styles.dot} /> : null}
+                    </View>
                 )}
-            </SafeAreaView>
-        </Modal>
-    );
-
-    if (loading && notifications.length === 0) {
-        return (
-            <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color={colors.primary} />
-                <Text style={styles.loadingText}>Loading notifications...</Text>
-            </View>
+                title={<Text style={unread ? styles.unreadTitle : styles.readTitle}>{item.title}</Text>}
+                titleLines={2}
+                subtitle={item.message}
+                subtitleLines={2}
+                meta={when || urgent || actionRequired ? (
+                    <View style={styles.metaLine}>
+                        {when ? <Text style={styles.time}>{when}</Text> : null}
+                        {urgent ? <Tag label="Urgent" tone="danger" /> : null}
+                        {actionRequired ? <Tag label="Action required" tone="warning" /> : null}
+                    </View>
+                ) : null}
+                chevron={false}
+                onPress={() => handleNotificationPress(item)}
+            />
         );
-    }
+    };
+
+    const renderEmpty = () => {
+        if (selectedTab === 'Unread') {
+            return <EmptyState icon="check-circle" title="All caught up" message="No unread notifications." />;
+        }
+        if (selectedTab === 'Urgent') {
+            return <EmptyState icon="bell" title="No urgent notifications" />;
+        }
+        return <EmptyState icon="bell" title="No notifications" message="New notifications will appear here." />;
+    };
+
+    // ------------------------------------------------------------------ detail sheet
+    const detail = selectedNotification;
+    const detailDate = detail ? parseDateTime(detail.creation) : null;
+    const detailWhen = detailDate
+        ? `${formatLongDate(detailDate)}${detailDate.getFullYear() !== new Date().getFullYear() ? ` ${detailDate.getFullYear()}` : ''}  ·  ${formatTimeOfDay(detail.creation)}`
+        : detail?.time_ago;
 
     return (
-        <SafeAreaView style={styles.container}>
-            <StatusBar barStyle="dark-content" backgroundColor={colors.surface} />
-            
-            {/* Header */}
-            <View style={styles.header}>
-                <View style={styles.headerTop}>
-                    <View>
-                        <Text style={styles.headerTitle}>Notifications</Text>
-                        <Text style={styles.headerSubtitle}>
-                            {stats.total} total • {stats.unread} unread
-                        </Text>
-                    </View>
-                    <View style={styles.headerActions}>
-                        {stats.unread > 0 && (
-                            <TouchableOpacity
-                                style={styles.markAllButton}
-                                onPress={markAllAsRead}
-                            >
-                                <Icon name="check-all" size={20} color={colors.primary} />
-                            </TouchableOpacity>
-                        )}
-                        <TouchableOpacity
-                            style={styles.settingsButton}
-                            onPress={() => setSettingsModalVisible(true)}
-                        >
-                            <Icon name="cog" size={20} color={colors.textSecondary} />
-                        </TouchableOpacity>
-                    </View>
-                </View>
-
-                {/* Tabs */}
-                <View style={styles.tabContainer}>
-                    {tabs.map(tab => (
-                        <TabButton 
-                            key={tab.key} 
-                            tab={tab} 
-                            isActive={selectedTab === tab.key} 
-                        />
-                    ))}
-                </View>
+        <View style={styles.flex}>
+            <View style={styles.toolbar}>
+                <Segmented
+                    value={selectedTab}
+                    onChange={setSelectedTab}
+                    options={tabs.map((tab) => ({
+                        value: tab.key,
+                        label: tab.label,
+                        count: tab.key === 'Unread' && unreadCount > 0
+                            ? unreadCount
+                            : tab.key === 'Urgent' && urgentCount > 0 ? urgentCount : undefined,
+                    }))}
+                />
             </View>
 
-            {/* Notifications List */}
-            <FlatList
-                data={notifications}
-                keyExtractor={(item) => item.name}
-                renderItem={({ item }) => 
-                    <NotificationItem 
-                        item={item} 
-                        onArchive={archiveNotification}
-                        onDelete={deleteNotification}
-                    />
-                }
-                contentContainerStyle={styles.listContent}
-                refreshControl={
-                    <RefreshControl
-                        refreshing={refreshing}
-                        onRefresh={onRefresh}
-                        colors={[colors.primary]}
-                    />
-                }
-                ListEmptyComponent={
-                    <View style={styles.emptyContainer}>
-                        <Icon 
-                            name={selectedTab === 'Unread' ? 'check-all' : 'bell-sleep'} 
-                            size={80} 
-                            color={colors.textMuted} 
-                        />
-                        <Text style={styles.emptyTitle}>
-                            {selectedTab === 'Unread' ? 'All Caught Up!' : 'No Notifications'}
-                        </Text>
-                        <Text style={styles.emptyText}>
-                            {selectedTab === 'Unread' ? 'No unread notifications' : 'No notifications yet'}
-                        </Text>
-                    </View>
-                }
-            />
+            <Screen refreshing={refreshing} onRefresh={onRefresh}>
+                {loading && notifications.length === 0 ? (
+                    <Loading />
+                ) : notifications.length === 0 ? (
+                    renderEmpty()
+                ) : (
+                    groupByDate(notifications).map((group) => (
+                        <Group key={group.key} title={group.title}>
+                            {group.items.map((item) => renderRow(item, group.recent))}
+                        </Group>
+                    ))
+                )}
+            </Screen>
 
-            {/* Detail Modal */}
-            {renderDetailModal()}
-        </SafeAreaView>
+            <Sheet
+                visible={detailModalVisible}
+                title={detail?.title}
+                subtitle={detailWhen || undefined}
+                onClose={closeDetail}
+                footer={detail ? (
+                    <>
+                        <Button title="Archive" variant="secondary" onPress={onArchive} style={styles.flex} />
+                        <Button title="Delete" variant="danger" onPress={onDelete} style={styles.flex} />
+                    </>
+                ) : null}
+            >
+                {detail ? (
+                    <>
+                        {detail.message ? <Text style={styles.message}>{detail.message}</Text> : null}
+                        <Group>
+                            {detail.category ? <Row title="Category" value={detail.category} /> : null}
+                            {detail.notification_type ? <Row title="Type" value={detail.notification_type} /> : null}
+                            {detail.priority ? (
+                                <Row title="Priority" value={detail.priority} valueTone={detail.priority === 'High' ? 'danger' : undefined} />
+                            ) : null}
+                            {detail.action_required === 1 ? <Row title="Action required" value="Yes" /> : null}
+                        </Group>
+                    </>
+                ) : null}
+            </Sheet>
+        </View>
     );
 };
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.background,
+    flex: { flex: 1 },
+    toolbar: {
+        backgroundColor: color.surface,
+        paddingHorizontal: space.lg,
+        paddingVertical: space.md,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: color.border,
     },
-    loadingContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: colors.background,
-    },
-    loadingText: {
-        marginTop: 16,
-        fontSize: 14,
-        color: colors.textSecondary,
-    },
+    headerAction: { paddingHorizontal: 4, paddingVertical: 4 },
+    headerActionText: { fontSize: 16, fontWeight: '600', color: color.accent },
 
-    // Header
-    header: {
-        backgroundColor: colors.surface,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    headerTop: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingHorizontal: 20,
-        paddingTop: 16,
-        paddingBottom: 12,
-    },
-    headerTitle: {
-        fontSize: 26,
-        fontWeight: '700',
-        color: colors.textPrimary,
-    },
-    headerSubtitle: {
-        fontSize: 14,
-        color: colors.textSecondary,
-        marginTop: 2,
-    },
-    headerActions: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-    },
-    markAllButton: {
-        width: 40,
-        height: 40,
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderRadius: 20,
-        backgroundColor: colors.primary + '15',
-    },
-    settingsButton: {
-        width: 40,
-        height: 40,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
+    dotSlot: { width: 8, marginRight: space.md, alignSelf: 'flex-start', paddingTop: 7 },
+    dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: color.accent },
+    unreadTitle: { fontWeight: '600' },
+    readTitle: { fontWeight: '400' },
+    metaLine: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
+    time: { ...type.caption },
 
-    // Tabs
-    tabContainer: {
-        flexDirection: 'row',
-        paddingHorizontal: 16,
-        paddingBottom: 16,
-        gap: 8,
-    },
-    tabButton: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: colors.background,
-        paddingVertical: 10,
-        borderRadius: 20,
-        gap: 6,
-    },
-    tabButtonActive: {
-        backgroundColor: colors.primary,
-    },
-    tabText: {
-        fontSize: 14,
-        fontWeight: '500',
-        color: colors.textSecondary,
-    },
-    tabTextActive: {
-        color: colors.white,
-    },
-    tabBadge: {
-        backgroundColor: colors.warning,
-        borderRadius: 10,
-        minWidth: 20,
-        height: 20,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginLeft: 4,
-    },
-    tabBadgeText: {
-        color: colors.white,
-        fontSize: 11,
-        fontWeight: '700',
-    },
-
-    // Notifications List
-    listContent: {
-        paddingHorizontal: 16,
-        paddingBottom: 20,
-    },
-    notificationWrapper: {
-        position: 'relative',
-    },
-    notificationCard: {
-        backgroundColor: colors.surface,
-        borderRadius: 16,
-        padding: 16,
-        marginBottom: 12,
-        borderLeftWidth: 4,
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.06,
-        shadowRadius: 8,
-        zIndex: 1,
-    },
-    unreadCard: {
-        backgroundColor: '#F8FAFF',
-    },
-    notificationHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    typeIcon: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 12,
-    },
-    notificationMeta: {
-        flex: 1,
-    },
-    metaRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    notificationType: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: colors.textPrimary,
-    },
-    notificationCategory: {
-        fontSize: 12,
-        color: colors.textMuted,
-        backgroundColor: colors.background,
-        paddingHorizontal: 8,
-        paddingVertical: 2,
-        borderRadius: 10,
-    },
-    notificationTime: {
-        fontSize: 11,
-        color: colors.textMuted,
-        marginTop: 2,
-    },
-    unreadDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-        backgroundColor: colors.primary,
-    },
-    notificationTitle: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginBottom: 6,
-        lineHeight: 22,
-    },
-    notificationMessage: {
-        fontSize: 14,
-        color: colors.textSecondary,
-        lineHeight: 20,
-        marginBottom: 12,
-    },
-    notificationFooter: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    priorityBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-    },
-    priorityDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-    },
-    priorityText: {
-        fontSize: 12,
-        fontWeight: '500',
-    },
-    actionBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: colors.warning + '15',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 12,
-        gap: 4,
-    },
-    actionText: {
-        fontSize: 11,
-        color: colors.warning,
-        fontWeight: '500',
-    },
-
-    // Swipe Actions
-    swipeActions: {
-        position: 'absolute',
-        right: 0,
-        top: 0,
-        bottom: 12,
-        flexDirection: 'row',
-        alignItems: 'center',
-        zIndex: 0,
-    },
-    swipeAction: {
-        width: 60,
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100%',
-    },
-
-    // Empty State
-    emptyContainer: {
-        alignItems: 'center',
-        paddingTop: 60,
-        paddingBottom: 40,
-    },
-    emptyTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        marginTop: 16,
-    },
-    emptyText: {
-        fontSize: 14,
-        color: colors.textSecondary,
-        marginTop: 8,
-        textAlign: 'center',
-    },
-
-    // Modal
-    modalContainer: {
-        flex: 1,
-        backgroundColor: colors.background,
-    },
-    modalHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 14,
-        backgroundColor: colors.surface,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    modalBackButton: {
-        width: 40,
-        height: 40,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    modalTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: colors.textPrimary,
-    },
-    modalContent: {
-        flex: 1,
-    },
-    detailHeader: {
-        padding: 20,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    detailTypeRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-    },
-    detailType: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: colors.textPrimary,
-        flex: 1,
-    },
-    detailBadges: {
-        flexDirection: 'row',
-        gap: 8,
-    },
-    categoryBadge: {
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 16,
-    },
-    categoryBadgeText: {
-        fontSize: 12,
-        fontWeight: '600',
-    },
-    detailContent: {
-        padding: 20,
-    },
-    detailTitle: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: colors.textPrimary,
-        marginBottom: 12,
-        lineHeight: 28,
-    },
-    detailMessage: {
-        fontSize: 16,
-        color: colors.textSecondary,
-        lineHeight: 24,
-        marginBottom: 24,
-    },
-    detailMetaSection: {
-        gap: 12,
-        marginBottom: 24,
-    },
-    detailMetaRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    detailMetaText: {
-        fontSize: 14,
-        color: colors.textMuted,
-    },
-    actionButtons: {
-        flexDirection: 'row',
-        gap: 12,
-    },
-    archiveButton: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: colors.primary,
-        paddingVertical: 14,
-        borderRadius: 12,
-        gap: 8,
-    },
-    archiveButtonText: {
-        color: colors.white,
-        fontWeight: '600',
-    },
-    deleteButton: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: colors.error,
-        paddingVertical: 14,
-        borderRadius: 12,
-        gap: 8,
-    },
-    deleteButtonText: {
-        color: colors.white,
-        fontWeight: '600',
-    },
+    message: { ...type.body, lineHeight: 22, marginBottom: space.lg },
 });
 
 export default NotificationsScreen;

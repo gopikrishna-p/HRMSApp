@@ -1,26 +1,63 @@
 // src/screens/auth/ForgotPasswordScreen.js
-// Was empty (0 lines) — replaced with a friendly placeholder + back-to-login
-// action (Phase 4 of the parity audit). Self-serve password reset is not yet
-// implemented in the mobile app; users are directed to their HR contact.
-
+//
+// Self-serve password reset is not available in the app; passwords are reset by HR.
 import React from 'react';
-import ComingSoon from '../../components/ui/ComingSoon';
-import { colors } from '../../theme/colors';
+import { View, Text, Image, StyleSheet, StatusBar } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Button, color, space, type } from '../../components/ds';
 
 const ForgotPasswordScreen = ({ navigation }) => {
     return (
-        <ComingSoon
-            title="Forgot Password"
-            description="Self-serve password reset isn't available in the mobile app yet."
-            suggestion="Please contact your HR administrator to reset your password. Once reset, return to the login screen and sign in with the new credentials."
-            icon="key"
-            accent={colors.warning}
-            action={{
-                label: 'Back to Login',
-                onPress: () => navigation.navigate('Login'),
-            }}
-        />
+        <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+            <StatusBar barStyle="dark-content" backgroundColor={color.surface} />
+            <View style={styles.content}>
+                <Image
+                    source={require('../../assets/images/mainLogo.jpg')}
+                    style={styles.logo}
+                    resizeMode="contain"
+                    accessibilityLabel="DeepGrid"
+                />
+                <Text style={styles.title}>Reset password</Text>
+                <Text style={styles.message}>
+                    Passwords are reset by your HR administrator. Once it is reset, sign in with the new password.
+                </Text>
+                <Button title="Back to sign in" full onPress={() => navigation.navigate('Login')} />
+            </View>
+        </SafeAreaView>
     );
 };
+
+const styles = StyleSheet.create({
+    safeArea: {
+        flex: 1,
+        backgroundColor: color.surface,
+    },
+    content: {
+        flex: 1,
+        width: '100%',
+        maxWidth: 420,
+        alignSelf: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: space.xl,
+    },
+    logo: {
+        width: 180,
+        height: 90,
+        alignSelf: 'center',
+        marginBottom: space.xl,
+    },
+    title: {
+        ...type.display,
+        textAlign: 'center',
+    },
+    message: {
+        ...type.body,
+        color: color.textSecondary,
+        textAlign: 'center',
+        lineHeight: 22,
+        marginTop: space.sm,
+        marginBottom: space.xl,
+    },
+});
 
 export default ForgotPasswordScreen;
