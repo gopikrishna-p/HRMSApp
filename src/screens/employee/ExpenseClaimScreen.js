@@ -1,14 +1,23 @@
 // src/screens/employee/ExpenseClaimScreen.js
 //
-// The employee's expense claims: counts by status, the claims (filter by status, tap for the
-// line items) and the form to file a new claim with one or more expenses. The approver sets
-// the sanctioned amounts.
+// The employee's expense claims: money in review / to be paid / paid, the payments received,
+// the claims (filter by status, tap for the lines, receipt photos and payments; withdraw while
+// in review) and the form to file a new claim with one or more expenses. Every expense needs at
+// least one receipt photo; photos upload as soon as they are taken (ReceiptPicker). The approver
+// sets the approved amounts and HR records the payments.
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { View, Text, StyleSheet, Platform, Alert } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import apiService, { extractFrappeData } from '../../services/api.service';
 import { formatLocalDate } from '../../utils/dateFormat';
 import showToast from '../../utils/Toast';
+import {
+    ReceiptPicker,
+    ReceiptThumbs,
+    receiptIds,
+    photosUploading,
+    photosFailed,
+} from '../../components/expense/ReceiptPhotos';
 import {
     Screen,
     Group,
@@ -19,6 +28,7 @@ import {
     Tag,
     Sheet,
     Button,
+    Field,
     TextField,
     SelectField,
     EmptyState,
@@ -27,6 +37,7 @@ import {
     color,
     space,
     type,
+    statusTone,
     formatShortDate,
 } from '../../components/ds';
 
@@ -58,6 +69,22 @@ const dateLabel = (value) => {
 // ERPNext keeps undecided claims as approval_status "Draft"; employees read that as pending.
 const statusLabel = (status) => (status === 'Draft' ? 'Pending' : status || '–');
 
+// Where the claim is: Pending review, Rejected, Awaiting payment, Partly paid or Paid
+const STAGE_TONES = {
+    'Pending review': 'warning',
+    'Rejected': 'danger',
+    'Awaiting payment': 'info',
+    'Partly paid': 'warning',
+    'Paid': 'success',
+};
+const stageOf = (claim) => claim.stage || statusLabel(claim.approval_status);
+const StageText = ({ claim }) => {
+    const stage = stageOf(claim);
+    return <StatusText label={stage} tone={STAGE_TONES[stage] || statusTone(stage)} />;
+};
+
+const photosLabel = (count) => `${count} ${count === 1 ? 'photo' : 'photos'}`;
+
 // "Travel" or "Travel +2" for a claim with several expense types
 const typesLabel = (claim) => {
     const types = [...new Set((claim.expenses || []).map((e) => e.expense_type).filter(Boolean))];
@@ -67,12 +94,43 @@ const typesLabel = (claim) => {
     return types.length === 1 ? types[0] : `${types[0]} +${types.length - 1}`;
 };
 
+// "UPI  ·  UTR 1234" (+ the whole payment when only part of it went to this claim)
+const paymentLine = (payment) => {
+    const lines = [[payment.payment_mode, payment.reference].filter(Boolean).join('  ·  ')];
+    if (Number(payment.payout_amount) > Number(payment.amount)) {
+        lines.push(`Part of a ${formatINR(payment.payout_amount)} payment`);
+    }
+    return lines.filter(Boolean).join('\n');
+};
+
+// "For the claim of 03 Oct 2026" / "For claims of 03 Oct 2026 (₹500), 05 Oct 2026 (₹300)"
+const payoutClaimsLine = (claims = []) => {
+    if (claims.length === 0) {
+        return '';
+    }
+    const ref = (c) => (c.claim_date ? dateLabel(c.claim_date) : c.expense_claim);
+    if (claims.length === 1) {
+        return `For the claim of ${ref(claims[0])}`;
+    }
+    return `For claims of ${claims.map((c) => `${ref(c)} (${formatINR(c.amount)})`).join(', ')}`;
+};
+
 const STATUS_FILTERS = [
     { value: 'all', label: 'All' },
     { value: 'Draft', label: 'Pending' },
     { value: 'Approved', label: 'Approved' },
     { value: 'Rejected', label: 'Rejected' },
 ];
+
+// each expense line has a stable key so its receipt photos stay with it when another line is removed
+let lineSeq = 0;
+const newExpenseLine = () => ({
+    key: `line${++lineSeq}`,
+    expense_type: '',
+    amount: '',
+    description: '',
+    expense_date: new Date()
+});
 
 const Check = ({ on }) => (on ? <Icon name="check" size={18} color={color.accent} /> : null);
 
@@ -84,12 +142,8 @@ const ExpenseClaimScreen = ({ navigation }) => {
     const [employeeId, setEmployeeId] = useState('');
 
     // Submit form state
-    const [expenses, setExpenses] = useState([{
-        expense_type: '',
-        amount: '',
-        description: '',
-        expense_date: new Date()
-    }]);
+    const [expenses, setExpenses] = useState(() => [newExpenseLine()]);
+    const [photosByLine, setPhotosByLine] = useState({}); // { [line key]: ReceiptPicker photos }
     const [remark, setRemark] = useState('');
     const [expenseTypes, setExpenseTypes] = useState([]);
     const [showDatePicker, setShowDatePicker] = useState({ show: false, index: -1 });
@@ -97,17 +151,31 @@ const ExpenseClaimScreen = ({ navigation }) => {
     // History state
     const [claims, setClaims] = useState([]);
     const [filterStatus, setFilterStatus] = useState(''); // '', Draft, Approved, Rejected
-    const [statusSummary, setStatusSummary] = useState({});
     const [totalClaimed, setTotalClaimed] = useState(0);
     const [totalApproved, setTotalApproved] = useState(0);
+    const [summary, setSummary] = useState(null); // in review / awaiting payment / paid amounts
 
-    // Presentation only: claim open in the detail sheet, expense-type picker
+    // Claim detail sheet: the list row (shown at once) and its full detail (lines, photos, payments)
     const [selected, setSelected] = useState(null);
-    const [typePicker, setTypePicker] = useState(null); // { index, open }
+    const [claimDetail, setClaimDetail] = useState(null);
+    const [detailLoading, setDetailLoading] = useState(false);
+    const [detailError, setDetailError] = useState(null);
+    const [withdrawing, setWithdrawing] = useState(false);
+    const detailRequest = useRef(0); // ignores a slow answer for a claim that is no longer open
     const lastSelected = useRef(null); // keeps the detail sheet filled while it slides out
+
+    // Payments received sheet
+    const [paymentsOpen, setPaymentsOpen] = useState(false);
+    const [account, setAccount] = useState(null);
+    const [accountLoading, setAccountLoading] = useState(false);
+    const [accountError, setAccountError] = useState(null);
+
+    // Presentation only: expense-type picker
+    const [typePicker, setTypePicker] = useState(null); // { index, open }
 
     useEffect(() => {
         loadInitialData();
+        loadSummary();
     }, []);
 
     useEffect(() => {
@@ -155,7 +223,6 @@ const ExpenseClaimScreen = ({ navigation }) => {
             const response = await apiService.getEmployeeExpenseClaims(filters);
             const data = extractFrappeData(response, {});
             setClaims(data.claims || []);
-            setStatusSummary(data.status_summary || {});
             setTotalClaimed(data.total_claimed_amount || 0);
             setTotalApproved(data.total_approved_amount || 0);
         } catch (error) {
@@ -166,10 +233,22 @@ const ExpenseClaimScreen = ({ navigation }) => {
         }
     };
 
+    // money in review, approved but not paid yet, and paid so far (all of the employee's claims)
+    const loadSummary = async () => {
+        try {
+            const response = await apiService.getMyExpenseSummary();
+            if (response.success) {
+                setSummary(extractFrappeData(response, {}) || {});
+            }
+        } catch (error) {
+            console.error('Error loading expense summary:', error);
+        }
+    };
+
     const onRefresh = async () => {
         setRefreshing(true);
         if (activeTab === 'history') {
-            await loadClaims();
+            await Promise.all([loadClaims(), loadSummary()]);
         } else {
             await loadInitialData();
         }
@@ -177,18 +256,26 @@ const ExpenseClaimScreen = ({ navigation }) => {
     };
 
     const addExpenseItem = () => {
-        setExpenses([...expenses, {
-            expense_type: '',
-            amount: '',
-            description: '',
-            expense_date: new Date()
-        }]);
+        setExpenses([...expenses, newExpenseLine()]);
     };
 
     const removeExpenseItem = (index) => {
         if (expenses.length > 1) {
+            const line = expenses[index];
             const newExpenses = expenses.filter((_, i) => i !== index);
             setExpenses(newExpenses);
+
+            // drop the line's photos; uploaded ones are not on a claim yet, so the server deletes them
+            // (a photo still uploading is cleaned up by the server's nightly job)
+            const uploaded = receiptIds(photosByLine[line.key]);
+            setPhotosByLine((all) => {
+                const next = { ...all };
+                delete next[line.key];
+                return next;
+            });
+            uploaded.forEach((id) => {
+                apiService.deleteExpenseReceipt(id).catch(() => {});
+            });
         }
     };
 
@@ -201,6 +288,12 @@ const ExpenseClaimScreen = ({ navigation }) => {
 
         setExpenses(newExpenses);
     };
+
+    // ReceiptPicker calls onChange with updater functions while uploads progress
+    const setLinePhotos = (key) => (updater) => setPhotosByLine((all) => ({
+        ...all,
+        [key]: typeof updater === 'function' ? updater(all[key] || []) : updater,
+    }));
 
     const handleDateChange = (event, selectedDate, index) => {
         setShowDatePicker({ show: false, index: -1 });
@@ -239,18 +332,31 @@ const ExpenseClaimScreen = ({ navigation }) => {
                 showToast({ type: 'error', text1: `Expense ${i + 1}: add a description` });
                 return false;
             }
+
+            // every expense needs at least one uploaded receipt photo (the server refuses it otherwise)
+            const photos = photosByLine[exp.key] || [];
+            if (photosUploading(photos)) {
+                showToast({ type: 'info', text1: `Expense ${i + 1}: photos are still uploading`, text2: 'Submit again when they finish' });
+                return false;
+            }
+
+            if (photosFailed(photos)) {
+                showToast({ type: 'error', text1: `Expense ${i + 1}: a photo did not upload`, text2: 'Tap it to retry, or remove it' });
+                return false;
+            }
+
+            if (receiptIds(photos).length === 0) {
+                showToast({ type: 'error', text1: `Expense ${i + 1}: add a receipt photo`, text2: 'Take a photo of the bill or choose one from the gallery' });
+                return false;
+            }
         }
 
         return true;
     };
 
     const resetForm = () => {
-        setExpenses([{
-            expense_type: '',
-            amount: '',
-            description: '',
-            expense_date: new Date()
-        }]);
+        setExpenses([newExpenseLine()]);
+        setPhotosByLine({});
         setRemark('');
         setActiveTab('history');
     };
@@ -268,7 +374,8 @@ const ExpenseClaimScreen = ({ navigation }) => {
                 expense_type: exp.expense_type,
                 amount: parseFloat(exp.amount),
                 description: exp.description.trim(),
-                expense_date: formatLocalDate(exp.expense_date)
+                expense_date: formatLocalDate(exp.expense_date),
+                receipts: receiptIds(photosByLine[exp.key]),
             }));
 
             const response = await apiService.submitExpenseClaim(
@@ -296,6 +403,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
             }
             // Reset form; back to the list, which reloads the claims
             resetForm();
+            loadSummary();
         } catch (error) {
             console.error('Submit expense claim error:', error);
             showToast({ type: 'error', text1: 'Claim not submitted', text2: error.message || 'Failed to submit expense claim' });
@@ -306,6 +414,103 @@ const ExpenseClaimScreen = ({ navigation }) => {
 
     const calculateTotal = () => {
         return expenses.reduce((sum, exp) => sum + (parseFloat(exp.amount) || 0), 0);
+    };
+
+    // ------------------------------------------------------------------ claim detail
+    // photo links are signed for 15 minutes, so the detail is loaded fresh every time a claim opens
+    const loadClaimDetail = async (claimId) => {
+        const request = ++detailRequest.current;
+        setClaimDetail(null);
+        setDetailError(null);
+        setDetailLoading(true);
+        try {
+            const response = await apiService.getExpenseClaimDetail(claimId);
+            if (request !== detailRequest.current) {
+                return;
+            }
+            const data = extractFrappeData(response, null);
+            if (response.success && data?.name) {
+                setClaimDetail(data);
+            } else {
+                setDetailError(response.message || 'Please try again');
+            }
+        } catch (error) {
+            console.error('Error loading expense claim:', error);
+            if (request === detailRequest.current) {
+                setDetailError(error.message || 'Please try again');
+            }
+        } finally {
+            if (request === detailRequest.current) {
+                setDetailLoading(false);
+            }
+        }
+    };
+
+    const openClaim = (claim) => {
+        setSelected(claim);
+        loadClaimDetail(claim.name);
+    };
+
+    const closeClaim = () => {
+        if (!withdrawing) {
+            setSelected(null);
+        }
+    };
+
+    const withdrawClaim = async (claimId) => {
+        setWithdrawing(true);
+        try {
+            const response = await apiService.withdrawExpenseClaim(claimId);
+            if (!response.success) {
+                showToast({ type: 'error', text1: 'Claim not withdrawn', text2: response.message || 'Please try again' });
+                return;
+            }
+            setSelected(null);
+            showToast({ type: 'success', text1: 'Claim withdrawn' });
+            loadClaims();
+            loadSummary();
+        } catch (error) {
+            console.error('Withdraw expense claim error:', error);
+            showToast({ type: 'error', text1: 'Claim not withdrawn', text2: error.message || 'Please try again' });
+        } finally {
+            setWithdrawing(false);
+        }
+    };
+
+    const confirmWithdraw = (claim) => {
+        Alert.alert(
+            'Withdraw this claim?',
+            `${formatINR(claim.total_claimed_amount)} claim of ${dateLabel(claim.posting_date)}. Its receipt photos are deleted too.`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Withdraw', style: 'destructive', onPress: () => withdrawClaim(claim.name) },
+            ]
+        );
+    };
+
+    // ------------------------------------------------------------------ payments received
+    const loadAccount = async () => {
+        setAccountLoading(true);
+        setAccountError(null);
+        try {
+            const response = await apiService.getExpensePaymentAccount();
+            const data = extractFrappeData(response, null);
+            if (response.success && data) {
+                setAccount(data);
+            } else {
+                setAccountError(response.message || 'Please try again');
+            }
+        } catch (error) {
+            console.error('Error loading expense payments:', error);
+            setAccountError(error.message || 'Please try again');
+        } finally {
+            setAccountLoading(false);
+        }
+    };
+
+    const openPayments = () => {
+        setPaymentsOpen(true);
+        loadAccount();
     };
 
     // ------------------------------------------------------------------ presentation helpers
@@ -322,6 +527,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
         lastSelected.current = selected;
     }
     const detail = selected || lastSelected.current;
+    const fullDetail = claimDetail && detail && claimDetail.name === detail.name ? claimDetail : null;
     const busy = loading && !refreshing;
 
     // ------------------------------------------------------------------ new claim form
@@ -344,7 +550,7 @@ const ExpenseClaimScreen = ({ navigation }) => {
         >
             {expenses.map((expense, index) => (
                 <Group
-                    key={index}
+                    key={expense.key}
                     title={`Expense ${index + 1}`}
                     action={expenses.length > 1 ? 'Remove' : undefined}
                     onAction={() => removeExpenseItem(index)}
@@ -387,6 +593,13 @@ const ExpenseClaimScreen = ({ navigation }) => {
                                 maximumDate={new Date()}
                             />
                         )}
+                        <Field label="Receipt photos" hint="At least one photo of the bill">
+                            <ReceiptPicker
+                                value={photosByLine[expense.key] || []}
+                                onChange={setLinePhotos(expense.key)}
+                                disabled={busy}
+                            />
+                        </Field>
                     </View>
                 </Group>
             ))}
@@ -414,22 +627,28 @@ const ExpenseClaimScreen = ({ navigation }) => {
 
     // ------------------------------------------------------------------ my claims
     const renderClaimItem = (claim) => {
-        const sanctionedDiffers = claim.approval_status === 'Approved'
+        const approvedDiffers = claim.approval_status === 'Approved'
             && Number(claim.total_sanctioned_amount) !== Number(claim.total_claimed_amount);
+        const photoCount = Number(claim.receipt_count) || 0;
+        const tags = [
+            approvedDiffers ? <Tag key="approved" label={`${formatINR(claim.total_sanctioned_amount)} approved`} /> : null,
+            photoCount > 0 ? <Tag key="photos" label={photosLabel(photoCount)} /> : null,
+        ].filter(Boolean);
         return (
             <Row
                 key={claim.name}
                 title={formatINR(claim.total_claimed_amount)}
                 subtitle={[dateLabel(claim.posting_date), typesLabel(claim)].filter(Boolean).join('  ·  ')}
-                meta={sanctionedDiffers ? <Tag label={`${formatINR(claim.total_sanctioned_amount)} sanctioned`} /> : null}
-                right={<StatusText label={statusLabel(claim.approval_status)} />}
-                onPress={() => setSelected(claim)}
+                meta={tags.length ? tags : null}
+                right={<StageText claim={claim} />}
+                onPress={() => openClaim(claim)}
             />
         );
     };
 
     const renderHistoryTab = () => {
         const filterLabel = STATUS_FILTERS.find((f) => f.value === filterStatus)?.label || '';
+        const money = (value) => (summary ? formatINR(value) : '–');
         return (
             <Screen
                 refreshing={refreshing}
@@ -439,12 +658,13 @@ const ExpenseClaimScreen = ({ navigation }) => {
                 <StatStrip
                     style={styles.stats}
                     items={[
-                        { label: 'Pending', value: statusSummary.Draft || 0 },
-                        { label: 'Approved', value: statusSummary.Approved || 0 },
-                        { label: 'Rejected', value: statusSummary.Rejected || 0 },
+                        { label: 'In review', value: money(summary?.pending_review_amount) },
+                        { label: 'To be paid', value: money(summary?.awaiting_payment_amount) },
+                        { label: 'Paid', value: money(summary?.paid_amount) },
                     ]}
                 />
                 <Group footer="Totals cover all your claims, whatever filter is on.">
+                    <Row title="Payments received" onPress={openPayments} />
                     <Row title="Total claimed" value={formatINR(totalClaimed)} />
                     <Row title="Total approved" value={formatINR(totalApproved)} />
                 </Group>
@@ -473,40 +693,140 @@ const ExpenseClaimScreen = ({ navigation }) => {
     };
 
     // ------------------------------------------------------------------ claim detail
+    const renderLine = (line, approved) => (
+        <View key={line.name || line.idx} style={styles.line}>
+            <View style={styles.lineHead}>
+                <View style={styles.lineText}>
+                    <Text style={styles.lineTitle}>{line.expense_type || '–'}</Text>
+                    <Text style={styles.lineSubtitle}>
+                        {[dateLabel(line.expense_date), line.description].filter(Boolean).join('  ·  ')}
+                    </Text>
+                </View>
+                <View>
+                    <Text style={styles.lineAmount}>{formatINR(line.amount)}</Text>
+                    {approved ? (
+                        <Text style={styles.lineApproved}>{`${formatINR(line.sanctioned_amount)} approved`}</Text>
+                    ) : null}
+                </View>
+            </View>
+            <View style={styles.lineReceipts}>
+                <ReceiptThumbs receipts={line.receipts || []} />
+            </View>
+        </View>
+    );
+
     const renderDetail = (claim) => {
-        const isPending = claim.approval_status === 'Draft';
-        const items = claim.expenses || [];
+        if (detailLoading) {
+            return <Loading />;
+        }
+        if (detailError || !fullDetail) {
+            return (
+                <EmptyState
+                    icon="alert-circle"
+                    title="Could not load this claim"
+                    message={detailError || undefined}
+                    action="Try again"
+                    onAction={() => loadClaimDetail(claim.name)}
+                />
+            );
+        }
+        const d = fullDetail;
+        const approved = d.approval_status === 'Approved';
+        const rejected = stageOf(d) === 'Rejected';
+        const lines = d.lines || [];
+        const payments = d.payments || [];
         return (
             <>
                 <Group>
-                    <Row title="Status" right={<StatusText label={statusLabel(claim.approval_status)} />} />
-                    <Row title="Date" value={dateLabel(claim.posting_date)} />
-                    <Row title="Claimed" value={formatINR(claim.total_claimed_amount)} />
-                    {!isPending ? <Row title="Sanctioned" value={formatINR(claim.total_sanctioned_amount)} /> : null}
-                    {claim.expense_approver ? <Row title="Approver" value={claim.expense_approver} /> : null}
+                    <Row title="Status" right={<StageText claim={d} />} />
+                    <Row title="Date" value={dateLabel(d.posting_date)} />
+                    <Row title="Claimed" value={formatINR(d.total_claimed_amount)} />
+                    {approved ? <Row title="Approved" value={formatINR(d.total_sanctioned_amount)} /> : null}
+                    {approved ? <Row title="Paid" value={formatINR(d.custom_paid_amount)} /> : null}
+                    {approved ? <Row title="Still to be paid" value={formatINR(d.outstanding_amount)} /> : null}
+                    {d.reviewed_on ? <Row title="Reviewed" value={dateLabel(d.reviewed_on)} /> : null}
+                    {d.expense_approver ? <Row title="Approver" value={d.expense_approver} /> : null}
                 </Group>
 
-                {items.length > 0 ? (
-                    <Group title="Expenses">
-                        {items.map((exp, idx) => (
+                {rejected && d.rejection_reason ? (
+                    <Group title="Reason for rejection">
+                        <Text style={styles.note}>{d.rejection_reason}</Text>
+                    </Group>
+                ) : null}
+
+                {lines.length > 0 ? (
+                    <Group title="Expenses">{lines.map((line) => renderLine(line, approved))}</Group>
+                ) : null}
+
+                {payments.length > 0 ? (
+                    <Group title="Payments">
+                        {payments.map((p, i) => (
                             <Row
-                                key={idx}
-                                title={exp.expense_type}
-                                subtitle={[dateLabel(exp.expense_date), exp.description].filter(Boolean).join('  ·  ')}
-                                meta={!isPending && exp.sanctioned_amount !== undefined && exp.sanctioned_amount !== exp.amount
-                                    ? <Tag label={`${formatINR(exp.sanctioned_amount)} sanctioned`} />
-                                    : null}
-                                value={formatINR(exp.amount)}
+                                key={`${p.name}-${i}`}
+                                title={dateLabel(p.payout_date)}
+                                subtitle={paymentLine(p)}
+                                subtitleLines={3}
+                                value={formatINR(p.amount)}
                             />
                         ))}
                     </Group>
                 ) : null}
 
-                {claim.remark ? (
+                {d.remark ? (
                     <Group title="Remarks">
-                        <Text style={styles.note}>{claim.remark}</Text>
+                        <Text style={styles.note}>{d.remark}</Text>
                     </Group>
                 ) : null}
+            </>
+        );
+    };
+
+    const closeButton = (
+        <Button title="Close" variant="secondary" onPress={closeClaim} disabled={withdrawing} style={styles.flex} />
+    );
+
+    // ------------------------------------------------------------------ payments received
+    const renderPayments = () => {
+        if (accountLoading) {
+            return <Loading />;
+        }
+        if (accountError || !account) {
+            return (
+                <EmptyState
+                    icon="alert-circle"
+                    title="Could not load payments"
+                    message={accountError || undefined}
+                    action="Try again"
+                    onAction={loadAccount}
+                />
+            );
+        }
+        const payouts = account.payouts || [];
+        return (
+            <>
+                <Group>
+                    <Row title="Still to be paid" value={formatINR(account.outstanding)} />
+                    <Row title="Paid so far" value={formatINR(account.total_paid)} />
+                </Group>
+                {payouts.length === 0 ? (
+                    <EmptyState icon="credit-card" title="No payments yet" message="Payments for approved claims appear here." />
+                ) : (
+                    <Group title="Payments">
+                        {payouts.map((p) => (
+                            <Row
+                                key={p.name}
+                                title={dateLabel(p.payout_date)}
+                                subtitle={[
+                                    [p.payment_mode, p.reference].filter(Boolean).join('  ·  '),
+                                    payoutClaimsLine(p.claims),
+                                    p.remarks,
+                                ].filter(Boolean).join('\n')}
+                                subtitleLines={5}
+                                value={formatINR(p.amount)}
+                            />
+                        ))}
+                    </Group>
+                )}
             </>
         );
     };
@@ -519,10 +839,32 @@ const ExpenseClaimScreen = ({ navigation }) => {
                 visible={Boolean(selected)}
                 title={detail ? formatINR(detail.total_claimed_amount) : undefined}
                 subtitle={detail?.name}
-                onClose={() => setSelected(null)}
-                footer={<Button title="Close" variant="secondary" onPress={() => setSelected(null)} style={styles.flex} />}
+                onClose={closeClaim}
+                dismissable={!withdrawing}
+                footer={fullDetail?.can_withdraw ? (
+                    <>
+                        <Button
+                            title="Withdraw claim"
+                            variant="danger"
+                            onPress={() => confirmWithdraw(fullDetail)}
+                            loading={withdrawing}
+                            disabled={withdrawing}
+                            style={styles.flex}
+                        />
+                        {closeButton}
+                    </>
+                ) : closeButton}
             >
                 {detail ? renderDetail(detail) : null}
+            </Sheet>
+
+            <Sheet
+                visible={paymentsOpen}
+                title="Payments received"
+                onClose={() => setPaymentsOpen(false)}
+                footer={<Button title="Close" variant="secondary" onPress={() => setPaymentsOpen(false)} style={styles.flex} />}
+            >
+                {renderPayments()}
             </Sheet>
 
             <Sheet visible={Boolean(typePicker?.open)} title="Expense type" onClose={closeTypePicker}>
@@ -552,6 +894,15 @@ const styles = StyleSheet.create({
     sectionTitle: { ...type.label, marginBottom: space.sm, paddingHorizontal: space.xs },
     filter: { marginBottom: space.md },
     note: { ...type.body, lineHeight: 21, paddingHorizontal: space.lg, paddingVertical: space.md },
+
+    line: { paddingHorizontal: space.lg, paddingVertical: space.md, backgroundColor: color.surface },
+    lineHead: { flexDirection: 'row', alignItems: 'flex-start' },
+    lineText: { flex: 1, paddingRight: space.sm },
+    lineTitle: { ...type.bodyStrong },
+    lineSubtitle: { ...type.secondary, marginTop: 2, lineHeight: 18 },
+    lineAmount: { fontSize: 15, color: color.textSecondary, fontVariant: ['tabular-nums'], textAlign: 'right' },
+    lineApproved: { ...type.caption, color: color.textSecondary, marginTop: 2, textAlign: 'right', fontVariant: ['tabular-nums'] },
+    lineReceipts: { marginTop: space.md },
 
     formBody: { paddingHorizontal: space.lg, paddingTop: space.lg },
     shortMultiline: { minHeight: 72 },

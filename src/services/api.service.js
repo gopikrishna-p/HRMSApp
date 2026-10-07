@@ -14,6 +14,7 @@ const API_TIMEOUT = parseInt(process.env.API_TIMEOUT || '30000', 10);
 
 // Helper to build /api/method/hrms.api.<name>
 const m = (name) => `/api/method/hrms.api.${name}`;
+const e = (name) => `/api/method/hrms.api.expenses.${name}`;
 
 /**
  * Helper to extract data from Frappe API responses.
@@ -1173,6 +1174,75 @@ class ApiService {
      */
     getExpenseClaimTypes() {
         return this.get(m('get_expense_claim_types'));
+    }
+
+    /* -------------------------
+     * EXPENSE RECEIPTS AND PAYMENTS (hrms.api.expenses)
+     * Receipt photos live in Cloudflare R2; the server returns short-lived links to show them.
+     * -----------------------*/
+
+    /**
+     * Upload one receipt photo. `photo` is an image-picker asset ({ uri, type, fileName }).
+     * `employee` only when HR applies on someone's behalf. Resolves to the usual { success, data } envelope;
+     * data.message.receipt = { name, url, file_size, ... }, data.message.duplicate_claims = [claim ids].
+     */
+    uploadExpenseReceipt(photo, { employee, onProgress } = {}) {
+        const form = new FormData();
+        form.append('file', {
+            uri: photo.uri,
+            type: photo.type || 'image/jpeg',
+            name: photo.fileName || `receipt-${Date.now()}.jpg`,
+        });
+        if (employee) {
+            form.append('employee', employee);
+        }
+        return this.api.post(e('upload_expense_receipt'), form, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            transformRequest: (data) => data, // let React Native set the multipart boundary
+            timeout: 90000,
+            onUploadProgress: onProgress
+                ? (evt) => evt.total && onProgress(Math.min(1, evt.loaded / evt.total))
+                : undefined,
+        });
+    }
+
+    deleteExpenseReceipt(receiptId) {
+        return this.post(e('delete_expense_receipt'), { receipt_id: receiptId });
+    }
+
+    /** Claim with lines, receipt photos (signed links), duplicate-photo warnings (HR) and payments. */
+    getExpenseClaimDetail(claimId) {
+        return this.get(e('get_expense_claim_detail'), { claim_id: claimId });
+    }
+
+    /** Employee withdraws a claim HR hasn't reviewed yet (photos are deleted too). */
+    withdrawExpenseClaim(claimId) {
+        return this.post(e('withdraw_expense_claim'), { claim_id: claimId });
+    }
+
+    /** Employee: pending review / awaiting payment / paid totals. */
+    getMyExpenseSummary() {
+        return this.get(e('get_my_expense_summary'));
+    }
+
+    /** HR: employees owed money for approved expenses. */
+    getExpensePayables() {
+        return this.get(e('get_expense_payables'));
+    }
+
+    /** What is owed and what was paid for one employee (HR: any employee; employee: themselves, omit the id). */
+    getExpensePaymentAccount(employee) {
+        return this.get(e('get_expense_payment_account'), employee ? { employee } : {});
+    }
+
+    /** HR: record a payment; it is split over the employee's approved claims, oldest first. */
+    recordExpensePayout({ employee, amount, payout_date, payment_mode, reference, remarks }) {
+        return this.post(e('record_expense_payout'), { employee, amount, payout_date, payment_mode, reference, remarks });
+    }
+
+    /** HR: undo a payment recorded by mistake. */
+    deleteExpensePayout(payoutId) {
+        return this.post(e('delete_expense_payout'), { payout_id: payoutId });
     }
 
     /* -------------------------

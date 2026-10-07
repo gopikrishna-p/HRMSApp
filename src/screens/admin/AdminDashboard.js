@@ -43,6 +43,7 @@ const AdminDashboard = ({ navigation }) => {
     });
     const [pendingOnboarding, setPendingOnboarding] = useState(0);
     const [leaveLeft, setLeaveLeft] = useState(null);
+    const [expenseDue, setExpenseDue] = useState(0); // employees owed money for approved expense claims
 
     const fetchStats = async () => {
         try {
@@ -119,8 +120,19 @@ const AdminDashboard = ({ navigation }) => {
         }
     };
 
+    // HR only; anyone else gets a permission error, which is ignored
+    const fetchExpensePayables = async () => {
+        try {
+            const response = await ApiService.getExpensePayables();
+            const data = isApiSuccess(response) ? extractFrappeData(response, {}) : {};
+            setExpenseDue(Number(data?.employees_due) || 0);
+        } catch (e) {
+            setExpenseDue(0);
+        }
+    };
+
     const fetchAll = async () => {
-        await Promise.all([fetchStats(), fetchPendingApprovals(), fetchPendingOnboarding(), fetchLeaveBalance()]);
+        await Promise.all([fetchStats(), fetchPendingApprovals(), fetchPendingOnboarding(), fetchLeaveBalance(), fetchExpensePayables()]);
     };
 
     useEffect(() => {
@@ -225,6 +237,7 @@ const AdminDashboard = ({ navigation }) => {
 
                     <Group title="Expenses and travel">
                         <Row icon="file-text" title="Expense claims" right={<Count value={pending.expense} />} onPress={go('ExpenseClaimApproval')} />
+                        <Row icon="credit-card" title="Expense payments" right={<Count value={expenseDue} />} onPress={go('ExpensePayments')} />
                         <Row icon="navigation" title="Travel requests" right={<Count value={pending.travel} />} onPress={go('TravelRequestApproval')} />
                     </Group>
 

@@ -16,6 +16,7 @@ import LeaveApprovalsScreen from '../screens/admin/LeaveApprovalsScreen';
 import CompApprovalScreen from '../screens/admin/CompApprovalScreen';
 import AdminSelfServiceScreen from '../screens/admin/AdminSelfServiceScreen';
 import ExpenseClaimApprovalScreen from '../screens/admin/ExpenseClaimApprovalScreen';
+import ExpensePaymentsScreen from '../screens/admin/ExpensePaymentsScreen';
 import TravelRequestApproval from '../screens/admin/TravelRequestApproval';
 import CreateNotificationScreen from '../screens/admin/CreateNotificationScreen';
 import SalaryStructureAdminScreen from '../screens/admin/SalaryStructureAdminScreen';
@@ -85,6 +86,7 @@ const AdminNavigator = () => {
             <Stack.Screen name="AdminSelfService" component={AdminSelfServiceScreen} options={{ title: 'Self-Service' }} />
             <Stack.Screen name="MyCompensatoryLeave" component={CompensatoryLeaveScreen} options={{ title: 'My Comp-Off' }} />
             <Stack.Screen name="ExpenseClaimApproval" component={ExpenseClaimApprovalScreen} options={{ title: 'Expense Claims' }} />
+            <Stack.Screen name="ExpensePayments" component={ExpensePaymentsScreen} options={{ title: 'Expense Payments' }} />
             <Stack.Screen name="MyExpenseClaim" component={ExpenseClaimScreen} options={{ title: 'My Expense Claims' }} />
             <Stack.Screen name="TravelRequestApproval" component={TravelRequestApproval} options={{ title: 'Travel Requests' }} />
             <Stack.Screen name="MyTravelRequest" component={TravelRequestScreen} options={{ title: 'My Travel' }} />
